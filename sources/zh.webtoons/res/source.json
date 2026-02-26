@@ -1,0 +1,53 @@
+{
+	"info": {
+		"id": "zh-hant.webtoons",
+		"name": "Webtoons 繁體中文",
+		"version": 11,
+		"url": "https://www.webtoons.com/zh-hant/",
+		"urls": [
+			"https://www.webtoons.com"
+		],
+		"contentRating": 0,
+		"languages": [
+			"zh"
+		]
+	},
+	"listings": [
+		{
+			"id": "popular",
+			"name": "人氣排行"
+		},
+		{
+			"id": "monday",
+			"name": "週一連載"
+		},
+		{
+			"id": "tuesday",
+			"name": "週二連載"
+		},
+		{
+			"id": "wednesday",
+			"name": "週三連載"
+		},
+		{
+			"id": "thursday",
+			"name": "週四連載"
+		},
+		{
+			"id": "friday",
+			"name": "週五連載"
+		},
+		{
+			"id": "saturday",
+			"name": "週六連載"
+		},
+		{
+			"id": "sunday",
+			"name": "週日連載"
+		},
+		{
+			"id": "complete",
+			"name": "完結作品"
+		}
+	]
+}
