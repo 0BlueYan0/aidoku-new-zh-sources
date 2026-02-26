@@ -1,0 +1,16 @@
+{
+	"info": {
+		"id": "multi.koobone",
+		"name": "koobone",
+		"version": 1,
+		"url": "https://koob.one/",
+		"contentRating": 1,
+		"languages": [
+			"zh",
+			"zh-hant",
+			"zh-hans",
+			"en",
+			"ja"
+		]
+	}
+}
