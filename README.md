@@ -9,4 +9,4 @@ Aidoku 新版中文圖源<br>
 
 ## 圖源列表
 
-[Line Webtoons](https://www.webtoons.com/zh-hant/)
+- [Line Webtoons 繁體中文](https://www.webtoons.com/zh-hant/)
