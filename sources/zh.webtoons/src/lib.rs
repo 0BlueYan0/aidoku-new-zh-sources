@@ -101,6 +101,10 @@ impl Source for WebtoonSource {
 		needs_chapters: bool,
 	) -> Result<Manga> {
 		let title_no = manga.key.clone();
+		println!(
+			"[webtoons] get_manga_update: title_no={}, needs_details={}, needs_chapters={}",
+			title_no, needs_details, needs_chapters
+		);
 
 		if needs_details {
 			let detail_url = if let Some(ref url) = manga.url {
@@ -108,6 +112,8 @@ impl Source for WebtoonSource {
 			} else {
 				format!("{BASE_URL}{LANG_PATH}/originals/a/list?title_no={title_no}")
 			};
+
+			println!("[webtoons] fetching details: {}", detail_url);
 
 			let html = Request::get(&detail_url)?
 				.header("Referer", BASE_URL)
@@ -175,6 +181,7 @@ impl Source for WebtoonSource {
 
 			manga.content_rating = ContentRating::Safe;
 			manga.viewer = Viewer::Webtoon;
+			println!("[webtoons] details fetched OK for title_no={}", title_no);
 		}
 
 		if needs_chapters {
@@ -184,16 +191,39 @@ impl Source for WebtoonSource {
 				"{MOBILE_API}/{title_no}/episodes?pageSize=99999"
 			);
 
-			let body = Request::get(&api_url)?
-				.header("Referer", BASE_URL)
-				.header("User-Agent", USER_AGENT)
-				.string()?;
+			println!("[webtoons] fetching chapters: {}", api_url);
 
-			let chapters = parse_episodes_json(&body);
+			// Use graceful error handling: if the API call fails, log the error
+			// but still return Ok(manga) so library refresh doesn't silently break.
+			let fetch_result = (|| -> Result<Vec<Chapter>> {
+				let body = Request::get(&api_url)?
+					.header("Referer", BASE_URL)
+					.header("User-Agent", USER_AGENT)
+					.string()?;
+				Ok(parse_episodes_json(&body))
+			})();
 
-			manga.chapters = Some(chapters);
+			match fetch_result {
+				Ok(chapters) => {
+					println!(
+						"[webtoons] chapters fetched OK: {} chapters for title_no={}",
+						chapters.len(),
+						title_no
+					);
+					manga.chapters = Some(chapters);
+				}
+				Err(_) => {
+					println!(
+						"[webtoons] ERROR fetching chapters for title_no={}",
+						title_no
+					);
+					// Don't propagate the error — return the manga as-is
+					// so the library refresh can continue with other manga.
+				}
+			}
 		}
 
+		println!("[webtoons] get_manga_update done for title_no={}", title_no);
 		Ok(manga)
 	}
 
