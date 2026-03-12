@@ -1,0 +1,12 @@
+{
+	"info": {
+		"id": "zh.noymanga",
+		"name": "noymanga",
+		"version": 1,
+		"url": "https://noymanga.com",
+		"contentRating": 1,
+		"languages": [
+			"zh"
+		]
+	}
+}
