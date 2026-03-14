@@ -1,0 +1,25 @@
+{
+	"info": {
+		"id": "zh.komiic",
+		"name": "Komiic 漫畫 2",
+		"version": 7,
+		"url": "https://komiic.com",
+		"urls": [
+			"https://komiic.com"
+		],
+		"contentRating": 1,
+		"languages": [
+			"zh"
+		]
+	},
+	"listings": [
+		{
+			"id": "recent",
+			"name": "最近更新"
+		},
+		{
+			"id": "hot",
+			"name": "本月最夯"
+		}
+	]
+}
