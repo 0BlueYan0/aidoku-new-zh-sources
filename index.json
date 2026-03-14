@@ -12,6 +12,18 @@
       ],
       "contentRating": 1,
       "baseURL": "https://www.webtoons.com/zh-hant/"
+    },
+    {
+      "id": "zh.komiic",
+      "name": "Komiic 繁體中文",
+      "version": 7,
+      "iconURL": "icons/zh.komiic-v7.png",
+      "downloadURL": "sources/zh.komiic-v7.aix",
+      "languages": [
+        "zh"
+      ],
+      "contentRating": 1,
+      "baseURL": "https://komiic.com/"
     }
   ]
 }
