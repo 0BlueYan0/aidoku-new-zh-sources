@@ -1,0 +1,16 @@
+[
+	{
+		"type": "group",
+		"title": "帳號",
+		"items": [
+			{
+				"type": "login",
+				"key": "login",
+				"title": "登入",
+				"method": "basic",
+				"useEmail": true,
+				"logoutTitle": "登出"
+			}
+		]
+	}
+]
