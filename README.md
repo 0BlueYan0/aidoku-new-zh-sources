@@ -10,3 +10,4 @@ Aidoku 新版中文圖源<br>
 ## 圖源列表
 
 - [Line Webtoons 繁體中文](https://www.webtoons.com/zh-hant/)
+- [Komiic 漫畫](https://komiic.com/)
