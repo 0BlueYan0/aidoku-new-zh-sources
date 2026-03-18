@@ -1,8 +1,8 @@
 {
 	"info": {
-		"id": "zh-hant.webtoons",
+		"id": "zh.webtoons",
 		"name": "Webtoons 繁體中文",
-		"version": 14,
+		"version": 15,
 		"url": "https://www.webtoons.com/zh-hant/",
 		"urls": [
 			"https://www.webtoons.com"
