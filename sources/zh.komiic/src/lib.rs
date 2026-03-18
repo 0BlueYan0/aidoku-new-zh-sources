@@ -5,10 +5,12 @@ use aidoku::{
 	imports::{
 		defaults::{defaults_get, defaults_set, DefaultValue},
 		net::Request,
+		std::send_partial_result,
 	},
 	prelude::*,
 	BasicLoginHandler, Chapter, ContentRating, DeepLinkHandler, DeepLinkResult,
-	FilterValue, Home, HomeComponent, HomeComponentValue, HomeLayout, ImageRequestProvider, Link,
+	FilterValue, Home, HomeComponent, HomeComponentValue, HomeLayout, HomePartialResult,
+	ImageRequestProvider, Link,
 	Listing, ListingProvider, Manga, MangaPageResult, MangaStatus, Page,
 	PageContent, PageContext, Result, Source, Viewer,
 };
@@ -304,9 +306,21 @@ impl ListingProvider for KomiicSource {
 
 impl Home for KomiicSource {
 	fn get_home(&self) -> Result<HomeLayout> {
-		let mut components: Vec<HomeComponent> = Vec::new();
+		send_partial_result(&HomePartialResult::Layout(HomeLayout {
+			components: aidoku::alloc::vec![
+				HomeComponent {
+					title: Some(String::from("最近更新")),
+					subtitle: None,
+					value: HomeComponentValue::empty_scroller(),
+				},
+				HomeComponent {
+					title: Some(String::from("本月最夯")),
+					subtitle: None,
+					value: HomeComponentValue::empty_scroller(),
+				},
+			],
+		}));
 
-		// Recent Updates
 		let recent_vars =
 			r#"{"pagination":{"limit":20,"offset":0,"orderBy":"DATE_UPDATED","status":"","asc":true}}"#;
 		if let Ok(body) = gql(RECENT_UPDATE_QUERY, recent_vars) {
@@ -314,7 +328,7 @@ impl Home for KomiicSource {
 			let links: Vec<Link> = entries.into_iter().map(Link::from).collect();
 
 			if !links.is_empty() {
-				components.push(HomeComponent {
+				send_partial_result(&HomePartialResult::Component(HomeComponent {
 					title: Some(String::from("最近更新")),
 					subtitle: None,
 					value: HomeComponentValue::Scroller {
@@ -325,11 +339,10 @@ impl Home for KomiicSource {
 							..Default::default()
 						}),
 					},
-				});
+				}));
 			}
 		}
 
-		// Hot Comics
 		let hot_vars =
 			r#"{"pagination":{"limit":20,"offset":0,"orderBy":"MONTH_VIEWS","status":"","asc":true}}"#;
 		if let Ok(body) = gql(HOT_COMICS_QUERY, hot_vars) {
@@ -337,7 +350,7 @@ impl Home for KomiicSource {
 			let links: Vec<Link> = entries.into_iter().map(Link::from).collect();
 
 			if !links.is_empty() {
-				components.push(HomeComponent {
+				send_partial_result(&HomePartialResult::Component(HomeComponent {
 					title: Some(String::from("本月最夯")),
 					subtitle: None,
 					value: HomeComponentValue::Scroller {
@@ -348,11 +361,11 @@ impl Home for KomiicSource {
 							..Default::default()
 						}),
 					},
-				});
+				}));
 			}
 		}
 
-		Ok(HomeLayout { components })
+		Ok(HomeLayout::default())
 	}
 }
 

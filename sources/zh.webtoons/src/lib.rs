@@ -2,11 +2,15 @@
 
 use aidoku::{
 	alloc::{String, Vec},
-	imports::net::Request,
+	imports::{
+		net::Request,
+		std::{current_date, send_partial_result},
+	},
 	prelude::*,
 	Chapter, ContentRating, DeepLinkHandler, DeepLinkResult, FilterValue,
-	ImageRequestProvider, Listing, ListingProvider, Manga, MangaPageResult, MangaStatus,
-	Page, PageContent, PageContext, Result, Source, Viewer,
+	Home, HomeComponent, HomeComponentValue, HomeLayout, HomePartialResult,
+	ImageRequestProvider, Link, Listing, ListingProvider, Manga, MangaPageResult,
+	MangaStatus, Page, PageContent, PageContext, Result, Source, Viewer,
 };
 
 mod helper;
@@ -21,11 +25,23 @@ const MOBILE_API: &str = "https://m.webtoons.com/api/v1/webtoon";
 
 struct WebtoonSource;
 
+fn with_cache_bust(url: &str) -> String {
+	let ts = current_date() as i64;
+	if url.contains('?') {
+		format!("{url}&_={ts}")
+	} else {
+		format!("{url}?_={ts}")
+	}
+}
+
 /// Helper: fetch a page and parse manga items.
 fn fetch_manga_list(url: &str) -> Result<(Vec<Manga>, bool)> {
-	let html = Request::get(url)?
+	let request_url = with_cache_bust(url);
+	let html = Request::get(&request_url)?
 		.header("Referer", BASE_URL)
 		.header("User-Agent", USER_AGENT)
+		.header("Cache-Control", "no-cache, no-store, must-revalidate")
+		.header("Pragma", "no-cache")
 		.html()?;
 
 	let mut entries: Vec<Manga> = Vec::new();
@@ -115,9 +131,12 @@ impl Source for WebtoonSource {
 
 			println!("[webtoons] fetching details: {}", detail_url);
 
+			let detail_url = with_cache_bust(&detail_url);
 			let html = Request::get(&detail_url)?
 				.header("Referer", BASE_URL)
 				.header("User-Agent", USER_AGENT)
+				.header("Cache-Control", "no-cache, no-store, must-revalidate")
+				.header("Pragma", "no-cache")
 				.html()?;
 
 			if let Some(title_el) = html.select_first("h1.subj") {
@@ -190,6 +209,7 @@ impl Source for WebtoonSource {
 			let api_url = format!(
 				"{MOBILE_API}/{title_no}/episodes?pageSize=99999"
 			);
+			let api_url = with_cache_bust(&api_url);
 
 			println!("[webtoons] fetching chapters: {}", api_url);
 
@@ -199,6 +219,8 @@ impl Source for WebtoonSource {
 				let body = Request::get(&api_url)?
 					.header("Referer", BASE_URL)
 					.header("User-Agent", USER_AGENT)
+					.header("Cache-Control", "no-cache, no-store, must-revalidate")
+					.header("Pragma", "no-cache")
 					.string()?;
 				Ok(parse_episodes_json(&body))
 			})();
@@ -234,9 +256,12 @@ impl Source for WebtoonSource {
 			chapter.key.clone()
 		};
 
+		let viewer_url = with_cache_bust(&viewer_url);
 		let html = Request::get(&viewer_url)?
 			.header("Referer", BASE_URL)
 			.header("User-Agent", USER_AGENT)
+			.header("Cache-Control", "no-cache, no-store, must-revalidate")
+			.header("Pragma", "no-cache")
 			.html()?;
 
 		let mut pages: Vec<Page> = Vec::new();
@@ -310,6 +335,101 @@ impl ListingProvider for WebtoonSource {
 	}
 }
 
+impl Home for WebtoonSource {
+	fn get_home(&self) -> Result<HomeLayout> {
+		send_partial_result(&HomePartialResult::Layout(HomeLayout {
+			components: aidoku::alloc::vec![
+				HomeComponent {
+					title: Some(String::from("人氣排行")),
+					subtitle: None,
+					value: HomeComponentValue::empty_scroller(),
+				},
+				HomeComponent {
+					title: Some(String::from("週一連載")),
+					subtitle: None,
+					value: HomeComponentValue::empty_scroller(),
+				},
+				HomeComponent {
+					title: Some(String::from("週二連載")),
+					subtitle: None,
+					value: HomeComponentValue::empty_scroller(),
+				},
+				HomeComponent {
+					title: Some(String::from("週三連載")),
+					subtitle: None,
+					value: HomeComponentValue::empty_scroller(),
+				},
+				HomeComponent {
+					title: Some(String::from("週四連載")),
+					subtitle: None,
+					value: HomeComponentValue::empty_scroller(),
+				},
+				HomeComponent {
+					title: Some(String::from("週五連載")),
+					subtitle: None,
+					value: HomeComponentValue::empty_scroller(),
+				},
+				HomeComponent {
+					title: Some(String::from("週六連載")),
+					subtitle: None,
+					value: HomeComponentValue::empty_scroller(),
+				},
+				HomeComponent {
+					title: Some(String::from("週日連載")),
+					subtitle: None,
+					value: HomeComponentValue::empty_scroller(),
+				},
+				HomeComponent {
+					title: Some(String::from("完結作品")),
+					subtitle: None,
+					value: HomeComponentValue::empty_scroller(),
+				},
+			],
+		}));
+
+		let sections = [
+			("popular", "人氣排行"),
+			("monday", "週一連載"),
+			("tuesday", "週二連載"),
+			("wednesday", "週三連載"),
+			("thursday", "週四連載"),
+			("friday", "週五連載"),
+			("saturday", "週六連載"),
+			("sunday", "週日連載"),
+			("complete", "完結作品"),
+		];
+
+		for (id, name) in sections {
+			if let Ok(result) = self.get_manga_list(
+				Listing {
+					id: String::from(id),
+					name: String::from(name),
+					..Default::default()
+				},
+				1,
+			) {
+				if !result.entries.is_empty() {
+					let links: Vec<Link> = result.entries.into_iter().map(Link::from).collect();
+					send_partial_result(&HomePartialResult::Component(HomeComponent {
+						title: Some(String::from(name)),
+						subtitle: None,
+						value: HomeComponentValue::Scroller {
+							entries: links,
+							listing: Some(Listing {
+								id: String::from(id),
+								name: String::from(name),
+								..Default::default()
+							}),
+						},
+					}));
+				}
+			}
+		}
+
+		Ok(HomeLayout::default())
+	}
+}
+
 impl ImageRequestProvider for WebtoonSource {
 	fn get_image_request(
 		&self,
@@ -341,6 +461,7 @@ impl DeepLinkHandler for WebtoonSource {
 
 register_source!(
 	WebtoonSource,
+	Home,
 	ListingProvider,
 	ImageRequestProvider,
 	DeepLinkHandler

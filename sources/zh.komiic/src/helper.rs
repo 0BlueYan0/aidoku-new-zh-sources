@@ -1,6 +1,9 @@
 use aidoku::{
 	alloc::{String, Vec},
-	imports::net::Request,
+	imports::{
+		net::Request,
+		std::current_date,
+	},
 	prelude::*,
 	Chapter, Manga, MangaStatus, Viewer,
 };
@@ -37,6 +40,9 @@ pub const ALL_CATEGORY_QUERY: &str = r#"query allCategory { allCategory { id nam
 /// Send a GraphQL POST request to the Komiic API.
 /// Returns the full response body as a string.
 pub fn graphql_request(query: &str, variables: &str, token: Option<&str>) -> aidoku::Result<String> {
+	let ts = current_date() as i64;
+	let api_url = format!("{API_URL}?_={ts}");
+
 	let body = format!(
 		r#"{{"operationName":"{}","query":"{}","variables":{}}}"#,
 		extract_operation_name(query),
@@ -44,9 +50,11 @@ pub fn graphql_request(query: &str, variables: &str, token: Option<&str>) -> aid
 		variables
 	);
 
-	let mut req = Request::post(API_URL)?
+	let mut req = Request::post(&api_url)?
 		.header("Content-Type", "application/json")
-		.header("Referer", "https://komiic.com");
+		.header("Referer", "https://komiic.com")
+		.header("Cache-Control", "no-cache, no-store, must-revalidate")
+		.header("Pragma", "no-cache");
 
 	if let Some(t) = token {
 		if !t.is_empty() {
