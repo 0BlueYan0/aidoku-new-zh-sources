@@ -4,9 +4,9 @@
     {
       "id": "zh.webtoons",
       "name": "Webtoons 繁體中文",
-      "version": 14,
-      "iconURL": "icons/zh.webtoons-v14.png",
-      "downloadURL": "sources/zh.webtoons-v14.aix",
+      "version": 15,
+      "iconURL": "icons/zh.webtoons-v15.png",
+      "downloadURL": "sources/zh.webtoons-v15.aix",
       "languages": [
         "zh"
       ],
