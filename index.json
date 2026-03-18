@@ -4,9 +4,9 @@
     {
       "id": "zh.webtoons",
       "name": "Webtoons 繁體中文",
-      "version": 12,
-      "iconURL": "icons/zh.webtoons-v12.png",
-      "downloadURL": "sources/zh.webtoons-v12.aix",
+      "version": 14,
+      "iconURL": "icons/zh.webtoons-v14.png",
+      "downloadURL": "sources/zh.webtoons-v14.aix",
       "languages": [
         "zh"
       ],
@@ -16,9 +16,9 @@
     {
       "id": "zh.komiic",
       "name": "Komiic 繁體中文",
-      "version": 7,
-      "iconURL": "icons/zh.komiic-v7.png",
-      "downloadURL": "sources/zh.komiic-v7.aix",
+      "version": 9,
+      "iconURL": "icons/zh.komiic-v9.png",
+      "downloadURL": "sources/zh.komiic-v9.aix",
       "languages": [
         "zh"
       ],
