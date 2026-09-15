@@ -15,3 +15,6 @@ templates/*/target
 .zed
 .ropeproject
 /target
+
+docs/*
+CLAUDE.md

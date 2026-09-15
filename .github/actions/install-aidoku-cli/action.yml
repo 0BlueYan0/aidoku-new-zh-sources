@@ -1,0 +1,33 @@
+name: Install Aidoku CLI
+description: Installs the aidoku CLI from Aidoku/aidoku-rs (crates/cli), cached by upstream revision
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve aidoku-rs revision
+      id: rev
+      shell: bash
+      run: |
+        rev=$(git ls-remote https://github.com/Aidoku/aidoku-rs HEAD | cut -f1)
+        echo "rev=$rev" >> "$GITHUB_OUTPUT"
+        echo "aidoku-rs HEAD = $rev"
+
+    - name: Cache aidoku CLI
+      id: cache
+      uses: actions/cache@v4
+      with:
+        path: ~/.local/aidoku-cli
+        key: aidoku-cli-${{ runner.os }}-${{ steps.rev.outputs.rev }}
+
+    - name: Install aidoku CLI
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        cargo install --git https://github.com/Aidoku/aidoku-rs \
+          --rev "${{ steps.rev.outputs.rev }}" \
+          --root "$HOME/.local/aidoku-cli" \
+          aidoku-cli
+
+    - name: Add aidoku CLI to PATH
+      shell: bash
+      run: echo "$HOME/.local/aidoku-cli/bin" >> "$GITHUB_PATH"

@@ -1,0 +1,78 @@
+name: Build source list
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "sources/**"
+      - "public/**"
+      - ".github/actions/install-aidoku-cli/**"
+      - ".github/workflows/build.yaml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            sources/**/target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - uses: ./.github/actions/install-aidoku-cli
+
+      - name: Package sources
+        run: |
+          set -euo pipefail
+          for source in sources/*; do
+            [[ -f "$source/Cargo.toml" ]] || continue
+            echo "::group::Packaging $source"
+            (
+              cd "$source"
+              aidoku package
+            )
+            echo "::endgroup::"
+          done
+
+      - name: Verify packages
+        run: aidoku verify sources/*/package.aix
+
+      - name: Build source list
+        run: aidoku build sources/*/package.aix --name "Aidoku ZH Sources"
+
+      - name: Deploy to GitHub Pages
+        uses: JamesIves/github-pages-deploy-action@v4.7.2
+        if: ${{ github.ref == 'refs/heads/main' }}
+        with:
+          branch: gh-pages
+          folder: public
+          git-config-name: GitHub Actions
+          git-config-email: github-actions[bot]@users.noreply.github.com
+          commit-message: Update source list
+          single-commit: true
+
+      - name: Upload packages as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: packages
+          path: public/sources/*.aix
+          if-no-files-found: ignore
