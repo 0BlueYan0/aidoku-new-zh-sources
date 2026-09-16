@@ -367,16 +367,17 @@ impl BasicLoginHandler for KomiicSource {
 		password: String,
 	) -> Result<bool> {
 		match auth::login(&username, &password) {
-			Some(token) => {
+			auth::LoginOutcome::Token(token) => {
 				auth::set_token(&token);
 				// Kept so the 24 hour token can be renewed without asking again.
 				auth::set_credentials(&username, &password);
-				auth::set_just_logged_in();
+				auth::mark_just_logged_in();
 				auth::mark_session_verified();
 				println!("[komiic] login successful");
 				Ok(true)
 			}
-			None => Ok(false),
+			auth::LoginOutcome::Rejected => Ok(false),
+			auth::LoginOutcome::Unreachable => bail!("無法連線到 Komiic，請稍後再試"),
 		}
 	}
 }
@@ -384,10 +385,10 @@ impl BasicLoginHandler for KomiicSource {
 impl NotificationHandler for KomiicSource {
 	fn handle_notification(&self, notification: String) {
 		if notification == "login" {
-			// The app fires this for both logging in and logging out. The flag
-			// marks the one that follows a successful login; anything else is a
-			// logout and must wipe the stored credentials, or the silent renewal
-			// would log the user straight back in.
+			// The app fires this for both logging in and logging out. A recent
+			// login timestamp marks the one that follows a successful login;
+			// anything else is a logout and must wipe the stored credentials, or
+			// the silent renewal would log the user straight back in.
 			if auth::is_just_logged_in() {
 				auth::clear_just_logged_in();
 			} else {
@@ -397,6 +398,11 @@ impl NotificationHandler for KomiicSource {
 	}
 }
 
+/// Shown when the stored session is dead and cannot be renewed. The app's own
+/// login row still says "logged in" then, so the user has to be told to log out
+/// first.
+const RELOGIN_HINT: &str = "登入已失效或密碼已變更，請先登出再重新登入";
+
 /// Account summary shown under the login row. This is also the only honest
 /// signal of login state in the UI: the app's own login row just records that a
 /// login once succeeded, never whether the token is still valid.
@@ -405,7 +411,12 @@ fn account_footer() -> String {
 		return String::from("無法連線到 Komiic，請檢查網路");
 	};
 	let Some(account) = json_data_field(&account_body, "account") else {
-		return String::from("登入已失效，請重新登入");
+		// gql() already tried to recover the session; report what it concluded.
+		return if auth::needs_relogin() {
+			String::from(RELOGIN_HINT)
+		} else {
+			String::from("登入已失效，自動重新登入暫時失敗，稍後會再嘗試")
+		};
 	};
 
 	let nickname = json_str_value(account, "nickname").unwrap_or("");
@@ -431,14 +442,22 @@ fn account_footer() -> String {
 
 impl DynamicSettings for KomiicSource {
 	fn get_dynamic_settings(&self) -> Result<Vec<Setting>> {
+		let footer = if auth::needs_relogin() {
+			Some(String::from(RELOGIN_HINT))
+		} else if auth::token().is_some() {
+			Some(account_footer())
+		} else {
+			None
+		};
+
 		let mut settings: Vec<Setting> = Vec::new();
-		if auth::token().is_some() {
+		if let Some(footer) = footer {
 			settings.push(
 				GroupSetting {
 					key: "accountInfo".into(),
 					title: "帳號資訊".into(),
 					items: Vec::new(),
-					footer: Some(account_footer().into()),
+					footer: Some(footer.into()),
 					..Default::default()
 				}
 				.into(),

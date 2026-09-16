@@ -19,14 +19,20 @@ const ORIGIN: &str = "https://komiic.com";
 const TOKEN_KEY: &str = "auth_token";
 const EMAIL_KEY: &str = "auth_email";
 const PASSWORD_KEY: &str = "auth_password";
-const JUST_LOGGED_IN_KEY: &str = "justLoggedIn";
-const CHECKED_AT_KEY: &str = "auth_checked_at";
+const LOGGED_IN_AT_KEY: &str = "auth_logged_in_at";
+const NEXT_CHECK_KEY: &str = "auth_next_check_at";
 const FAILED_AT_KEY: &str = "auth_failed_at";
+const NEEDS_RELOGIN_KEY: &str = "auth_needs_relogin";
 
 /// How long a verified session is trusted before probing again.
 const CHECK_INTERVAL: i64 = 1800;
-/// How long to wait after a failed silent login before trying again.
+/// How soon to probe again when the probe itself could not reach the server.
+const PROBE_RETRY: i64 = 60;
+/// How long to wait after the login endpoint was unreachable before trying again.
 const FAIL_BACKOFF: i64 = 600;
+/// How long after a successful login the `login` notification still means
+/// "just logged in" rather than "logged out".
+const JUST_LOGGED_IN_TTL: i64 = 60;
 
 // ---------------------------------------------------------------------------
 // Stored state
@@ -59,27 +65,44 @@ pub fn set_credentials(email: &str, password: &str) {
 	defaults_set(PASSWORD_KEY, DefaultValue::String(String::from(password)));
 }
 
+/// Wipe everything auth related. Used on logout and when the stored session
+/// turns out to be unrecoverable.
 pub fn clear_auth() {
 	defaults_set(TOKEN_KEY, DefaultValue::Null);
 	defaults_set(EMAIL_KEY, DefaultValue::Null);
 	defaults_set(PASSWORD_KEY, DefaultValue::Null);
-	defaults_set(JUST_LOGGED_IN_KEY, DefaultValue::Null);
-	defaults_set(CHECKED_AT_KEY, DefaultValue::Null);
+	defaults_set(LOGGED_IN_AT_KEY, DefaultValue::Null);
+	defaults_set(NEXT_CHECK_KEY, DefaultValue::Null);
 	defaults_set(FAILED_AT_KEY, DefaultValue::Null);
+	defaults_set(NEEDS_RELOGIN_KEY, DefaultValue::Null);
+}
+
+/// Set when the stored session is dead and cannot be renewed: the password was
+/// rejected, or no credentials were stored. The app's own login row keeps
+/// showing "logged in" in this state, so the settings footer uses this flag to
+/// tell the user to log out and back in.
+pub fn needs_relogin() -> bool {
+	defaults_get::<bool>(NEEDS_RELOGIN_KEY).unwrap_or(false)
+}
+
+fn set_needs_relogin() {
+	defaults_set(NEEDS_RELOGIN_KEY, DefaultValue::Bool(true));
 }
 
 // The app fires the same `login` notification for both logging in and logging
-// out, so a flag is used to swallow the one that follows a successful login.
-pub fn set_just_logged_in() {
-	defaults_set(JUST_LOGGED_IN_KEY, DefaultValue::Bool(true));
+// out. A login timestamp lets the handler tell the two apart. It expires, so a
+// notification that never arrived cannot make a later logout look like a login
+// and leave the credentials behind.
+pub fn mark_just_logged_in() {
+	set_timestamp(LOGGED_IN_AT_KEY, current_date());
 }
 
 pub fn is_just_logged_in() -> bool {
-	defaults_get::<bool>(JUST_LOGGED_IN_KEY).unwrap_or(false)
+	current_date() - timestamp(LOGGED_IN_AT_KEY) < JUST_LOGGED_IN_TTL
 }
 
 pub fn clear_just_logged_in() {
-	defaults_set(JUST_LOGGED_IN_KEY, DefaultValue::Null);
+	defaults_set(LOGGED_IN_AT_KEY, DefaultValue::Null);
 }
 
 /// Unix seconds stored as a string, so the value cannot overflow an i32.
@@ -93,60 +116,89 @@ fn set_timestamp(key: &str, value: i64) {
 	defaults_set(key, DefaultValue::String(format!("{value}")));
 }
 
+/// Record that the stored token was just accepted: trust it for
+/// `CHECK_INTERVAL` and forget any earlier failure.
 pub fn mark_session_verified() {
-	set_timestamp(CHECKED_AT_KEY, current_date());
+	set_timestamp(NEXT_CHECK_KEY, current_date() + CHECK_INTERVAL);
 	defaults_set(FAILED_AT_KEY, DefaultValue::Null);
+	defaults_set(NEEDS_RELOGIN_KEY, DefaultValue::Null);
 }
 
 // ---------------------------------------------------------------------------
 // Login
 // ---------------------------------------------------------------------------
 
-/// POST /api/login and return the JWT Komiic issues for these credentials.
-/// The token comes back in the response body; the `set-cookie` header carries
-/// the same value and is only used as a fallback.
-pub fn login(email: &str, password: &str) -> Option<String> {
+pub enum LoginOutcome {
+	/// Komiic accepted the credentials and issued this JWT.
+	Token(String),
+	/// Komiic answered but issued no token: the credentials are wrong.
+	Rejected,
+	/// No usable answer (network error, server error). Worth retrying later.
+	Unreachable,
+}
+
+/// POST /api/login with these credentials. The token comes back in the
+/// response body; the `set-cookie` header carries the same value and is only
+/// used as a fallback.
+///
+/// Wrong credentials do not produce an error status: Komiic replies HTTP 200
+/// with an empty body, a `www-authenticate` header and a `Set-Cookie` that
+/// clears the token cookie. That case must be told apart from a network
+/// failure, or a changed password would be retried forever.
+pub fn login(email: &str, password: &str) -> LoginOutcome {
 	let body = format!(
 		r#"{{"email":"{}","password":"{}"}}"#,
 		json_escape(email),
 		json_escape(password)
 	);
 
-	let response = Request::post(LOGIN_URL)
-		.ok()?
+	let Ok(request) = Request::post(LOGIN_URL) else {
+		return LoginOutcome::Unreachable;
+	};
+	let Ok(response) = request
 		.header("Content-Type", "application/json")
 		.header("Accept", "application/json")
 		.header("Origin", ORIGIN)
 		.header("Referer", ORIGIN)
 		.body(body.as_bytes())
 		.send()
-		.ok()?;
+	else {
+		println!("[komiic] login request failed to send");
+		return LoginOutcome::Unreachable;
+	};
 
 	let status = response.status_code();
-	if status != 200 {
-		println!("[komiic] login failed with status {status}");
-		return None;
-	}
 
-	// Read the header before the body so both are available regardless of which
-	// one carries the token.
 	let cookie_token = response
 		.get_header("set-cookie")
-		.and_then(|header| extract_token_from_cookie(&header).map(String::from));
+		.and_then(|header| extract_token_from_cookie(&header).map(String::from))
+		.filter(|token| !token.is_empty());
+	let body_token = response
+		.get_string()
+		.ok()
+		.and_then(|text| json_str_value(&text, "token").map(String::from))
+		.filter(|token| !token.is_empty());
 
-	if let Ok(text) = response.get_string() {
-		if let Some(token) = json_str_value(&text, "token") {
-			if !token.is_empty() {
-				return Some(String::from(token));
-			}
-		}
+	if let Some(token) = body_token.or(cookie_token) {
+		return LoginOutcome::Token(token);
 	}
 
-	cookie_token.filter(|token| !token.is_empty())
+	let challenged = response.get_header("www-authenticate").is_some();
+	if status == 200 || status == 401 || challenged {
+		println!("[komiic] login rejected (HTTP {status})");
+		LoginOutcome::Rejected
+	} else {
+		println!("[komiic] login failed with HTTP {status}");
+		LoginOutcome::Unreachable
+	}
 }
 
-/// Renew an expired token using the stored credentials. Backs off after a
-/// failure so a changed password cannot trigger a login on every request.
+/// Renew a dead token with the stored credentials.
+///
+/// A rejected password wipes the stored auth and flags the account for a
+/// manual re-login: retrying would only hammer the login endpoint with a
+/// password that is known to be wrong. An unreachable server backs off for
+/// `FAIL_BACKOFF` instead.
 pub fn refresh_token() -> Option<String> {
 	let now = current_date();
 	if now - timestamp(FAILED_AT_KEY) < FAIL_BACKOFF {
@@ -155,18 +207,39 @@ pub fn refresh_token() -> Option<String> {
 
 	let (email, password) = credentials()?;
 	match login(&email, &password) {
-		Some(token) => {
+		LoginOutcome::Token(token) => {
 			set_token(&token);
 			mark_session_verified();
 			println!("[komiic] auth token renewed");
 			Some(token)
 		}
-		None => {
+		LoginOutcome::Rejected => {
+			println!("[komiic] stored password rejected, manual re-login required");
+			clear_auth();
+			set_needs_relogin();
+			None
+		}
+		LoginOutcome::Unreachable => {
 			set_timestamp(FAILED_AT_KEY, now);
-			println!("[komiic] silent re-login failed");
+			println!("[komiic] silent re-login failed, will retry later");
 			None
 		}
 	}
+}
+
+/// React to a response that says the stored token is dead: renew it when the
+/// credentials are stored, otherwise drop it and ask the user to log in again.
+/// Returns the new token if one was obtained.
+pub fn recover_session() -> Option<String> {
+	if credentials().is_some() {
+		return refresh_token();
+	}
+	// A token without credentials was stored by a version that did not keep
+	// them; nothing can renew it.
+	println!("[komiic] session expired and no credentials stored, manual re-login required");
+	clear_auth();
+	set_needs_relogin();
+	None
 }
 
 /// Make sure the stored token is still accepted, renewing it if it is not.
@@ -179,26 +252,29 @@ pub fn ensure_session() {
 	let Some(token) = token() else {
 		return;
 	};
-	if credentials().is_none() {
-		return;
-	}
 
 	let now = current_date();
-	if now - timestamp(CHECKED_AT_KEY) < CHECK_INTERVAL {
+	if now < timestamp(NEXT_CHECK_KEY) {
 		return;
 	}
 
 	let Ok((status, body)) = graphql_once(ACCOUNT_QUERY, "{}", Some(&token)) else {
-		// Network failure: leave the timestamps alone and probe again next time.
+		// The probe itself failed (offline, server down). Retry soon, but not
+		// on every single request while it stays that way.
+		set_timestamp(NEXT_CHECK_KEY, now + PROBE_RETRY);
 		return;
 	};
 
 	if is_auth_error(status, &body) {
-		println!("[komiic] session expired, re-logging in");
-		refresh_token();
+		println!("[komiic] session expired, recovering");
+		if recover_session().is_none() && self::token().is_some() {
+			// Renewal is backing off; do not probe on every request meanwhile.
+			set_timestamp(NEXT_CHECK_KEY, now + FAIL_BACKOFF);
+		}
+	} else if status == 200 {
+		mark_session_verified();
+	} else {
+		// Server error: says nothing about the token, so check again soon.
+		set_timestamp(NEXT_CHECK_KEY, now + PROBE_RETRY);
 	}
-
-	// Record the attempt either way, so a session that stays broken cannot probe
-	// on every single request.
-	set_timestamp(CHECKED_AT_KEY, now);
 }

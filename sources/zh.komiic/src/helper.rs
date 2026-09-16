@@ -95,7 +95,7 @@ pub fn graphql_request(query: &str, variables: &str) -> aidoku::Result<String> {
 	// Komiic answers most queries anonymously instead of rejecting a dead token,
 	// so this path only fires for the queries that do report the error.
 	if is_auth_error(status, &body) && auth::token().is_some() {
-		if let Some(token) = auth::refresh_token() {
+		if let Some(token) = auth::recover_session() {
 			let (retry_status, retry_body) = graphql_once(query, variables, Some(&token))?;
 			if retry_status != 200 {
 				bail!("Komiic HTTP {retry_status}");
@@ -121,11 +121,11 @@ pub fn first_error_message(body: &str) -> Option<&str> {
 
 /// Whether a response says the token was not accepted. Komiic never replies
 /// with 401: an unauthenticated `account` query returns HTTP 200 and
-/// `{"errors":[{"message":"no token",...}],"data":null}`.
+/// `{"errors":[{"message":"no token","path":["account"]}],"data":null}`,
+/// and it answers exactly the same for a missing, expired or garbage token.
+/// A 403 is not counted: that is a Cloudflare block, not an auth error.
 pub fn is_auth_error(status: i32, body: &str) -> bool {
-	status == 401
-		|| status == 403
-		|| first_error_message(body).is_some_and(|message| message.contains("token"))
+	status == 401 || first_error_message(body) == Some("no token")
 }
 
 /// Extract the operation name from a GraphQL query string.
