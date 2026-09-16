@@ -9,7 +9,9 @@
 				"title": "登入",
 				"method": "basic",
 				"useEmail": true,
-				"logoutTitle": "登出"
+				"logoutTitle": "登出",
+				"notification": "login",
+				"refreshes": ["settings", "listings", "content"]
 			}
 		]
 	}

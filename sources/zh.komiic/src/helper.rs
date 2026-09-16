@@ -8,6 +8,8 @@ use aidoku::{
 	Chapter, Manga, MangaStatus, Viewer,
 };
 
+use crate::auth;
+
 const API_URL: &str = "https://komiic.com/api/query";
 
 // ---------------------------------------------------------------------------
@@ -33,20 +35,30 @@ pub const COMICS_BY_CATEGORY_QUERY: &str = r#"query comicByCategory($categoryId:
 #[allow(dead_code)]
 pub const ALL_CATEGORY_QUERY: &str = r#"query allCategory { allCategory { id name __typename } }"#;
 
+/// The only query that reports authentication state. Komiic serves every other
+/// query anonymously when the token is dead, so this one is used to probe it.
+pub const ACCOUNT_QUERY: &str = r#"query account { account { id email nickname __typename } }"#;
+
+pub const IMAGE_LIMIT_QUERY: &str = r#"query getImageLimit { getImageLimit { limit usage resetInSeconds __typename } }"#;
+
 // ---------------------------------------------------------------------------
 // GraphQL request helper
 // ---------------------------------------------------------------------------
 
-/// Send a GraphQL POST request to the Komiic API.
-/// Returns the full response body as a string.
-pub fn graphql_request(query: &str, variables: &str, token: Option<&str>) -> aidoku::Result<String> {
-	let ts = current_date() as i64;
+/// Send a single GraphQL POST to the Komiic API. No retry, no defaults access.
+/// Returns the HTTP status code and the raw response body.
+pub fn graphql_once(
+	query: &str,
+	variables: &str,
+	token: Option<&str>,
+) -> aidoku::Result<(i32, String)> {
+	let ts = current_date();
 	let api_url = format!("{API_URL}?_={ts}");
 
 	let body = format!(
 		r#"{{"operationName":"{}","query":"{}","variables":{}}}"#,
 		extract_operation_name(query),
-		escape_query(query),
+		json_escape(query),
 		variables
 	);
 
@@ -56,16 +68,64 @@ pub fn graphql_request(query: &str, variables: &str, token: Option<&str>) -> aid
 		.header("Cache-Control", "no-cache, no-store, must-revalidate")
 		.header("Pragma", "no-cache");
 
+	// Sent as a header rather than a cookie on purpose: Aidoku prepends the
+	// shared cookie jar's entries to any Cookie header a source sets, so a stale
+	// komiic-access-token from the jar would shadow ours and the request would be
+	// served anonymously.
 	if let Some(t) = token {
 		if !t.is_empty() {
-			let cookie = format!("komiic-access-token={t}");
-			req = req.header("Cookie", &cookie);
+			let authorization = format!("Bearer {t}");
+			req = req.header("Authorization", authorization.as_str());
 		}
 	}
 
-	req = req.body(body.as_bytes());
-	let resp = req.string()?;
-	Ok(resp)
+	let response = req.body(body.as_bytes()).send()?;
+	let status = response.status_code();
+	let text = response.get_string()?;
+	Ok((status, text))
+}
+
+/// Send a GraphQL request with the stored auth token, renewing an expired
+/// session first if needed. Returns the full response body as a string.
+pub fn graphql_request(query: &str, variables: &str) -> aidoku::Result<String> {
+	auth::ensure_session();
+
+	let (status, body) = graphql_once(query, variables, auth::token().as_deref())?;
+
+	// Komiic answers most queries anonymously instead of rejecting a dead token,
+	// so this path only fires for the queries that do report the error.
+	if is_auth_error(status, &body) && auth::token().is_some() {
+		if let Some(token) = auth::refresh_token() {
+			let (retry_status, retry_body) = graphql_once(query, variables, Some(&token))?;
+			if retry_status != 200 {
+				bail!("Komiic HTTP {retry_status}");
+			}
+			return Ok(retry_body);
+		}
+	}
+
+	if status != 200 {
+		bail!("Komiic HTTP {status}");
+	}
+	Ok(body)
+}
+
+/// First `errors[].message` in a GraphQL response body, if there is one.
+pub fn first_error_message(body: &str) -> Option<&str> {
+	let errors = json_data_field(body, "errors")?;
+	if json_top_level_objects(errors).is_empty() {
+		return None;
+	}
+	json_str_value(errors, "message")
+}
+
+/// Whether a response says the token was not accepted. Komiic never replies
+/// with 401: an unauthenticated `account` query returns HTTP 200 and
+/// `{"errors":[{"message":"no token",...}],"data":null}`.
+pub fn is_auth_error(status: i32, body: &str) -> bool {
+	status == 401
+		|| status == 403
+		|| first_error_message(body).is_some_and(|message| message.contains("token"))
 }
 
 /// Extract the operation name from a GraphQL query string.
@@ -80,17 +140,36 @@ fn extract_operation_name(query: &str) -> &str {
 		return "";
 	};
 	let rest = &query[start..];
-	let end = rest.find('(').unwrap_or(rest.len());
+	// Stop at the argument list, the selection set, or plain whitespace: a
+	// query without variables has no '(' at all.
+	let end = rest
+		.find(|c: char| c == '(' || c == '{' || c.is_whitespace())
+		.unwrap_or(rest.len());
 	rest[..end].trim()
 }
 
-/// Escape a GraphQL query for embedding in JSON string.
-fn escape_query(query: &str) -> String {
-	query
-		.replace('\\', "\\\\")
-		.replace('"', "\\\"")
-		.replace('\n', "\\n")
-		.replace('\t', "\\t")
+/// Escape a string for embedding as a JSON string value.
+pub fn json_escape(value: &str) -> String {
+	let mut out = String::new();
+	for ch in value.chars() {
+		match ch {
+			'"' => out.push_str("\\\""),
+			'\\' => out.push_str("\\\\"),
+			'\n' => out.push_str("\\n"),
+			'\r' => out.push_str("\\r"),
+			'\t' => out.push_str("\\t"),
+			c if (c as u32) < 0x20 => {
+				out.push_str("\\u");
+				let code = c as u32;
+				for shift in [12u32, 8, 4, 0] {
+					let digit = (code >> shift) & 0xF;
+					out.push(char::from_digit(digit, 16).unwrap_or('0'));
+				}
+			}
+			c => out.push(c),
+		}
+	}
+	out
 }
 
 // ---------------------------------------------------------------------------
@@ -324,6 +403,7 @@ pub fn parse_chapter(obj: &str) -> Option<Chapter> {
 }
 
 /// Build a JSON array of kid strings for the getImageTickets query.
+#[allow(dead_code)]
 pub fn build_kids_json_array(kids: &[&str]) -> String {
 	let mut result = String::from("[");
 	for (i, kid) in kids.iter().enumerate() {

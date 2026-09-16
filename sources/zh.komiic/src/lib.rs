@@ -2,36 +2,26 @@
 
 use aidoku::{
 	alloc::{String, Vec},
-	imports::{
-		defaults::{defaults_get, defaults_set, DefaultValue},
-		net::Request,
-		std::send_partial_result,
-	},
+	imports::{net::Request, std::send_partial_result},
 	prelude::*,
 	BasicLoginHandler, Chapter, ContentRating, DeepLinkHandler, DeepLinkResult,
-	FilterValue, Home, HomeComponent, HomeComponentValue, HomeLayout, HomePartialResult,
-	ImageRequestProvider, Link,
-	Listing, ListingProvider, Manga, MangaPageResult, MangaStatus, Page,
-	PageContent, PageContext, Result, Source, Viewer,
+	DynamicSettings, FilterValue, GroupSetting, Home, HomeComponent, HomeComponentValue,
+	HomeLayout, HomePartialResult, ImageRequestProvider, Link, Listing, ListingProvider,
+	Manga, MangaPageResult, MangaStatus, NotificationHandler, Page, PageContent, PageContext,
+	Result, Setting, Source, Viewer,
 };
 
+mod auth;
 mod helper;
 use helper::*;
 
 const BASE_URL: &str = "https://komiic.com";
-const LOGIN_URL: &str = "https://komiic.com/api/login";
 
 struct KomiicSource;
 
-/// Retrieve the stored auth token from defaults.
-fn get_token() -> Option<String> {
-	defaults_get::<String>("auth_token")
-}
-
 /// Helper to send a GraphQL request with the stored auth token.
 fn gql(query: &str, variables: &str) -> Result<String> {
-	let token = get_token();
-	graphql_request(query, variables, token.as_deref())
+	graphql_request(query, variables)
 }
 
 /// Parse a list of comics from a GraphQL response.
@@ -66,7 +56,7 @@ impl Source for KomiicSource {
 		// Keyword search
 		if let Some(keyword) = query {
 			if !keyword.is_empty() {
-				let vars = format!(r#"{{"keyword":"{}"}}"#, keyword);
+				let vars = format!(r#"{{"keyword":"{}"}}"#, json_escape(&keyword));
 				let body = gql(SEARCH_QUERY, &vars)?;
 
 				// Parse comics from searchComicsAndAuthors.comics
@@ -376,60 +366,87 @@ impl BasicLoginHandler for KomiicSource {
 		username: String,
 		password: String,
 	) -> Result<bool> {
-		// POST /api/login with email and password
-		let login_body = format!(
-			r#"{{"email":"{}","password":"{}"}}"#,
-			username, password
-		);
-
-		println!(
-			"[komiic] Attempting login for: {}",
-			username
-		);
-
-		let response = Request::post(LOGIN_URL)?
-			.header("Content-Type", "application/json")
-			.header("Referer", BASE_URL)
-			.body(login_body.as_bytes())
-			.send()
-			.map_err(|_| aidoku::AidokuError::message(String::from("Login request failed")))?;
-
-		let status = response.status_code();
-		println!("[komiic] Login response status: {}", status);
-
-		if status == 200 {
-			// Try to extract the token from the set-cookie header
-			if let Some(cookie_header) = response.get_header("set-cookie") {
-				if let Some(token) = extract_token_from_cookie(&cookie_header) {
-					println!("[komiic] Login successful, token stored");
-					defaults_set(
-						"auth_token",
-						DefaultValue::String(String::from(token)),
-					);
-					return Ok(true);
-				}
+		match auth::login(&username, &password) {
+			Some(token) => {
+				auth::set_token(&token);
+				// Kept so the 24 hour token can be renewed without asking again.
+				auth::set_credentials(&username, &password);
+				auth::set_just_logged_in();
+				auth::mark_session_verified();
+				println!("[komiic] login successful");
+				Ok(true)
 			}
-			// Even without cookie, 200 means success - try response body for token
-			if let Ok(body) = response.get_string() {
-				if let Some(token) = json_str_value(&body, "token") {
-					println!("[komiic] Login successful (token from body)");
-					defaults_set(
-						"auth_token",
-						DefaultValue::String(String::from(token)),
-					);
-					return Ok(true);
-				}
-			}
-			println!("[komiic] Login 200 but no token found");
-			Ok(false)
-		} else {
-			println!("[komiic] Login failed with status {}", status);
-			Ok(false)
+			None => Ok(false),
 		}
 	}
 }
 
+impl NotificationHandler for KomiicSource {
+	fn handle_notification(&self, notification: String) {
+		if notification == "login" {
+			// The app fires this for both logging in and logging out. The flag
+			// marks the one that follows a successful login; anything else is a
+			// logout and must wipe the stored credentials, or the silent renewal
+			// would log the user straight back in.
+			if auth::is_just_logged_in() {
+				auth::clear_just_logged_in();
+			} else {
+				auth::clear_auth();
+			}
+		}
+	}
+}
 
+/// Account summary shown under the login row. This is also the only honest
+/// signal of login state in the UI: the app's own login row just records that a
+/// login once succeeded, never whether the token is still valid.
+fn account_footer() -> String {
+	let Ok(account_body) = gql(ACCOUNT_QUERY, "{}") else {
+		return String::from("無法連線到 Komiic，請檢查網路");
+	};
+	let Some(account) = json_data_field(&account_body, "account") else {
+		return String::from("登入已失效，請重新登入");
+	};
+
+	let nickname = json_str_value(account, "nickname").unwrap_or("");
+	let email = json_str_value(account, "email").unwrap_or("");
+	let mut footer = if nickname.is_empty() {
+		format!("已登入：{email}")
+	} else {
+		format!("已登入：{nickname}（{email}）")
+	};
+
+	if let Ok(limit_body) = gql(IMAGE_LIMIT_QUERY, "{}") {
+		if let Some(limit_object) = json_data_field(&limit_body, "getImageLimit") {
+			let usage = json_num_value(limit_object, "usage").unwrap_or(0);
+			let limit = json_num_value(limit_object, "limit").unwrap_or(0);
+			if limit > 0 {
+				footer = format!("{footer}\n今日圖片額度：{usage} / {limit}");
+			}
+		}
+	}
+
+	footer
+}
+
+impl DynamicSettings for KomiicSource {
+	fn get_dynamic_settings(&self) -> Result<Vec<Setting>> {
+		let mut settings: Vec<Setting> = Vec::new();
+		if auth::token().is_some() {
+			settings.push(
+				GroupSetting {
+					key: "accountInfo".into(),
+					title: "帳號資訊".into(),
+					items: Vec::new(),
+					footer: Some(account_footer().into()),
+					..Default::default()
+				}
+				.into(),
+			);
+		}
+		Ok(settings)
+	}
+}
 
 impl ImageRequestProvider for KomiicSource {
 	fn get_image_request(
@@ -494,6 +511,8 @@ register_source!(
 	ListingProvider,
 	Home,
 	BasicLoginHandler,
+	NotificationHandler,
+	DynamicSettings,
 	ImageRequestProvider,
 	DeepLinkHandler
 );
