@@ -193,21 +193,6 @@ pub fn is_logged_in() -> bool {
 	defaults_get::<bool>(LOGGED_IN_KEY).unwrap_or(false)
 }
 
-pub fn cached_user_info() -> Option<UserInfo> {
-	if !is_logged_in() {
-		return None;
-	}
-
-	Some(UserInfo {
-		logged_in: true,
-		nickname: defaults_get::<String>(NICKNAME_KEY).unwrap_or_default(),
-		vip: defaults_get::<i32>(VIP_KEY).unwrap_or(0),
-		vip_time: defaults_get::<i32>(VIP_TIME_KEY).unwrap_or(0),
-		cion: defaults_get::<i32>(CION_KEY).unwrap_or(0),
-		ticket: defaults_get::<i32>(TICKET_KEY).unwrap_or(0),
-	})
-}
-
 fn cache_user_info(info: &UserInfo) {
 	defaults_set(LOGGED_IN_KEY, DefaultValue::Bool(info.logged_in));
 	defaults_set(NICKNAME_KEY, DefaultValue::String(info.nickname.clone()));

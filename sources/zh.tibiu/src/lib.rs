@@ -5,13 +5,13 @@ use aidoku::{
 	helpers::uri::encode_uri_component,
 	imports::{
 		net::Request,
-		std::{current_date, send_partial_result},
+		std::send_partial_result,
 	},
 	prelude::*,
-	Chapter, DeepLinkHandler, DeepLinkResult, DynamicSettings, FilterValue, GroupSetting, HashMap,
-	Home, HomeComponent, HomeComponentValue, HomeLayout, HomePartialResult, ImageRequestProvider,
-	Link, Listing, ListingProvider, Manga, MangaPageResult, NotificationHandler, Page, PageContent,
-	PageContext, Result, Setting, Source, WebLoginHandler,
+	Chapter, DeepLinkHandler, DeepLinkResult, FilterValue, HashMap, Home, HomeComponent,
+	HomeComponentValue, HomeLayout, HomePartialResult, ImageRequestProvider, Link, Listing,
+	ListingProvider, Manga, MangaPageResult, NotificationHandler, Page, PageContent, PageContext,
+	Result, Source, WebLoginHandler,
 };
 
 mod auth;
@@ -340,53 +340,6 @@ impl NotificationHandler for TibiuSource {
 	}
 }
 
-impl DynamicSettings for TibiuSource {
-	fn get_dynamic_settings(&self) -> Result<Vec<Setting>> {
-		let mut settings: Vec<Setting> = Vec::new();
-
-		if let Some(info) = auth::cached_user_info() {
-			settings.push(
-				GroupSetting {
-					key: "accountInfo".into(),
-					title: "当前账号".into(),
-					items: Vec::new(),
-					footer: Some(account_footer(&info).into()),
-					..Default::default()
-				}
-				.into(),
-			);
-		}
-
-		Ok(settings)
-	}
-}
-
-fn account_footer(info: &auth::UserInfo) -> String {
-	let nickname = if info.nickname.is_empty() {
-		String::from("已登录")
-	} else {
-		info.nickname.clone()
-	};
-
-	// The host API has no date formatter, so show the days left rather than trying to
-	// render `viptime` as a calendar date.
-	let vip = if info.vip > 0 {
-		let remaining = (i64::from(info.vip_time) - current_date()) / 86400;
-		if remaining > 0 {
-			format!("剩余 {remaining} 天")
-		} else {
-			String::from("是")
-		}
-	} else {
-		String::from("无")
-	};
-
-	format!(
-		"昵称：{nickname}　VIP：{vip}　金币：{}　月票：{}",
-		info.cion, info.ticket
-	)
-}
-
 // ---------------------------------------------------------------------------
 // Images and deep links
 // ---------------------------------------------------------------------------
@@ -443,6 +396,15 @@ fn trim_url_tail(segment: &str) -> &str {
 		.unwrap_or(segment)
 }
 
+// `DynamicSettings` is deliberately not implemented, and re-adding it will crash the
+// app. It is the only trait here that sends `Setting` structs over the wire, and
+// Aidoku 0.9 cannot decode what this version of aidoku-rs emits for them: the encoding
+// writes the setting `type` as a string ("group"), the app reads an integer, and every
+// byte after that is misread until the decoder traps inside `Int32.init(from:)`.
+// Verified by dumping the 33-byte payload — it matches the aidoku-rs model exactly, so
+// the skew is between the library and the released app, not in this source.
+// The account profile is still fetched and cached, ready for whenever it can be shown.
+
 register_source!(
 	TibiuSource,
 	ListingProvider,
@@ -450,6 +412,5 @@ register_source!(
 	ImageRequestProvider,
 	DeepLinkHandler,
 	WebLoginHandler,
-	DynamicSettings,
 	NotificationHandler
 );
