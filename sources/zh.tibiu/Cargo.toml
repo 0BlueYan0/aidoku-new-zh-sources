@@ -9,6 +9,10 @@ crate-type = ["cdylib"]
 [dependencies]
 aidoku = { git = "https://github.com/Aidoku/aidoku-rs.git", branch = "main" }
 
+[dev-dependencies]
+aidoku = { git = "https://github.com/Aidoku/aidoku-rs.git", branch = "main", features = ["test"] }
+aidoku-test = { git = "https://github.com/Aidoku/aidoku-rs.git", branch = "main" }
+
 [profile.dev]
 panic = "abort"
 

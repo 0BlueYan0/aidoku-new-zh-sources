@@ -72,6 +72,41 @@ pub fn json_num_value(json: &str, key: &str) -> Option<i64> {
 	num_str.parse::<i64>().ok()
 }
 
+/// Tracks whether a scan position sits inside a JSON string literal.
+///
+/// Every depth-counting scan below has to ignore brackets and braces that appear inside
+/// string values. Synopses on this site open a bracketed pull quote and the truncated
+/// `text` field can cut the closing bracket off, so the counts really do go unbalanced.
+#[derive(Default)]
+struct StringScanner {
+	in_string: bool,
+	escaped: bool,
+}
+
+impl StringScanner {
+	/// Feed the next character; returns true only if it is structural punctuation,
+	/// meaning it sits outside any string literal.
+	fn is_structural(&mut self, ch: char) -> bool {
+		if self.in_string {
+			if self.escaped {
+				self.escaped = false;
+			} else if ch == '\\' {
+				self.escaped = true;
+			} else if ch == '"' {
+				self.in_string = false;
+			}
+			return false;
+		}
+
+		if ch == '"' {
+			self.in_string = true;
+			return false;
+		}
+
+		true
+	}
+}
+
 /// Iterate over JSON array objects.
 /// Given `"key":[{...},{...}]`, returns a Vec of the individual `{...}` strings.
 pub fn json_array_objects<'a>(json: &'a str, key: &str) -> Vec<&'a str> {
@@ -83,10 +118,14 @@ pub fn json_array_objects<'a>(json: &'a str, key: &str) -> Vec<&'a str> {
 	};
 
 	let body = &json[pos..];
+	let mut scanner = StringScanner::default();
 	let mut depth = 0i32;
 	let mut obj_start: Option<usize> = None;
 
 	for (i, ch) in body.char_indices() {
+		if !scanner.is_structural(ch) {
+			continue;
+		}
 		match ch {
 			'{' => {
 				if depth == 0 {
@@ -120,45 +159,43 @@ pub fn json_data_field<'a>(json: &'a str, field: &str) -> Option<&'a str> {
 	let rest = &json[start..];
 
 	let first_char = rest.chars().next()?;
-	if first_char == '[' {
-		let mut depth = 0i32;
-		for (i, ch) in rest.char_indices() {
-			match ch {
-				'[' => depth += 1,
-				']' => {
-					depth -= 1;
-					if depth == 0 {
-						return Some(&rest[..=i]);
-					}
-				}
-				_ => {}
-			}
+	let (open, close) = match first_char {
+		'[' => ('[', ']'),
+		'{' => ('{', '}'),
+		_ => return None,
+	};
+
+	let mut scanner = StringScanner::default();
+	let mut depth = 0i32;
+
+	for (i, ch) in rest.char_indices() {
+		if !scanner.is_structural(ch) {
+			continue;
 		}
-	} else if first_char == '{' {
-		let mut depth = 0i32;
-		for (i, ch) in rest.char_indices() {
-			match ch {
-				'{' => depth += 1,
-				'}' => {
-					depth -= 1;
-					if depth == 0 {
-						return Some(&rest[..=i]);
-					}
-				}
-				_ => {}
+		if ch == open {
+			depth += 1;
+		} else if ch == close {
+			depth -= 1;
+			if depth == 0 {
+				return Some(&rest[..=i]);
 			}
 		}
 	}
+
 	None
 }
 
 /// Extract top-level objects from a JSON array string like `[{...},{...}]`.
 pub fn json_top_level_objects(array_str: &str) -> Vec<&str> {
 	let mut results: Vec<&str> = Vec::new();
+	let mut scanner = StringScanner::default();
 	let mut depth = 0i32;
 	let mut obj_start: Option<usize> = None;
 
 	for (i, ch) in array_str.char_indices() {
+		if !scanner.is_structural(ch) {
+			continue;
+		}
 		match ch {
 			'{' => {
 				if depth == 0 {
@@ -467,4 +504,76 @@ pub fn parse_comic_list(body: &str) -> Vec<Manga> {
 		}
 	}
 	entries
+}
+
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod test {
+	use super::*;
+	use aidoku_test::aidoku_test;
+
+	/// Synopses on this site sometimes open a bracketed pull quote, and the truncated
+	/// `text` field can cut the closing bracket off entirely. Counting brackets without
+	/// skipping string contents made the whole listing come back empty — with no error,
+	/// so nothing was logged either.
+	const UNBALANCED_BRACKET: &str = r#"{"code":1,"msg":"ok","data":[{"id":"1","name":"A","text":"[未闭合的引言"},{"id":"2","name":"B","text":"正常"}]}"#;
+
+	const BRACE_IN_STRING: &str = r#"{"data":[{"id":"1","name":"{A"},{"id":"2","name":"B}"}]}"#;
+
+	#[aidoku_test]
+	fn json_data_field_skips_brackets_inside_strings() {
+		let array = json_data_field(UNBALANCED_BRACKET, "data").expect("data array");
+		assert!(array.starts_with('['));
+		assert!(array.ends_with(']'));
+		assert_eq!(json_top_level_objects(array).len(), 2);
+	}
+
+	#[aidoku_test]
+	fn json_top_level_objects_skips_braces_inside_strings() {
+		let array = json_data_field(BRACE_IN_STRING, "data").expect("data array");
+		let objects = json_top_level_objects(array);
+		assert_eq!(objects.len(), 2);
+		assert_eq!(json_str_value(objects[1], "name"), Some("B}"));
+	}
+
+	#[aidoku_test]
+	fn json_array_objects_skips_punctuation_inside_strings() {
+		assert_eq!(json_array_objects(UNBALANCED_BRACKET, "data").len(), 2);
+		// Braces in a title would otherwise merge or split the objects.
+		assert_eq!(json_array_objects(BRACE_IN_STRING, "data").len(), 2);
+	}
+
+	#[aidoku_test]
+	fn parses_comics_despite_bracketed_synopsis() {
+		let array = json_data_field(UNBALANCED_BRACKET, "data").expect("data array");
+		let comics: Vec<Manga> = json_top_level_objects(array)
+			.into_iter()
+			.filter_map(parse_comic)
+			.collect();
+		assert_eq!(comics.len(), 2);
+		assert_eq!(comics[0].key, "1");
+		assert_eq!(comics[1].title, "B");
+	}
+
+	#[aidoku_test]
+	fn json_unescape_restores_php_escaped_slashes() {
+		assert_eq!(json_unescape(r#"https:\/\/a.example\/b.webp"#), "https://a.example/b.webp");
+		assert_eq!(json_unescape(r#"say \"hi\""#), "say \"hi\"");
+	}
+
+	#[aidoku_test]
+	fn json_string_array_reads_plain_strings() {
+		let obj = r#"{"tags":["韩国","条漫"],"id":"7"}"#;
+		assert_eq!(json_string_array(obj, "tags"), ["韩国", "条漫"]);
+	}
+
+	#[aidoku_test]
+	fn chapter_numbers_come_from_the_title() {
+		assert_eq!(chapter_number_from_name("第1话"), Some(1.0));
+		// The first 第 is not always followed by digits.
+		assert_eq!(chapter_number_from_name("第三季 第2话"), Some(2.0));
+		assert_eq!(chapter_number_from_name("第63话 第三季"), Some(63.0));
+		assert_eq!(chapter_number_from_name("番外篇"), None);
+	}
 }
