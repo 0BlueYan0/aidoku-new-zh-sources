@@ -13,6 +13,7 @@ use aidoku::{
 		std::current_date,
 	},
 	prelude::*,
+	HashMap,
 };
 
 use crate::helper::{
@@ -26,6 +27,76 @@ const VIP_KEY: &str = "auth_vip";
 const VIP_TIME_KEY: &str = "auth_vip_time";
 const CION_KEY: &str = "auth_cion";
 const TICKET_KEY: &str = "auth_ticket";
+const COOKIE_KEY: &str = "auth_cookie";
+const LOGGED_IN_AT_KEY: &str = "auth_logged_in_at";
+
+/// Store the cookies the web login handed us, as a ready-to-send `Cookie` header.
+///
+/// The webview keeps its own cookie store, separate from the one ordinary requests use,
+/// so the session does not reach `Request` on its own — the source has to carry it.
+/// Only the names are logged; the values are session secrets.
+pub fn store_login_cookies(cookies: &HashMap<String, String>) {
+	let mut header = String::new();
+	let mut names = String::new();
+
+	for (name, value) in cookies {
+		if name.is_empty() || value.is_empty() {
+			continue;
+		}
+		if !header.is_empty() {
+			header.push_str("; ");
+			names.push_str(", ");
+		}
+		header.push_str(&format!("{name}={value}"));
+		names.push_str(name);
+	}
+
+	if header.is_empty() {
+		println!("[tibiu] web login: no cookies received");
+		defaults_set(COOKIE_KEY, DefaultValue::Null);
+		return;
+	}
+
+	println!("[tibiu] web login: received cookies [{names}]");
+	defaults_set(COOKIE_KEY, DefaultValue::String(header));
+}
+
+/// The stored `Cookie` header, if the reader has been through the web login.
+pub fn cookie_header() -> Option<String> {
+	defaults_get::<String>(COOKIE_KEY).filter(|header: &String| !header.is_empty())
+}
+
+/// Record that a web login just succeeded.
+fn mark_logged_in_now() {
+	defaults_set(LOGGED_IN_AT_KEY, DefaultValue::Int(current_date() as i32));
+}
+
+/// Probe the server with the cookies the webview just handed over.
+///
+/// Unlike [`refresh_session`] this leaves the stored cookies alone when the probe still
+/// says guest. The handler fires on every cookie change, so the early callbacks happen
+/// before the session exists and must not wipe what a later one will need.
+pub fn confirm_web_login() -> bool {
+	match fetch_user_info() {
+		Some(info) if info.logged_in => {
+			cache_user_info(&info);
+			mark_logged_in_now();
+			true
+		}
+		_ => false,
+	}
+}
+
+/// Whether a web login succeeded within the last minute.
+///
+/// The `login` setting fires the same notification for signing in and signing out
+/// without saying which, so the timestamp is what tells them apart.
+pub fn logged_in_recently() -> bool {
+	match defaults_get::<i32>(LOGGED_IN_AT_KEY) {
+		Some(stamp) => current_date() - i64::from(stamp) < 60,
+		None => false,
+	}
+}
 
 pub struct UserInfo {
 	pub logged_in: bool,
@@ -42,11 +113,31 @@ pub struct UserInfo {
 /// sets its session cookie on a successful login, so the name cannot be known upfront.
 pub fn fetch_user_info() -> Option<UserInfo> {
 	let url = format!("{API_URL}/user/info?t={}", current_date());
-	let body = fetch_json(&url).ok()?;
-	let data = json_data_field(&body, "data")?;
+	let body = match fetch_json(&url) {
+		Ok(body) => body,
+		Err(_) => {
+			println!("[tibiu] user/info request failed");
+			return None;
+		}
+	};
+
+	let Some(data) = json_data_field(&body, "data") else {
+		println!("[tibiu] user/info returned no data field");
+		return None;
+	};
+
+	let log = json_num_value(data, "log").unwrap_or(0);
+	println!(
+		"[tibiu] user/info: log={log} (cookie header {})",
+		if cookie_header().is_some() {
+			"attached"
+		} else {
+			"absent"
+		}
+	);
 
 	Some(UserInfo {
-		logged_in: json_num_value(data, "log").unwrap_or(0) != 0,
+		logged_in: log != 0,
 		nickname: json_text(data, "nichen").unwrap_or_default(),
 		vip: json_num_value(data, "vip").unwrap_or(0) as i32,
 		vip_time: json_num_value(data, "viptime").unwrap_or(0) as i32,
@@ -91,6 +182,8 @@ pub fn clear_auth() {
 		VIP_TIME_KEY,
 		CION_KEY,
 		TICKET_KEY,
+		COOKIE_KEY,
+		LOGGED_IN_AT_KEY,
 	] {
 		defaults_set(key, DefaultValue::Null);
 	}

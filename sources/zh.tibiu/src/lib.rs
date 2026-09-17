@@ -305,24 +305,43 @@ impl Home for TibiuSource {
 // ---------------------------------------------------------------------------
 
 impl WebLoginHandler for TibiuSource {
-	fn handle_web_login(&self, key: String, _cookies: HashMap<String, String>) -> Result<bool> {
+	fn handle_web_login(&self, key: String, cookies: HashMap<String, String>) -> Result<bool> {
 		if key != "login" {
 			bail!("Invalid login key: `{key}`");
 		}
 
-		// Not matched against a cookie name on purpose: the site only sets its session
-		// cookie once a login succeeds, so the name cannot be known upfront. Asking the
-		// server who we are is authoritative and survives any cookie renaming.
-		Ok(auth::refresh_session())
+		// Called on every cookie change while the webview is open, so this runs several
+		// times per sign-in and has to stay idempotent.
+		println!("[tibiu] web login handler: {} cookie(s)", cookies.len());
+		auth::store_login_cookies(&cookies);
+
+		if cookies.is_empty() {
+			return Ok(false);
+		}
+
+		// Ask the server who we are rather than matching a cookie name: the site only
+		// sets its session cookie once a login succeeds, so the name cannot be known
+		// upfront. This also proves the stored cookies actually authenticate API calls,
+		// which is what the rest of the source depends on.
+		let logged_in = auth::confirm_web_login();
+		println!("[tibiu] web login handler: logged_in={logged_in}");
+		Ok(logged_in)
 	}
 }
 
 impl NotificationHandler for TibiuSource {
 	fn handle_notification(&self, notification: String) {
 		if notification.as_str() == "login" {
-			// Fires for both login and logout. Re-probing tells them apart and stops a
-			// stale balance from lingering in the settings page after signing out.
-			auth::refresh_session();
+			// Fires for both signing in and signing out without saying which. Probing
+			// cannot tell them apart here: logging out only clears the webview's own
+			// cookies, so the copy this source stored would still look valid. The
+			// timestamp set by a successful web login is what distinguishes them.
+			if auth::logged_in_recently() {
+				auth::refresh_session();
+			} else {
+				println!("[tibiu] login notification without a recent sign-in: logging out");
+				auth::clear_auth();
+			}
 		}
 	}
 }
@@ -381,7 +400,8 @@ fn account_footer(info: &auth::UserInfo) -> String {
 impl ImageRequestProvider for TibiuSource {
 	fn get_image_request(&self, url: String, _context: Option<PageContext>) -> Result<Request> {
 		// The CDN does not currently check Referer, but every other zh source sends one
-		// and it costs nothing. No Cookie header here on purpose — see `helper::fetch_json`.
+		// and it costs nothing. No session needed: images live on a separate host that
+		// serves them to anyone holding the URL.
 		Ok(Request::get(&url)?
 			.header("User-Agent", USER_AGENT)
 			.header("Referer", BASE_URL))
