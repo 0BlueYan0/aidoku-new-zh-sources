@@ -12,11 +12,7 @@
 				"url": "https://comic.tibiu.net/index.php/user/login",
 				"logoutTitle": "退出登录",
 				"clearCookiesOnLogOut": true,
-				"notification": "login",
-				"refreshes": [
-					"content",
-					"settings"
-				]
+				"notification": "login"
 			}
 		]
 	}
