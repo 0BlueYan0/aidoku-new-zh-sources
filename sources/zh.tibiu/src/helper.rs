@@ -15,22 +15,15 @@ pub const USER_AGENT: &str = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac O
 
 /// Fetch a JSON endpoint and return the raw response body.
 ///
-/// Carries the session from the web login by hand. The webview stores its cookies
-/// separately from the ones ordinary requests send, so the PHP session does not reach
-/// `Request` on its own — `handle_web_login` stashes the cookies and they are attached
-/// here. Without this every call goes out as a guest.
+/// Every request goes out as a guest. That is enough for everything this source shows:
+/// listings, search, details, chapter lists and images are all served without a session.
 pub fn fetch_json(url: &str) -> Result<String> {
-	let mut request = Request::get(url)?
+	Request::get(url)?
 		.header("User-Agent", USER_AGENT)
 		.header("Referer", BASE_URL)
 		.header("Accept", "application/json, text/javascript, */*; q=0.01")
-		.header("X-Requested-With", "XMLHttpRequest");
-
-	if let Some(cookie) = crate::auth::cookie_header() {
-		request = request.header("Cookie", cookie.as_str());
-	}
-
-	request.string()
+		.header("X-Requested-With", "XMLHttpRequest")
+		.string()
 }
 
 // ---------------------------------------------------------------------------

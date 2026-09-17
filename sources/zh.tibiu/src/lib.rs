@@ -8,13 +8,11 @@ use aidoku::{
 		std::send_partial_result,
 	},
 	prelude::*,
-	Chapter, DeepLinkHandler, DeepLinkResult, FilterValue, HashMap, Home, HomeComponent,
-	HomeComponentValue, HomeLayout, HomePartialResult, ImageRequestProvider, Link, Listing,
-	ListingProvider, Manga, MangaPageResult, NotificationHandler, Page, PageContent, PageContext,
-	Result, Source, WebLoginHandler,
+	Chapter, DeepLinkHandler, DeepLinkResult, FilterValue, Home, HomeComponent, HomeComponentValue,
+	HomeLayout, HomePartialResult, ImageRequestProvider, Link, Listing, ListingProvider, Manga,
+	MangaPageResult, Page, PageContent, PageContext, Result, Source,
 };
 
-mod auth;
 mod helper;
 
 use helper::*;
@@ -50,11 +48,9 @@ fn append_param(url: &mut String, name: &str, value: &str) {
 
 /// The category browser reports `total_pages`, so paging can be exact.
 fn fetch_category_page(url: &str, page: i32) -> Result<MangaPageResult> {
-	println!("[tibiu] > category page={page}");
 	let body = fetch_json(url)?;
 	let entries = parse_comic_list(&body);
 	let total_pages = json_num_value(&body, "total_pages").unwrap_or(0);
-	println!("[tibiu] < category entries={} pages={total_pages}", entries.len());
 
 	Ok(MangaPageResult {
 		has_next_page: !entries.is_empty() && i64::from(page) < total_pages,
@@ -64,30 +60,13 @@ fn fetch_category_page(url: &str, page: i32) -> Result<MangaPageResult> {
 
 /// Search and ranking report no total, so a full page is taken to imply another.
 fn fetch_paged_list(url: &str) -> Result<MangaPageResult> {
-	println!("[tibiu] > paged list");
 	let body = fetch_json(url)?;
 	let entries = parse_comic_list(&body);
-	println!("[tibiu] < paged list entries={}", entries.len());
 
 	Ok(MangaPageResult {
 		has_next_page: entries.len() >= PER_PAGE,
 		entries,
 	})
-}
-
-/// Clear the lock flag on chapters this account already owns.
-/// Anything that goes wrong just leaves the locks in place.
-fn unlock_purchased(manga_key: &str, chapters: &mut [Chapter]) {
-	let purchased = auth::purchased_chapter_ids(manga_key);
-	if purchased.is_empty() {
-		return;
-	}
-
-	for chapter in chapters.iter_mut() {
-		if chapter.locked && purchased.iter().any(|id: &String| id == &chapter.key) {
-			chapter.locked = false;
-		}
-	}
 }
 
 // ---------------------------------------------------------------------------
@@ -159,10 +138,6 @@ impl Source for TibiuSource {
 		needs_details: bool,
 		needs_chapters: bool,
 	) -> Result<Manga> {
-		println!(
-			"[tibiu] > manga update key={} details={needs_details} chapters={needs_chapters}",
-			manga.key
-		);
 		if needs_details {
 			let url = format!("{API_URL}/comic/detail?id={}", manga.key);
 			match fetch_json(&url) {
@@ -180,7 +155,6 @@ impl Source for TibiuSource {
 				}
 				Err(_) => println!("[tibiu] ERROR fetching details for id={}", manga.key),
 			}
-			println!("[tibiu] = sending partial manga key={}", manga.key);
 			send_partial_result(&manga);
 		}
 
@@ -202,26 +176,16 @@ impl Source for TibiuSource {
 					// The API lists oldest first; Aidoku expects newest first.
 					chapters.reverse();
 
-					if auth::is_logged_in() {
-						unlock_purchased(&manga.key, &mut chapters);
-					}
-
 					manga.chapters = Some(chapters);
 				}
 				Err(_) => println!("[tibiu] ERROR fetching chapters for mid={}", manga.key),
 			}
 		}
 
-		println!(
-			"[tibiu] < manga update key={} chapters={}",
-			manga.key,
-			manga.chapters.as_ref().map(|c: &Vec<Chapter>| c.len()).unwrap_or(0)
-		);
 		Ok(manga)
 	}
 
 	fn get_page_list(&self, _manga: Manga, chapter: Chapter) -> Result<Vec<Page>> {
-		println!("[tibiu] > page list chapter={}", chapter.key);
 		let url = format!("{API_URL}/data/pic?cid={}", chapter.key);
 		let body = fetch_json(&url)?;
 
@@ -240,10 +204,9 @@ impl Source for TibiuSource {
 		if pages.is_empty() {
 			// The server returns an empty list rather than an error for chapters the
 			// current session is not entitled to read.
-			bail!("此章节需要 VIP 或金币权限，请先在设置中登录");
+			bail!("此章节需要 VIP 或金币，本来源不支持登录");
 		}
 
-		println!("[tibiu] < page list pages={}", pages.len());
 		Ok(pages)
 	}
 }
@@ -254,7 +217,6 @@ impl Source for TibiuSource {
 
 impl ListingProvider for TibiuSource {
 	fn get_manga_list(&self, listing: Listing, page: i32) -> Result<MangaPageResult> {
-		println!("[tibiu] > listing id={} page={page}", listing.id);
 		match listing.id.as_str() {
 			"update" => {
 				let url = format!("{API_URL}/data/category_api?order=addtime&page={page}");
@@ -271,7 +233,6 @@ impl ListingProvider for TibiuSource {
 
 impl Home for TibiuSource {
 	fn get_home(&self) -> Result<HomeLayout> {
-		println!("[tibiu] > home");
 		// Send an empty skeleton first so the home screen lays out immediately, then
 		// stream each row in as it arrives.
 		let mut components: Vec<HomeComponent> = Vec::new();
@@ -282,7 +243,6 @@ impl Home for TibiuSource {
 				value: HomeComponentValue::empty_scroller(),
 			});
 		}
-		println!("[tibiu] = home skeleton components={}", components.len());
 		send_partial_result(&HomePartialResult::Layout(HomeLayout { components }));
 
 		for (id, name) in HOME_SECTIONS {
@@ -299,7 +259,6 @@ impl Home for TibiuSource {
 			if let Ok(result) = result {
 				if !result.entries.is_empty() {
 					let entries: Vec<Link> = result.entries.into_iter().map(Link::from).collect();
-					println!("[tibiu] = home section {name} entries={}", entries.len());
 					send_partial_result(&HomePartialResult::Component(HomeComponent {
 						title: Some(String::from(name)),
 						subtitle: None,
@@ -316,48 +275,7 @@ impl Home for TibiuSource {
 			}
 		}
 
-		println!("[tibiu] < home done");
 		Ok(HomeLayout::default())
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Account
-// ---------------------------------------------------------------------------
-
-impl WebLoginHandler for TibiuSource {
-	fn handle_web_login(&self, key: String, cookies: HashMap<String, String>) -> Result<bool> {
-		if key != "login" {
-			bail!("Invalid login key: `{key}`");
-		}
-
-		// Called on every cookie change while the webview is open, so this runs several
-		// times per sign-in and has to stay cheap and idempotent. `accept_web_cookies`
-		// probes the server at most once per distinct cookie set, and never reports a
-		// sign-in it previously confirmed as failed.
-		let logged_in = auth::accept_web_cookies(&cookies);
-		println!(
-			"[tibiu] web login handler: {} cookie(s), logged_in={logged_in}",
-			cookies.len()
-		);
-		Ok(logged_in)
-	}
-}
-
-impl NotificationHandler for TibiuSource {
-	fn handle_notification(&self, notification: String) {
-		if notification.as_str() == "login" {
-			// Fires for both signing in and signing out without saying which. Probing
-			// cannot tell them apart here: logging out only clears the webview's own
-			// cookies, so the copy this source stored would still look valid. The
-			// timestamp set by a successful web login is what distinguishes them.
-			if auth::logged_in_recently() {
-				auth::refresh_session();
-			} else {
-				println!("[tibiu] login notification without a recent sign-in: logging out");
-				auth::clear_auth();
-			}
-		}
 	}
 }
 
@@ -367,7 +285,6 @@ impl NotificationHandler for TibiuSource {
 
 impl ImageRequestProvider for TibiuSource {
 	fn get_image_request(&self, url: String, _context: Option<PageContext>) -> Result<Request> {
-		println!("[tibiu] = image request");
 		// The CDN does not currently check Referer, but every other zh source sends one
 		// and it costs nothing. No session needed: images live on a separate host that
 		// serves them to anyone holding the URL.
@@ -379,7 +296,6 @@ impl ImageRequestProvider for TibiuSource {
 
 impl DeepLinkHandler for TibiuSource {
 	fn handle_deep_link(&self, url: String) -> Result<Option<DeepLinkResult>> {
-		println!("[tibiu] > deep link");
 		let path = match url.split_once("comic.tibiu.net") {
 			Some((_, rest)) => rest,
 			None => url.as_str(),
@@ -419,21 +335,10 @@ fn trim_url_tail(segment: &str) -> &str {
 		.unwrap_or(segment)
 }
 
-// `DynamicSettings` is deliberately not implemented, and re-adding it will crash the
-// app. It is the only trait here that sends `Setting` structs over the wire, and
-// Aidoku 0.9 cannot decode what this version of aidoku-rs emits for them: the encoding
-// writes the setting `type` as a string ("group"), the app reads an integer, and every
-// byte after that is misread until the decoder traps inside `Int32.init(from:)`.
-// Verified by dumping the 33-byte payload — it matches the aidoku-rs model exactly, so
-// the skew is between the library and the released app, not in this source.
-// The account profile is still fetched and cached, ready for whenever it can be shown.
-
 register_source!(
 	TibiuSource,
 	ListingProvider,
 	Home,
 	ImageRequestProvider,
-	DeepLinkHandler,
-	WebLoginHandler,
-	NotificationHandler
+	DeepLinkHandler
 );
