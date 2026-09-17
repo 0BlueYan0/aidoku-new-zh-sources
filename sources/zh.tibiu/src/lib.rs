@@ -26,12 +26,12 @@ const PER_PAGE: usize = 10;
 const HOME_SECTIONS: [(&str, &str); 8] = [
 	("update", "最新更新"),
 	("day", "日榜"),
-	("week", "周榜"),
+	("week", "週榜"),
 	("month", "月榜"),
-	("top", "总排行"),
+	("top", "總排行"),
 	("fav", "收藏榜"),
 	("ticket", "月票榜"),
-	("ascension", "飙升榜"),
+	("ascension", "飆升榜"),
 ];
 
 struct TibiuSource;
@@ -46,20 +46,25 @@ fn append_param(url: &mut String, name: &str, value: &str) {
 	}
 }
 
-/// The category browser reports `total_pages`, so paging can be exact.
-fn fetch_category_page(url: &str, page: i32) -> Result<MangaPageResult> {
+/// The category browser and the rank lists report `total_pages`, so paging can be exact.
+/// Should the field ever go missing, fall back to the full-page heuristic rather than
+/// stopping at page one.
+fn fetch_counted_page(url: &str, page: i32) -> Result<MangaPageResult> {
 	let body = fetch_json(url)?;
 	let entries = parse_comic_list(&body);
-	let total_pages = json_num_value(&body, "total_pages").unwrap_or(0);
+	let has_next_page = match json_num_value(&body, "total_pages") {
+		Some(total_pages) => !entries.is_empty() && i64::from(page) < total_pages,
+		None => entries.len() >= PER_PAGE,
+	};
 
 	Ok(MangaPageResult {
-		has_next_page: !entries.is_empty() && i64::from(page) < total_pages,
+		has_next_page,
 		entries,
 	})
 }
 
-/// Search and ranking report no total, so a full page is taken to imply another.
-fn fetch_paged_list(url: &str) -> Result<MangaPageResult> {
+/// Search reports no total, so a full page is taken to imply another.
+fn fetch_search_page(url: &str) -> Result<MangaPageResult> {
 	let body = fetch_json(url)?;
 	let entries = parse_comic_list(&body);
 
@@ -84,7 +89,7 @@ impl Source for TibiuSource {
 		page: i32,
 		filters: Vec<FilterValue>,
 	) -> Result<MangaPageResult> {
-		let mut keyword = query;
+		let mut author: Option<String> = None;
 		let mut order = String::new();
 		let mut finish = String::new();
 		let mut city = String::new();
@@ -103,24 +108,23 @@ impl Source for TibiuSource {
 				},
 				// The app routes its built-in author search through a text filter.
 				// The site's search box covers titles and authors with the same field.
-				FilterValue::Text { id, value }
-					if id == "author" && keyword.is_none() && !value.is_empty() =>
-				{
-					keyword = Some(value);
-				}
+				FilterValue::Text { id, value } if id == "author" => author = Some(value),
 				_ => {}
 			}
 		}
 
+		// A blank query (`None` or whitespace only) must not shadow an author search.
+		let keyword = query
+			.filter(|q: &String| !q.trim().is_empty())
+			.or(author)
+			.filter(|k: &String| !k.trim().is_empty());
+
 		if let Some(keyword) = keyword {
-			let trimmed = keyword.trim();
-			if !trimmed.is_empty() {
-				let url = format!(
-					"{API_URL}/data/search?key={}&page={page}",
-					encode_uri_component(trimmed)
-				);
-				return fetch_paged_list(&url);
-			}
+			let url = format!(
+				"{API_URL}/data/search?key={}&page={page}",
+				encode_uri_component(keyword.trim())
+			);
+			return fetch_search_page(&url);
 		}
 
 		let mut url = format!("{API_URL}/data/category_api?page={page}");
@@ -129,7 +133,7 @@ impl Source for TibiuSource {
 		append_param(&mut url, "city", &city);
 		append_param(&mut url, "theme", &theme);
 
-		fetch_category_page(&url, page)
+		fetch_counted_page(&url, page)
 	}
 
 	fn get_manga_update(
@@ -173,8 +177,9 @@ impl Source for TibiuSource {
 						}
 					}
 
-					// The API lists oldest first; Aidoku expects newest first.
-					chapters.reverse();
+					// The API order is not reliable: new uploads land after the extras
+					// and out of sequence, so sort by the parsed chapter number.
+					sort_chapters_newest_first(&mut chapters);
 
 					manga.chapters = Some(chapters);
 				}
@@ -202,9 +207,7 @@ impl Source for TibiuSource {
 		}
 
 		if pages.is_empty() {
-			// The server returns an empty list rather than an error for chapters the
-			// current session is not entitled to read.
-			bail!("此章节需要 VIP 或金币，本来源不支持登录");
+			bail!("{}", page_list_error(&body));
 		}
 
 		Ok(pages)
@@ -220,11 +223,11 @@ impl ListingProvider for TibiuSource {
 		match listing.id.as_str() {
 			"update" => {
 				let url = format!("{API_URL}/data/category_api?order=addtime&page={page}");
-				fetch_category_page(&url, page)
+				fetch_counted_page(&url, page)
 			}
 			"top" | "ticket" | "fav" | "day" | "week" | "month" | "ascension" => {
 				let url = format!("{API_URL}/rankdata/lists?type={}&page={page}", listing.id);
-				fetch_paged_list(&url)
+				fetch_counted_page(&url, page)
 			}
 			_ => Err(error!("Unknown listing: {}", listing.id)),
 		}

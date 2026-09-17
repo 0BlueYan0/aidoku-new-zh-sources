@@ -4,6 +4,7 @@ use aidoku::{
 	prelude::*,
 	Chapter, ContentRating, Manga, MangaStatus, Result, Viewer,
 };
+use core::cmp::Ordering;
 
 pub const BASE_URL: &str = "https://comic.tibiu.net";
 pub const API_URL: &str = "https://comic.tibiu.net/index.php/api";
@@ -52,22 +53,20 @@ pub fn json_str_value<'a>(json: &'a str, key: &str) -> Option<&'a str> {
 ///
 /// Tolerates the value being quoted (`"key":"123"`), which this API does inconsistently:
 /// the listing endpoints return numbers as strings while `comic/detail` returns them raw.
+/// The digits have to start where the value starts: a non-numeric value (`""`, `null`,
+/// `true`) yields `None` instead of borrowing the next number further along in the body.
 pub fn json_num_value(json: &str, key: &str) -> Option<i64> {
 	let search = format!("\"{}\":", key);
 	let pos = json.find(&search)?;
-	let start = pos + search.len();
-	let rest = &json[start..];
+	let rest = json[pos + search.len()..].trim_start();
+	let rest = rest.strip_prefix('"').unwrap_or(rest);
 
-	let mut num_str = String::new();
-	for ch in rest.chars() {
-		if ch.is_ascii_digit() || ch == '-' {
-			num_str.push(ch);
-		} else if !num_str.is_empty() {
-			break;
-		}
-	}
+	let end = rest
+		.char_indices()
+		.find(|&(i, ch): &(usize, char)| !(ch.is_ascii_digit() || (i == 0 && ch == '-')))
+		.map_or(rest.len(), |(i, _): (usize, char)| i);
 
-	num_str.parse::<i64>().ok()
+	rest[..end].parse::<i64>().ok()
 }
 
 /// Tracks whether a scan position sits inside a JSON string literal.
@@ -404,16 +403,6 @@ pub fn parse_tags(obj: &str) -> Vec<String> {
 	}
 }
 
-/// Long-strip titles read top-to-bottom; everything else on this site is also served
-/// as a vertical scroller, so `Vertical` is the safer default than a paged viewer.
-fn viewer_from_tags(tags: &[String]) -> Viewer {
-	if tags.iter().any(|tag: &String| tag == "条漫" || tag == "條漫") {
-		Viewer::Webtoon
-	} else {
-		Viewer::Vertical
-	}
-}
-
 /// Parse one comic object from any of the listing, search, ranking or detail endpoints.
 pub fn parse_comic(obj: &str) -> Option<Manga> {
 	let key = json_id(obj, "id")?;
@@ -443,7 +432,6 @@ pub fn parse_comic(obj: &str) -> Option<Manga> {
 	};
 
 	let tags = parse_tags(obj);
-	let viewer = viewer_from_tags(&tags);
 
 	Some(Manga {
 		url: Some(format!("{BASE_URL}/comic/{key}")),
@@ -455,7 +443,10 @@ pub fn parse_comic(obj: &str) -> Option<Manga> {
 		tags: if tags.is_empty() { None } else { Some(tags) },
 		status,
 		content_rating,
-		viewer,
+		// The catalogue is Korean long-strip work almost throughout, and tags cannot tell
+		// strips apart: listings tag them `条漫`, but `comic/detail` swaps those for trope
+		// tags and its response replaces the listing entry once a title is opened.
+		viewer: Viewer::Webtoon,
 		..Default::default()
 	})
 }
@@ -474,8 +465,8 @@ pub fn parse_chapter(obj: &str) -> Option<Chapter> {
 	let date_uploaded =
 		json_text(obj, "addtime").and_then(|date: String| parse_date(date, "yyyy-MM-dd"));
 
-	// Any of these being set means the chapter sits behind VIP or the coin wall.
-	// A logged-in reader's purchases are cleared later, in `get_manga_update`.
+	// Any of these being set means the chapter sits behind VIP or the coin wall. This
+	// source only browses as a guest, so the flag is final.
 	let locked = json_num_value(obj, "vip").unwrap_or(0) > 0
 		|| json_num_value(obj, "cion").unwrap_or(0) > 0
 		|| json_num_value(obj, "pay").unwrap_or(0) > 0;
@@ -489,6 +480,35 @@ pub fn parse_chapter(obj: &str) -> Option<Chapter> {
 		locked,
 		..Default::default()
 	})
+}
+
+/// Order chapters newest first.
+///
+/// The API order cannot be trusted: for one title it returned the two afterwords, then the
+/// five newest uploads, then 第01话 onwards with 第177话 last. Chapter ids are neither
+/// ascending nor descending and upload dates are out of sequence too, so the parsed
+/// chapter number is the only usable key. Unnumbered extras (後記, 番外) sink to the
+/// bottom in reverse API order, which is the site's rough oldest-first order for them.
+pub fn sort_chapters_newest_first(chapters: &mut [Chapter]) {
+	chapters.reverse();
+	chapters.sort_by(|a: &Chapter, b: &Chapter| match (a.chapter_number, b.chapter_number) {
+		(Some(x), Some(y)) => y.partial_cmp(&x).unwrap_or(Ordering::Equal),
+		(Some(_), None) => Ordering::Less,
+		(None, Some(_)) => Ordering::Greater,
+		(None, None) => Ordering::Equal,
+	});
+}
+
+/// Explain an empty page list. A bad or missing chapter id comes back as
+/// `{"msg":"章节不存在","code":-1}`, so the server's own message is the most useful thing
+/// to show; a `code:1` answer with no images is what a VIP or coin-locked chapter looks
+/// like to a guest.
+pub fn page_list_error(body: &str) -> String {
+	let failed = json_num_value(body, "code").unwrap_or(1) != 1;
+	match json_text(body, "msg") {
+		Some(msg) if failed => msg,
+		_ => String::from("此章節需要 VIP 或金幣，本來源不支援登入"),
+	}
 }
 
 /// Parse the `data` array of a listing response into manga entries.
@@ -573,5 +593,73 @@ mod test {
 		assert_eq!(chapter_number_from_name("第三季 第2话"), Some(2.0));
 		assert_eq!(chapter_number_from_name("第63话 第三季"), Some(63.0));
 		assert_eq!(chapter_number_from_name("番外篇"), None);
+	}
+
+	#[aidoku_test]
+	fn json_num_value_reads_bare_quoted_and_negative_numbers() {
+		assert_eq!(json_num_value(r#"{"total_pages":5767}"#, "total_pages"), Some(5767));
+		assert_eq!(json_num_value(r#"{"cadult":"1"}"#, "cadult"), Some(1));
+		assert_eq!(json_num_value(r#"{"page": 3}"#, "page"), Some(3));
+		assert_eq!(json_num_value(r#"{"msg":"章节不存在","code":-1}"#, "code"), Some(-1));
+	}
+
+	#[aidoku_test]
+	fn json_num_value_does_not_scan_past_a_non_numeric_value() {
+		// An empty, null or boolean value must not borrow the next field's digits.
+		assert_eq!(json_num_value(r#"{"vip":"","id":5}"#, "vip"), None);
+		assert_eq!(json_num_value(r#"{"vip":null,"id":5}"#, "vip"), None);
+		assert_eq!(json_num_value(r#"{"vip":true,"id":5}"#, "vip"), None);
+		assert_eq!(json_num_value(r#"{"id":5}"#, "vip"), None);
+	}
+
+	/// The exact shape `comic/chapter?mid=417` returned: afterwords first, then the five
+	/// newest uploads, then the numbered run with 第177话 last.
+	#[aidoku_test]
+	fn chapters_sort_newest_first_with_extras_at_the_bottom() {
+		let api_order = [
+			"後記", "第二季後記", "第176话", "第178话", "第179话", "第180话", "第181话", "第01话",
+			"第03话", "第175话", "第177话",
+		];
+		let mut chapters: Vec<Chapter> = api_order
+			.iter()
+			.map(|name: &&str| Chapter {
+				title: Some(String::from(*name)),
+				chapter_number: chapter_number_from_name(name),
+				..Default::default()
+			})
+			.collect();
+
+		sort_chapters_newest_first(&mut chapters);
+
+		let titles: Vec<&str> = chapters
+			.iter()
+			.map(|chapter: &Chapter| chapter.title.as_deref().unwrap_or(""))
+			.collect();
+		assert_eq!(
+			titles,
+			[
+				"第181话", "第180话", "第179话", "第178话", "第177话", "第176话", "第175话", "第03话",
+				"第01话", "第二季後記", "後記",
+			]
+		);
+	}
+
+	#[aidoku_test]
+	fn every_title_reads_as_a_webtoon() {
+		// `comic/detail` swaps the listing's `条漫` tag for trope tags; the viewer must not
+		// flip when the detail response replaces the listing entry.
+		let detail = r#"{"id":417,"name":"A","tags":[{"id":92,"name":"美人受"}]}"#;
+		let listing = r#"{"id":"1","name":"B","tags":["韩国","条漫"]}"#;
+		assert_eq!(parse_comic(detail).expect("detail").viewer, Viewer::Webtoon);
+		assert_eq!(parse_comic(listing).expect("listing").viewer, Viewer::Webtoon);
+	}
+
+	#[aidoku_test]
+	fn page_list_error_prefers_the_server_message() {
+		assert_eq!(page_list_error(r#"{"msg":"章节不存在","code":-1}"#), "章节不存在");
+		assert_eq!(
+			page_list_error(r#"{"code":1,"msg":"图片列表","data":[]}"#),
+			"此章節需要 VIP 或金幣，本來源不支援登入"
+		);
 	}
 }

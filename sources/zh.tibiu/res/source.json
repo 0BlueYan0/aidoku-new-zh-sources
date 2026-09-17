@@ -2,7 +2,7 @@
 	"info": {
 		"id": "zh.tibiu",
 		"name": "TIBIU漫画在线",
-		"version": 4,
+		"version": 5,
 		"url": "https://comic.tibiu.net",
 		"urls": [
 			"https://comic.tibiu.net"
@@ -28,7 +28,7 @@
 		},
 		{
 			"id": "week",
-			"name": "周榜"
+			"name": "週榜"
 		},
 		{
 			"id": "month",
@@ -36,7 +36,7 @@
 		},
 		{
 			"id": "top",
-			"name": "总排行"
+			"name": "總排行"
 		},
 		{
 			"id": "fav",
@@ -48,7 +48,7 @@
 		},
 		{
 			"id": "ascension",
-			"name": "飙升榜"
+			"name": "飆升榜"
 		}
 	]
 }
