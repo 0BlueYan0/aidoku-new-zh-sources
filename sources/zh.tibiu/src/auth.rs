@@ -28,14 +28,12 @@ const VIP_TIME_KEY: &str = "auth_vip_time";
 const CION_KEY: &str = "auth_cion";
 const TICKET_KEY: &str = "auth_ticket";
 const COOKIE_KEY: &str = "auth_cookie";
+const PROBED_COOKIE_KEY: &str = "auth_probed_cookie";
 const LOGGED_IN_AT_KEY: &str = "auth_logged_in_at";
 
-/// Store the cookies the web login handed us, as a ready-to-send `Cookie` header.
-///
-/// The webview keeps its own cookie store, separate from the one ordinary requests use,
-/// so the session does not reach `Request` on its own — the source has to carry it.
-/// Only the names are logged; the values are session secrets.
-pub fn store_login_cookies(cookies: &HashMap<String, String>) {
+/// Build a `Cookie` header from the webview's jar, alongside the bare names for logging.
+/// The values are session secrets and never get logged.
+fn build_cookie_header(cookies: &HashMap<String, String>) -> (String, String) {
 	let mut header = String::new();
 	let mut names = String::new();
 
@@ -51,14 +49,49 @@ pub fn store_login_cookies(cookies: &HashMap<String, String>) {
 		names.push_str(name);
 	}
 
+	(header, names)
+}
+
+/// Take the cookies from a web login callback and report whether we are signed in.
+///
+/// The webview keeps its own cookie store, separate from the one ordinary requests use,
+/// so the session never reaches `Request` by itself; the header is stashed here and
+/// attached by `helper::fetch_json`.
+///
+/// Two things this deliberately avoids, because the handler fires on *every* cookie
+/// change and so runs several times per sign-in:
+///
+/// - Each distinct cookie set is probed at most once. Probing on every callback means a
+///   blocking request per change while the login page is still loading.
+/// - A later callback never downgrades an earlier success. The app keeps the last value
+///   returned, and flapping back to false is what left the settings page showing a login
+///   button underneath a signed-in account.
+pub fn accept_web_cookies(cookies: &HashMap<String, String>) -> bool {
+	let (header, names) = build_cookie_header(cookies);
+
 	if header.is_empty() {
-		println!("[tibiu] web login: no cookies received");
-		defaults_set(COOKIE_KEY, DefaultValue::Null);
-		return;
+		println!("[tibiu] web login: no cookies yet");
+		return is_logged_in();
 	}
 
-	println!("[tibiu] web login: received cookies [{names}]");
-	defaults_set(COOKIE_KEY, DefaultValue::String(header));
+	if defaults_get::<String>(PROBED_COOKIE_KEY).as_deref() == Some(header.as_str()) {
+		return is_logged_in();
+	}
+
+	println!("[tibiu] web login: cookies [{names}]");
+	defaults_set(COOKIE_KEY, DefaultValue::String(header.clone()));
+	defaults_set(PROBED_COOKIE_KEY, DefaultValue::String(header));
+
+	match fetch_user_info() {
+		Some(info) if info.logged_in => {
+			cache_user_info(&info);
+			mark_logged_in_now();
+			true
+		}
+		// Still a guest with this cookie set, or the probe could not be sent. Either
+		// way keep the previous answer rather than undoing a sign-in that did work.
+		_ => is_logged_in(),
+	}
 }
 
 /// The stored `Cookie` header, if the reader has been through the web login.
@@ -71,21 +104,6 @@ fn mark_logged_in_now() {
 	defaults_set(LOGGED_IN_AT_KEY, DefaultValue::Int(current_date() as i32));
 }
 
-/// Probe the server with the cookies the webview just handed over.
-///
-/// Unlike [`refresh_session`] this leaves the stored cookies alone when the probe still
-/// says guest. The handler fires on every cookie change, so the early callbacks happen
-/// before the session exists and must not wipe what a later one will need.
-pub fn confirm_web_login() -> bool {
-	match fetch_user_info() {
-		Some(info) if info.logged_in => {
-			cache_user_info(&info);
-			mark_logged_in_now();
-			true
-		}
-		_ => false,
-	}
-}
 
 /// Whether a web login succeeded within the last minute.
 ///
@@ -183,6 +201,7 @@ pub fn clear_auth() {
 		CION_KEY,
 		TICKET_KEY,
 		COOKIE_KEY,
+		PROBED_COOKIE_KEY,
 		LOGGED_IN_AT_KEY,
 	] {
 		defaults_set(key, DefaultValue::Null);

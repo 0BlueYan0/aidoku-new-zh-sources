@@ -311,20 +311,14 @@ impl WebLoginHandler for TibiuSource {
 		}
 
 		// Called on every cookie change while the webview is open, so this runs several
-		// times per sign-in and has to stay idempotent.
-		println!("[tibiu] web login handler: {} cookie(s)", cookies.len());
-		auth::store_login_cookies(&cookies);
-
-		if cookies.is_empty() {
-			return Ok(false);
-		}
-
-		// Ask the server who we are rather than matching a cookie name: the site only
-		// sets its session cookie once a login succeeds, so the name cannot be known
-		// upfront. This also proves the stored cookies actually authenticate API calls,
-		// which is what the rest of the source depends on.
-		let logged_in = auth::confirm_web_login();
-		println!("[tibiu] web login handler: logged_in={logged_in}");
+		// times per sign-in and has to stay cheap and idempotent. `accept_web_cookies`
+		// probes the server at most once per distinct cookie set, and never reports a
+		// sign-in it previously confirmed as failed.
+		let logged_in = auth::accept_web_cookies(&cookies);
+		println!(
+			"[tibiu] web login handler: {} cookie(s), logged_in={logged_in}",
+			cookies.len()
+		);
 		Ok(logged_in)
 	}
 }
