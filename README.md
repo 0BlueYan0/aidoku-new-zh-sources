@@ -11,4 +11,4 @@ Aidoku 新版中文圖源<br>
 
 - [Line Webtoons 繁體中文](https://www.webtoons.com/zh-hant/)
 - [Komiic 漫畫](https://komiic.com/)
-- [TIBIU 漫畫在綫](https://comic.tibiu.net/)
+- [TIBIU 漫畫在線](https://comic.tibiu.net/)
