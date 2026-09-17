@@ -50,9 +50,11 @@ fn append_param(url: &mut String, name: &str, value: &str) {
 
 /// The category browser reports `total_pages`, so paging can be exact.
 fn fetch_category_page(url: &str, page: i32) -> Result<MangaPageResult> {
+	println!("[tibiu] > category page={page}");
 	let body = fetch_json(url)?;
 	let entries = parse_comic_list(&body);
 	let total_pages = json_num_value(&body, "total_pages").unwrap_or(0);
+	println!("[tibiu] < category entries={} pages={total_pages}", entries.len());
 
 	Ok(MangaPageResult {
 		has_next_page: !entries.is_empty() && i64::from(page) < total_pages,
@@ -62,8 +64,10 @@ fn fetch_category_page(url: &str, page: i32) -> Result<MangaPageResult> {
 
 /// Search and ranking report no total, so a full page is taken to imply another.
 fn fetch_paged_list(url: &str) -> Result<MangaPageResult> {
+	println!("[tibiu] > paged list");
 	let body = fetch_json(url)?;
 	let entries = parse_comic_list(&body);
+	println!("[tibiu] < paged list entries={}", entries.len());
 
 	Ok(MangaPageResult {
 		has_next_page: entries.len() >= PER_PAGE,
@@ -155,6 +159,10 @@ impl Source for TibiuSource {
 		needs_details: bool,
 		needs_chapters: bool,
 	) -> Result<Manga> {
+		println!(
+			"[tibiu] > manga update key={} details={needs_details} chapters={needs_chapters}",
+			manga.key
+		);
 		if needs_details {
 			let url = format!("{API_URL}/comic/detail?id={}", manga.key);
 			match fetch_json(&url) {
@@ -172,6 +180,7 @@ impl Source for TibiuSource {
 				}
 				Err(_) => println!("[tibiu] ERROR fetching details for id={}", manga.key),
 			}
+			println!("[tibiu] = sending partial manga key={}", manga.key);
 			send_partial_result(&manga);
 		}
 
@@ -203,10 +212,16 @@ impl Source for TibiuSource {
 			}
 		}
 
+		println!(
+			"[tibiu] < manga update key={} chapters={}",
+			manga.key,
+			manga.chapters.as_ref().map(|c: &Vec<Chapter>| c.len()).unwrap_or(0)
+		);
 		Ok(manga)
 	}
 
 	fn get_page_list(&self, _manga: Manga, chapter: Chapter) -> Result<Vec<Page>> {
+		println!("[tibiu] > page list chapter={}", chapter.key);
 		let url = format!("{API_URL}/data/pic?cid={}", chapter.key);
 		let body = fetch_json(&url)?;
 
@@ -228,6 +243,7 @@ impl Source for TibiuSource {
 			bail!("此章节需要 VIP 或金币权限，请先在设置中登录");
 		}
 
+		println!("[tibiu] < page list pages={}", pages.len());
 		Ok(pages)
 	}
 }
@@ -238,6 +254,7 @@ impl Source for TibiuSource {
 
 impl ListingProvider for TibiuSource {
 	fn get_manga_list(&self, listing: Listing, page: i32) -> Result<MangaPageResult> {
+		println!("[tibiu] > listing id={} page={page}", listing.id);
 		match listing.id.as_str() {
 			"update" => {
 				let url = format!("{API_URL}/data/category_api?order=addtime&page={page}");
@@ -254,6 +271,7 @@ impl ListingProvider for TibiuSource {
 
 impl Home for TibiuSource {
 	fn get_home(&self) -> Result<HomeLayout> {
+		println!("[tibiu] > home");
 		// Send an empty skeleton first so the home screen lays out immediately, then
 		// stream each row in as it arrives.
 		let mut components: Vec<HomeComponent> = Vec::new();
@@ -264,6 +282,7 @@ impl Home for TibiuSource {
 				value: HomeComponentValue::empty_scroller(),
 			});
 		}
+		println!("[tibiu] = home skeleton components={}", components.len());
 		send_partial_result(&HomePartialResult::Layout(HomeLayout { components }));
 
 		for (id, name) in HOME_SECTIONS {
@@ -280,6 +299,7 @@ impl Home for TibiuSource {
 			if let Ok(result) = result {
 				if !result.entries.is_empty() {
 					let entries: Vec<Link> = result.entries.into_iter().map(Link::from).collect();
+					println!("[tibiu] = home section {name} entries={}", entries.len());
 					send_partial_result(&HomePartialResult::Component(HomeComponent {
 						title: Some(String::from(name)),
 						subtitle: None,
@@ -296,6 +316,7 @@ impl Home for TibiuSource {
 			}
 		}
 
+		println!("[tibiu] < home done");
 		Ok(HomeLayout::default())
 	}
 }
@@ -346,6 +367,7 @@ impl NotificationHandler for TibiuSource {
 
 impl ImageRequestProvider for TibiuSource {
 	fn get_image_request(&self, url: String, _context: Option<PageContext>) -> Result<Request> {
+		println!("[tibiu] = image request");
 		// The CDN does not currently check Referer, but every other zh source sends one
 		// and it costs nothing. No session needed: images live on a separate host that
 		// serves them to anyone holding the URL.
@@ -357,6 +379,7 @@ impl ImageRequestProvider for TibiuSource {
 
 impl DeepLinkHandler for TibiuSource {
 	fn handle_deep_link(&self, url: String) -> Result<Option<DeepLinkResult>> {
+		println!("[tibiu] > deep link");
 		let path = match url.split_once("comic.tibiu.net") {
 			Some((_, rest)) => rest,
 			None => url.as_str(),
