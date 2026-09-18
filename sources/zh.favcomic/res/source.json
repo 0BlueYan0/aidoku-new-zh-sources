@@ -1,0 +1,57 @@
+{
+	"info": {
+		"id": "zh.favcomic",
+		"name": "喜漫漫畫",
+		"version": 1,
+		"urls": [
+			"https://www.favcomic.com",
+			"https://www.favcomic.xyz",
+			"https://www.favcomic.net",
+			"https://www.favcomic.cc"
+		],
+		"contentRating": 2,
+		"languages": [
+			"zh"
+		],
+		"minAppVersion": "0.9.0"
+	},
+	"config": {
+		"allowsBaseUrlSelect": true,
+		"hidesFiltersWhileSearching": true,
+		"supportsAuthorSearch": true
+	},
+	"listings": [
+		{
+			"id": "new",
+			"name": "最新更新"
+		},
+		{
+			"id": "rank",
+			"name": "排行榜"
+		},
+		{
+			"id": "free",
+			"name": "免費專區"
+		},
+		{
+			"id": "boy",
+			"name": "少男漫畫"
+		},
+		{
+			"id": "girl",
+			"name": "少女漫畫"
+		},
+		{
+			"id": "r18",
+			"name": "成人漫畫"
+		},
+		{
+			"id": "webtoon",
+			"name": "條漫"
+		},
+		{
+			"id": "picture",
+			"name": "性感圖庫"
+		}
+	]
+}
