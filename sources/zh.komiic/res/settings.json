@@ -2,6 +2,7 @@
 	{
 		"type": "group",
 		"title": "帳號",
+		"footer": "登入後密碼會保存在此裝置，供 24 小時 token 過期時自動續期；登出即清除。",
 		"items": [
 			{
 				"type": "login",
@@ -9,7 +10,9 @@
 				"title": "登入",
 				"method": "basic",
 				"useEmail": true,
-				"logoutTitle": "登出"
+				"logoutTitle": "登出",
+				"notification": "login",
+				"refreshes": ["settings", "listings", "content"]
 			}
 		]
 	}
