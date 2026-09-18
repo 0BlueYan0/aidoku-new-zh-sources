@@ -1,0 +1,54 @@
+{
+	"info": {
+		"id": "zh.tibiu",
+		"name": "TIBIU漫画在线",
+		"version": 5,
+		"url": "https://comic.tibiu.net",
+		"urls": [
+			"https://comic.tibiu.net"
+		],
+		"contentRating": 2,
+		"languages": [
+			"zh"
+		],
+		"minAppVersion": "0.7.1"
+	},
+	"config": {
+		"hidesFiltersWhileSearching": true,
+		"supportsAuthorSearch": true
+	},
+	"listings": [
+		{
+			"id": "update",
+			"name": "最新更新"
+		},
+		{
+			"id": "day",
+			"name": "日榜"
+		},
+		{
+			"id": "week",
+			"name": "週榜"
+		},
+		{
+			"id": "month",
+			"name": "月榜"
+		},
+		{
+			"id": "top",
+			"name": "總排行"
+		},
+		{
+			"id": "fav",
+			"name": "收藏榜"
+		},
+		{
+			"id": "ticket",
+			"name": "月票榜"
+		},
+		{
+			"id": "ascension",
+			"name": "飆升榜"
+		}
+	]
+}
