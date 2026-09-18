@@ -1,0 +1,48 @@
+[
+	{
+		"type": "group",
+		"title": "帳號",
+		"footer": "登入後可閱讀需要登入的章節。網站的登入效期為 7 天，帳號密碼會保存在此裝置上以便自動續期；登出即清除。需要金幣或訂閱會員的章節仍需在網站上購買。",
+		"items": [
+			{
+				"type": "login",
+				"key": "login",
+				"title": "登入",
+				"method": "basic",
+				"useEmail": true,
+				"logoutTitle": "登出",
+				"notification": "login",
+				"refreshes": [
+					"content",
+					"listings"
+				]
+			}
+		]
+	},
+	{
+		"type": "group",
+		"title": "圖片線路",
+		"footer": "三條線路的圖片內容完全相同，只差連線路徑。站方預設為「全球加速」；在中國大陸連線不順時可改用「大陸優化」。",
+		"items": [
+			{
+				"type": "select",
+				"key": "image_line",
+				"title": "線路",
+				"values": [
+					"cdn.favcomic.com",
+					"cdn.favcomic.xyz",
+					"ccdeoo.popwow.top"
+				],
+				"titles": [
+					"全球加速",
+					"全球加速（備援）",
+					"大陸優化"
+				],
+				"default": "cdn.favcomic.com",
+				"refreshes": [
+					"content"
+				]
+			}
+		]
+	}
+]

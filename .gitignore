@@ -10,6 +10,8 @@ sources/*/target
 sources/*/public
 templates/*/target
 
+.playwright-mcp/
+
 .idea
 *.iml
 .zed
