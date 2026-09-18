@@ -548,7 +548,11 @@ pub fn apply_detail(html: &Document, manga: &mut Manga) -> Option<i64> {
 	manga.status = MangaStatus::Completed;
 	manga.content_rating = ContentRating::NSFW;
 	manga.update_strategy = UpdateStrategy::Never;
-	manga.viewer = viewer_for_cate(breadcrumb_cate(html));
+	// Only overwrite the viewer when the breadcrumb actually names a category, so a
+	// Webtoon already set from the list page survives a breadcrumb-less detail page.
+	if let Some(cate) = breadcrumb_cate(html) {
+		manga.viewer = viewer_for_cate(Some(cate));
+	}
 	if manga.url.is_none() {
 		manga.url = Some(detail_url(&manga.key));
 	}
