@@ -1,0 +1,61 @@
+{
+	"info": {
+		"id": "zh.wnacg",
+		"name": "紳士漫畫",
+		"version": 5,
+		"urls": [
+			"https://www.wnacg.com",
+			"https://www.wnacg.ru"
+		],
+		"contentRating": 2,
+		"languages": [
+			"zh"
+		],
+		"minAppVersion": "0.7.1"
+	},
+	"config": {
+		"allowsBaseUrlSelect": true
+	},
+	"listings": [
+		{
+			"id": "update",
+			"name": "最新更新"
+		},
+		{
+			"id": "rank_day",
+			"name": "日榜"
+		},
+		{
+			"id": "rank_week",
+			"name": "週榜"
+		},
+		{
+			"id": "rank_month",
+			"name": "月榜"
+		},
+		{
+			"id": "rank_year",
+			"name": "年榜"
+		},
+		{
+			"id": "cate_5",
+			"name": "同人誌"
+		},
+		{
+			"id": "cate_6",
+			"name": "單行本"
+		},
+		{
+			"id": "cate_7",
+			"name": "雜誌&短篇"
+		},
+		{
+			"id": "cate_19",
+			"name": "韓漫"
+		},
+		{
+			"id": "cate_3",
+			"name": "Cosplay&寫真集"
+		}
+	]
+}

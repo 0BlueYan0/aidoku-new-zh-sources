@@ -1,0 +1,18 @@
+[
+	{
+		"type": "group",
+		"footer": "站方換域名時可自行填入完整網址，留空則使用上方選擇的網址。",
+		"items": [
+			{
+				"type": "text",
+				"key": "customBaseUrl",
+				"title": "自訂網址",
+				"placeholder": "https://www.wnacg.com",
+				"refreshes": [
+					"content",
+					"listings"
+				]
+			}
+		]
+	}
+]
