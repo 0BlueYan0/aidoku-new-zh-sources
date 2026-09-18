@@ -54,14 +54,27 @@ const RELEASE_MARKERS: [&str; 14] = [
 /// compiled-in default.
 pub fn base_url() -> String {
 	for key in ["customBaseUrl", "url"] {
-		if let Some(value) = defaults_get::<String>(key) {
-			let trimmed = value.trim().trim_end_matches('/');
-			if trimmed.starts_with("http") {
-				return String::from(trimmed);
-			}
+		if let Some(url) = defaults_get::<String>(key)
+			.as_deref()
+			.and_then(normalize_base_url)
+		{
+			return url;
 		}
 	}
 	String::from(BASE_URL)
+}
+
+/// Tidy a base URL typed by the user or written by the app: trim it, drop the trailing
+/// slash and supply `https://` when the scheme was left out. Blank input yields `None`.
+pub fn normalize_base_url(value: &str) -> Option<String> {
+	let trimmed = value.trim().trim_end_matches('/');
+	if trimmed.is_empty() {
+		None
+	} else if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+		Some(String::from(trimmed))
+	} else {
+		Some(format!("https://{trimmed}"))
+	}
 }
 
 fn request(url: &str) -> Result<Request> {
@@ -193,6 +206,19 @@ pub fn viewer_for_cate(cate: Option<u32>) -> Viewer {
 	}
 }
 
+/// Same rule, read off a detail page's `分類：韓漫／漢化` label. An empty label yields
+/// `None` so the caller keeps whatever the list page decided.
+pub fn viewer_for_category(category: &str) -> Option<Viewer> {
+	let category = category.trim();
+	if category.is_empty() {
+		None
+	} else if category.starts_with("韓漫") {
+		Some(Viewer::Webtoon)
+	} else {
+		Some(Viewer::RightToLeft)
+	}
+}
+
 /// Pull the circle and the artist out of a doujinshi title.
 ///
 /// `[カマボコ工房 (釜ボコ)] …` yields artists `["カマボコ工房"]` and authors
@@ -254,27 +280,14 @@ fn split_circle_and_artist(group: &str) -> (Vec<String>, Vec<String>) {
 	)
 }
 
-/// Read the page count and the timestamp out of an `info_col` blurb.
+/// Read the timestamp out of an `info_col` blurb.
 ///
-/// The two fields swap order between pages: list pages write
+/// The blurb changes shape between pages: list pages write
 /// `81張圖片，創建於2026-09-18`, home page blocks write `2026-09-18, 232張圖片` and the
-/// thumbnail strip on a detail page writes `上傳於2026-09-18`, so each half is looked
-/// up independently instead of by position.
-pub fn parse_info_col(text: &str) -> (Option<i32>, Option<i64>) {
-	let pages = find_page_count(text);
-	let date = find_date(text).and_then(|value: &str| parse_date(format!("{value} 00:00:00"), DATE_FORMAT));
-	(pages, date)
-}
-
-fn find_page_count(text: &str) -> Option<i32> {
-	let marker = text.find("張圖片")?;
-	let digits: String = text[..marker]
-		.chars()
-		.rev()
-		.take_while(char::is_ascii_digit)
-		.collect();
-	let forward: String = digits.chars().rev().collect();
-	forward.parse::<i32>().ok()
+/// thumbnail strip on a detail page writes `上傳於2026-09-18`, so the date is located by
+/// shape rather than by position.
+pub fn parse_info_col_date(text: &str) -> Option<i64> {
+	find_date(text).and_then(|value: &str| parse_date(format!("{value} 00:00:00"), DATE_FORMAT))
 }
 
 /// Locate the first `yyyy-MM-dd` run in a blurb.
@@ -548,10 +561,11 @@ pub fn apply_detail(html: &Document, manga: &mut Manga) -> Option<i64> {
 	manga.status = MangaStatus::Completed;
 	manga.content_rating = ContentRating::NSFW;
 	manga.update_strategy = UpdateStrategy::Never;
-	// Only overwrite the viewer when the breadcrumb actually names a category, so a
-	// Webtoon already set from the list page survives a breadcrumb-less detail page.
-	if let Some(cate) = breadcrumb_cate(html) {
-		manga.viewer = viewer_for_cate(Some(cate));
+	// The `分類：` label is the only place the detail page names the category (its
+	// breadcrumb holds site notices, not category links). Home and ranking items carry
+	// no category class, so this is the only correction their viewer ever gets.
+	if let Some(viewer) = viewer_for_category(&category) {
+		manga.viewer = viewer;
 	}
 	if manga.url.is_none() {
 		manga.url = Some(detail_url(&manga.key));
@@ -559,7 +573,7 @@ pub fn apply_detail(html: &Document, manga: &mut Manga) -> Option<i64> {
 
 	html.select_first("div.gallary_wrap div.info_col")
 		.and_then(|el: Element| el.text())
-		.and_then(|text: String| parse_info_col(&text).1)
+		.and_then(|text: String| parse_info_col_date(&text))
 }
 
 fn metadata_description(
@@ -604,23 +618,6 @@ fn collect_tags(html: &Document, category: &str) -> Vec<String> {
 		}
 	}
 	tags
-}
-
-/// The breadcrumb links to the parent and child category, which is the only place the
-/// detail page names the category as an id.
-fn breadcrumb_cate(html: &Document) -> Option<u32> {
-	let links = html.select("div.bread a")?;
-	let mut found: Option<u32> = None;
-	for link in links {
-		if let Some(cate) = link.attr("href").and_then(|href: String| cate_id(&href)) {
-			// Korean categories decide the viewer, so they win over the parent.
-			if matches!(cate, 19..=21) {
-				return Some(cate);
-			}
-			found = found.or(Some(cate));
-		}
-	}
-	found
 }
 
 // ---------------------------------------------------------------------------
@@ -687,6 +684,7 @@ fn home_listing_id(href: &str) -> Option<&'static str> {
 		6 => Some("cate_6"),
 		7 => Some("cate_7"),
 		19 => Some("cate_19"),
+		3 => Some("cate_3"),
 		_ => None,
 	}
 }
@@ -704,6 +702,7 @@ pub fn listing_name(id: &str) -> Option<&'static str> {
 		"cate_6" => Some("單行本"),
 		"cate_7" => Some("雜誌&短篇"),
 		"cate_19" => Some("韓漫"),
+		"cate_3" => Some("Cosplay&寫真集"),
 		_ => None,
 	}
 }
@@ -789,27 +788,21 @@ document.writeln("var imglist = [{ url: fast_img_host+\"/data/1/001.jpg\", capti
 	}
 
 	#[aidoku_test]
-	fn reads_info_col_in_either_order() {
-		let (list_pages, list_date) = parse_info_col("81張圖片，創建於2026-09-18");
-		let (home_pages, home_date) = parse_info_col("2026-09-18, 232張圖片");
-		assert_eq!(list_pages, Some(81));
-		assert_eq!(home_pages, Some(232));
+	fn reads_info_col_date_in_either_order() {
+		let list_date = parse_info_col_date("81張圖片，創建於2026-09-18");
+		let home_date = parse_info_col_date("2026-09-18, 232張圖片");
 		assert!(list_date.is_some());
 		assert_eq!(list_date, home_date);
 	}
 
 	#[aidoku_test]
-	fn reads_info_col_without_a_page_count() {
-		let (pages, date) = parse_info_col("上傳於2026-09-18");
-		assert_eq!(pages, None);
-		assert!(date.is_some());
+	fn reads_info_col_date_without_a_page_count() {
+		assert!(parse_info_col_date("上傳於2026-09-18").is_some());
 	}
 
 	#[aidoku_test]
-	fn reads_info_col_with_a_time_component() {
-		let (pages, date) = parse_info_col("225張圖片，創建於2026-09-18 02:25:03");
-		assert_eq!(pages, Some(225));
-		assert!(date.is_some());
+	fn reads_info_col_date_with_a_time_component() {
+		assert!(parse_info_col_date("225張圖片，創建於2026-09-18 02:25:03").is_some());
 	}
 
 	#[aidoku_test]
@@ -835,6 +828,32 @@ document.writeln("var imglist = [{ url: fast_img_host+\"/data/1/001.jpg\", capti
 		assert_eq!(viewer_for_cate(Some(21)), Viewer::Webtoon);
 		assert_eq!(viewer_for_cate(Some(5)), Viewer::RightToLeft);
 		assert_eq!(viewer_for_cate(None), Viewer::RightToLeft);
+	}
+
+	#[aidoku_test]
+	fn picks_the_viewer_from_the_category_label() {
+		assert_eq!(viewer_for_category("韓漫／漢化"), Some(Viewer::Webtoon));
+		assert_eq!(viewer_for_category("韓漫／其他"), Some(Viewer::Webtoon));
+		assert_eq!(viewer_for_category("同人誌／漢化"), Some(Viewer::RightToLeft));
+		assert_eq!(viewer_for_category(""), None);
+	}
+
+	#[aidoku_test]
+	fn completes_a_custom_base_url() {
+		assert_eq!(
+			normalize_base_url("wnacg.ru").as_deref(),
+			Some("https://wnacg.ru")
+		);
+		assert_eq!(
+			normalize_base_url(" https://www.wnacg.com/ ").as_deref(),
+			Some("https://www.wnacg.com")
+		);
+		assert_eq!(
+			normalize_base_url("http://www.wnacg.com").as_deref(),
+			Some("http://www.wnacg.com")
+		);
+		assert_eq!(normalize_base_url("  "), None);
+		assert_eq!(normalize_base_url("/"), None);
 	}
 
 	#[aidoku_test]
@@ -889,6 +908,15 @@ document.writeln("var imglist = [{ url: fast_img_host+\"/data/1/001.jpg\", capti
 	fn listing_names_match_source_json() {
 		assert_eq!(listing_name("update"), Some("最新更新"));
 		assert_eq!(listing_name("cate_7"), Some("雜誌&短篇"));
+		assert_eq!(listing_name("cate_3"), Some("Cosplay&寫真集"));
 		assert_eq!(listing_name("nope"), None);
+	}
+
+	#[aidoku_test]
+	fn maps_home_more_links_to_listings() {
+		assert_eq!(home_listing_id("/albums.html"), Some("update"));
+		assert_eq!(home_listing_id("/albums-index-cate-19.html"), Some("cate_19"));
+		assert_eq!(home_listing_id("/albums-index-cate-3.html"), Some("cate_3"));
+		assert_eq!(home_listing_id("/albums-index-cate-99.html"), None);
 	}
 }

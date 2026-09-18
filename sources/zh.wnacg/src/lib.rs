@@ -19,11 +19,11 @@ const DEFAULT_SORT: &str = "create_time_DESC";
 const DEFAULT_SCOPE: &str = "_all";
 
 /// Home screen rows, in display order. Six of them are lifted straight off the landing
-/// page; `本週排行` needs its own request. The titles must match the ones the streamed
+/// page; `週榜` needs its own request. The titles must match the ones the streamed
 /// components carry, because the app pairs a component to its skeleton row by title.
 const HOME_SKELETON: [&str; 7] = [
 	"最新更新",
-	"本週排行",
+	"週榜",
 	"同人誌",
 	"單行本",
 	"雜誌&短篇",
@@ -31,8 +31,9 @@ const HOME_SKELETON: [&str; 7] = [
 	"Cosplay&寫真集",
 ];
 
-/// The ranking row's title and the listing it opens.
-const HOME_RANK_TITLE: &str = "本週排行";
+/// The ranking row's title and the listing it opens. The title repeats the listing's
+/// `source.json` name so the row and the screen it opens read the same.
+const HOME_RANK_TITLE: &str = "週榜";
 const HOME_RANK_LISTING: &str = "rank_week";
 
 struct WnacgSource;
@@ -285,3 +286,16 @@ register_source!(
 	ImageRequestProvider,
 	DeepLinkHandler
 );
+
+#[cfg(test)]
+mod test {
+	use super::*;
+	use aidoku_test::aidoku_test;
+
+	/// The ranking row opens the weekly listing, so it must carry that listing's name.
+	#[aidoku_test]
+	fn home_rank_row_reuses_the_listing_name() {
+		assert_eq!(Some(HOME_RANK_TITLE), listing_name(HOME_RANK_LISTING));
+		assert!(HOME_SKELETON.contains(&HOME_RANK_TITLE));
+	}
+}

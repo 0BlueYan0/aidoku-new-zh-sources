@@ -2,7 +2,7 @@
 	{
 		"type": "select",
 		"id": "cate",
-		"title": "分類",
+		"title": "分類（僅瀏覽時有效）",
 		"options": [
 			"全部",
 			"同人誌",
@@ -77,7 +77,7 @@
 	{
 		"type": "text",
 		"id": "tag",
-		"title": "標籤",
+		"title": "標籤（僅瀏覽時有效）",
 		"placeholder": "巨乳、精靈、後宮…"
 	}
 ]

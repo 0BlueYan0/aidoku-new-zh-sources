@@ -3,7 +3,6 @@
 		"id": "zh.wnacg",
 		"name": "紳士漫畫",
 		"version": 5,
-		"url": "https://www.wnacg.com",
 		"urls": [
 			"https://www.wnacg.com",
 			"https://www.wnacg.ru"
@@ -53,6 +52,10 @@
 		{
 			"id": "cate_19",
 			"name": "韓漫"
+		},
+		{
+			"id": "cate_3",
+			"name": "Cosplay&寫真集"
 		}
 	]
 }
