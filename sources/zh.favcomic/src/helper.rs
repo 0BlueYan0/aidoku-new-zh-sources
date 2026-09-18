@@ -6,7 +6,7 @@ use aidoku::{
 		net::Request,
 	},
 	prelude::*,
-	Chapter, ContentRating, Manga, MangaPageResult, MangaStatus, Page, PageContent, Result, Viewer,
+	Chapter, ContentRating, Manga, MangaPageResult, MangaStatus, Page, PageContent, Result,
 };
 
 pub const DEFAULT_BASE_URL: &str = "https://www.favcomic.com";
@@ -271,7 +271,11 @@ pub fn parse_detail(document: &Document, manga: &mut Manga) {
 	} else {
 		ContentRating::Suggestive
 	};
-	manga.viewer = Viewer::Webtoon;
+
+	// The reading direction only exists on the chapter page (its `direction` attribute), and the
+	// site mixes paged manga with vertical strips inside every section, so nothing here can tell
+	// them apart. Leave `viewer` at its default and let the app's own setting decide instead of
+	// forcing every title into webtoon mode.
 }
 
 /// Parses the chapter list, which ships inline on the detail page.
@@ -359,10 +363,6 @@ fn price_label(raw: &str) -> Option<String> {
 	Some(String::from(raw))
 }
 
-/// Parses a chapter reader page into pages.
-///
-/// A locked chapter still answers 200, with three teaser images, so the `code` attribute has to
-/// be checked first -- otherwise the reader silently shows a three page "chapter".
 /// The chapter container's `code` attribute. `"0"` means unlocked.
 pub fn chapter_lock_code(document: &Document) -> String {
 	document
@@ -371,6 +371,10 @@ pub fn chapter_lock_code(document: &Document) -> String {
 		.unwrap_or_default()
 }
 
+/// Parses a chapter reader page into pages.
+///
+/// A locked chapter still answers 200, with three teaser images, so the `code` attribute has to
+/// be checked first -- otherwise the reader silently shows a three page "chapter".
 pub fn parse_pages(document: &Document) -> Result<Vec<Page>> {
 	let code = chapter_lock_code(document);
 

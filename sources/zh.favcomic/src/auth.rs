@@ -121,7 +121,6 @@ pub fn login(email: &str, password: &str) -> LoginOutcome {
 	if text.contains("\"result\":\"success\"") {
 		let now = current_date();
 		set_timestamp(EXPIRES_AT_KEY, now + TOKEN_LIFETIME);
-		set_timestamp(LOGGED_IN_AT_KEY, now);
 		defaults_set(FAILED_AT_KEY, DefaultValue::Null);
 		defaults_set(NEEDS_RELOGIN_KEY, DefaultValue::Null);
 		return LoginOutcome::Success;
@@ -141,6 +140,10 @@ pub fn handle_login(email: &str, password: &str) -> bool {
 	match login(email, password) {
 		LoginOutcome::Success => {
 			store_credentials(email, password);
+			// Only a login the reader performed may claim the `login` notification that follows.
+			// A silent renewal must not, or a logout right after one would be mistaken for a login
+			// and leave the credentials behind.
+			set_timestamp(LOGGED_IN_AT_KEY, current_date());
 			true
 		}
 		LoginOutcome::Rejected => {
