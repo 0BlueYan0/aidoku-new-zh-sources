@@ -13,7 +13,7 @@ use aidoku::{
 		net::Request,
 	},
 	prelude::*,
-	Result,
+	HashMap,
 };
 use serde::Deserialize;
 
@@ -26,6 +26,10 @@ const REFRESH_TOKEN_KEY: &str = "refreshToken";
 /// Set by `handle_basic_login` so the follow-up notification can tell a sign-in from a
 /// sign-out; Aidoku posts the same notification name for both.
 const JUST_LOGGED_IN_KEY: &str = "justLoggedIn";
+/// Names of the entries the web login view actually handed over. Recorded so the
+/// settings footer can say what arrived when no token could be found - the app's
+/// delivery of `localStorageKeys` is undocumented and no shipped source relies on it.
+const SEEN_KEYS_KEY: &str = "webLoginKeys";
 
 /// The site embeds this OAuth client in its web bundle.
 const CLIENT_ID: &str = "2";
@@ -153,18 +157,36 @@ fn request_token(pairs: &[(&str, &str)]) -> bool {
 	true
 }
 
-pub fn login(username: &str, password: &str) -> Result<bool> {
-	let ok = request_token(&[
-		("grant_type", "password"),
-		("client_id", CLIENT_ID),
-		("client_secret", CLIENT_SECRET),
-		("username", username),
-		("password", password),
-	]);
-	if ok {
-		defaults_set(JUST_LOGGED_IN_KEY, DefaultValue::Bool(true));
+/// Take the tokens out of whatever the web login view handed over.
+///
+/// The site keeps its session in `localStorage` (`accessToken` / `refreshToken`) rather
+/// than in a cookie, which is why `settings.json` asks for those keys. The app merges
+/// what it collected into this one map, so both are looked up here by name.
+pub fn capture_web_login(values: &HashMap<String, String>) -> bool {
+	// Record the key names (never the values) so a failed sign-in can be diagnosed from
+	// the settings screen instead of needing a log server.
+	let mut seen: Vec<String> = values.keys().cloned().collect();
+	seen.sort();
+	defaults_set(SEEN_KEYS_KEY, DefaultValue::String(seen.join(", ")));
+
+	let access = values
+		.get("accessToken")
+		.filter(|value| !value.is_empty())
+		.cloned();
+	let Some(access) = access else {
+		return false;
+	};
+
+	defaults_set(ACCESS_TOKEN_KEY, DefaultValue::String(access));
+	if let Some(refresh) = values
+		.get("refreshToken")
+		.filter(|value| !value.is_empty())
+		.cloned()
+	{
+		defaults_set(REFRESH_TOKEN_KEY, DefaultValue::String(refresh));
 	}
-	Ok(ok)
+	defaults_set(JUST_LOGGED_IN_KEY, DefaultValue::Bool(true));
+	true
 }
 
 /// Swap the refresh token for a fresh pair. Returns true when it worked.
@@ -184,6 +206,7 @@ pub fn clear() {
 	defaults_set(ACCESS_TOKEN_KEY, DefaultValue::Null);
 	defaults_set(REFRESH_TOKEN_KEY, DefaultValue::Null);
 	defaults_set(JUST_LOGGED_IN_KEY, DefaultValue::Null);
+	defaults_set(SEEN_KEYS_KEY, DefaultValue::Null);
 }
 
 /// Aidoku posts the same notification for signing in and signing out, so the flag set
@@ -208,6 +231,13 @@ fn fetch_member() -> Option<Member> {
 /// when they cannot be read this says which failure it was instead of going blank.
 pub fn account_footer() -> Option<String> {
 	if !is_logged_in() {
+		// If the login view ran but left no token, name what it did hand over; that is
+		// the one clue available for why sign-in did not take.
+		if let Some(seen) = stored(SEEN_KEYS_KEY) {
+			return Some(format!(
+				"登入未完成：登入頁只交回了 {seen}，其中沒有 accessToken。請回報這行字。"
+			));
+		}
 		return Some(String::from("尚未登入。登入後可閱讀已購買的付費章節。"));
 	}
 

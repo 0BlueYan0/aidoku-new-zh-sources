@@ -102,8 +102,6 @@ pub struct ChapterEntry {
 	#[serde(default)]
 	pub vol_name: Option<String>,
 	#[serde(default)]
-	pub idx: i32,
-	#[serde(default)]
 	pub online_at: Option<String>,
 	#[serde(default)]
 	pub buy_coin: i32,
@@ -162,6 +160,9 @@ pub struct Banner {
 	pub title: Option<String>,
 	#[serde(default)]
 	pub image1: Option<String>,
+	/// 1400x758. Preferred over `image1`, which is 1200x400 and overflows the screen.
+	#[serde(default)]
+	pub image2: Option<String>,
 	/// One of "book", "announcement" or "url"; only "book" can open a manga.
 	#[serde(default, rename = "type")]
 	pub kind: Option<String>,
@@ -361,9 +362,13 @@ impl RankEntry {
 	}
 }
 
-/// Pull a chapter number out of the site's own label, falling back to the sequence
-/// index for prologues and extras that carry no number.
-pub fn chapter_number(vol_name: Option<&str>, idx: i32) -> Option<f32> {
+/// Pull a chapter number out of the site's own label.
+///
+/// Entries with no number in their label - announcements, extras, the prologue - get no
+/// chapter number at all. The sequence index is deliberately *not* used as a fallback:
+/// it counts those unnumbered entries too, so it runs ahead of the real numbering and
+/// would label a mid-series announcement as a later chapter than the newest one.
+pub fn chapter_number(vol_name: Option<&str>) -> Option<f32> {
 	if let Some(label) = vol_name {
 		let mut digits = String::new();
 		let mut seen_dot = false;
@@ -381,7 +386,7 @@ pub fn chapter_number(vol_name: Option<&str>, idx: i32) -> Option<f32> {
 			return Some(value);
 		}
 	}
-	(idx > 0).then_some(idx as f32)
+	None
 }
 
 /// The first timestamp inside the `free_date` blob, shortened to month/day.
@@ -449,17 +454,20 @@ mod test {
 
 	#[aidoku_test]
 	fn reads_the_number_out_of_the_sites_label() {
-		assert_eq!(chapter_number(Some("第 12 話"), 30), Some(12.0));
-		assert_eq!(chapter_number(Some("第4话"), 30), Some(4.0));
-		assert_eq!(chapter_number(Some("第 0.6 話"), 30), Some(0.6));
+		assert_eq!(chapter_number(Some("第 12 話")), Some(12.0));
+		assert_eq!(chapter_number(Some("第4话")), Some(4.0));
+		assert_eq!(chapter_number(Some("第 0.6 話")), Some(0.6));
 	}
 
-	/// Prologues and extras carry no digits, so the sequence index stands in.
+	/// Unnumbered entries must stay unnumbered. Book 512 has an announcement at index 47
+	/// sitting between chapters 42 and 43; numbering it from the index made it show up as
+	/// "chapter 47", above the real newest chapter.
 	#[aidoku_test]
-	fn falls_back_to_the_sequence_index() {
-		assert_eq!(chapter_number(Some("序"), 1), Some(1.0));
-		assert_eq!(chapter_number(None, 7), Some(7.0));
-		assert_eq!(chapter_number(Some("番外"), 0), None);
+	fn unnumbered_entries_get_no_chapter_number() {
+		assert_eq!(chapter_number(Some("公告")), None);
+		assert_eq!(chapter_number(Some("序")), None);
+		assert_eq!(chapter_number(Some("番外篇②")), None);
+		assert_eq!(chapter_number(None), None);
 	}
 
 	#[aidoku_test]

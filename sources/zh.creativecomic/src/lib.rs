@@ -4,11 +4,11 @@ use aidoku::{
 	alloc::{vec, String, Vec},
 	imports::{canvas::ImageRef, net::Request, std::send_partial_result},
 	prelude::*,
-	BasicLoginHandler, Chapter, DeepLinkHandler, DeepLinkResult, DynamicSettings,
-	FilterValue, GroupSetting, Home, HomeComponent, HomeComponentValue, HomeLayout,
-	HomePartialResult, ImageResponse, Link, LinkValue, Listing, ListingProvider, Manga,
-	MangaPageResult, NotificationHandler, Page, PageContent, PageContext,
-	PageImageProcessor, Result, Setting, Source,
+	Chapter, DeepLinkHandler, DeepLinkResult, DynamicSettings, FilterValue, GroupSetting,
+	HashMap, Home, HomeComponent, HomeComponentValue, HomeLayout, HomePartialResult,
+	ImageResponse, Link, LinkValue, Listing, ListingProvider, Manga, MangaPageResult,
+	NotificationHandler, Page, PageContent, PageContext, PageImageProcessor, Result,
+	Setting, Source, WebLoginHandler,
 };
 
 mod auth;
@@ -58,7 +58,7 @@ fn build_chapters(list: ChapterList) -> Vec<Chapter> {
 				url: Some(chapter_url(&key)),
 				key,
 				title: chapter_title(entry),
-				chapter_number: chapter_number(entry.vol_name.as_deref(), entry.idx),
+				chapter_number: chapter_number(entry.vol_name.as_deref()),
 				date_uploaded: parse_timestamp(entry.online_at.as_deref()),
 				..Default::default()
 			}
@@ -246,7 +246,7 @@ impl Home for CreativeComicSource {
 						Some(Link {
 							title: banner.title.clone().unwrap_or_default(),
 							subtitle: None,
-							image_url: banner.image1,
+							image_url: banner.image2.or(banner.image1),
 							value: Some(LinkValue::Manga(Manga {
 								key,
 								title: banner.title.unwrap_or_default(),
@@ -263,8 +263,10 @@ impl Home for CreativeComicSource {
 						value: HomeComponentValue::ImageScroller {
 							links,
 							auto_scroll_interval: Some(5.0),
-							width: None,
-							height: None,
+							// Pinned to the 1.85:1 ratio of `image2`. Leaving these
+							// unset let the banner run off the right of the screen.
+							width: Some(300),
+							height: Some(162),
 						},
 					}));
 				}
@@ -328,14 +330,14 @@ impl PageImageProcessor for CreativeComicSource {
 	}
 }
 
-impl BasicLoginHandler for CreativeComicSource {
-	fn handle_basic_login(
-		&self,
-		_key: String,
-		username: String,
-		password: String,
-	) -> Result<bool> {
-		auth::login(&username, &password)
+impl WebLoginHandler for CreativeComicSource {
+	/// Called on every cookie update while the login page is open, so this just reports
+	/// whether a token has turned up yet.
+	fn handle_web_login(&self, key: String, cookies: HashMap<String, String>) -> Result<bool> {
+		if key != "login" {
+			bail!("Invalid login key: {key}");
+		}
+		Ok(auth::capture_web_login(&cookies))
 	}
 }
 
@@ -405,7 +407,7 @@ register_source!(
 	ListingProvider,
 	Home,
 	PageImageProcessor,
-	BasicLoginHandler,
+	WebLoginHandler,
 	NotificationHandler,
 	DynamicSettings,
 	DeepLinkHandler
@@ -429,5 +431,34 @@ mod test {
 	#[aidoku_test]
 	fn the_ranking_row_reuses_a_real_listing() {
 		assert!(listing_query("read").is_some());
+	}
+
+	/// Every CCC url carries a language prefix, so the parsing must survive it.
+	#[aidoku_test]
+	fn deep_links_survive_the_language_prefix() {
+		let source = CreativeComicSource;
+		for url in [
+			"https://www.creative-comic.tw/zh/book/512/info",
+			"https://www.creative-comic.tw/book/512/content",
+			"https://www.creative-comic.tw/en/book/512/donate",
+		] {
+			let result = source.handle_deep_link(String::from(url)).unwrap();
+			assert_eq!(
+				result,
+				Some(DeepLinkResult::Manga {
+					key: String::from("512")
+				}),
+				"failed for {url}"
+			);
+		}
+	}
+
+	#[aidoku_test]
+	fn unrelated_urls_are_ignored() {
+		let source = CreativeComicSource;
+		let result = source
+			.handle_deep_link(String::from("https://www.creative-comic.tw/zh/about"))
+			.unwrap();
+		assert_eq!(result, None);
 	}
 }

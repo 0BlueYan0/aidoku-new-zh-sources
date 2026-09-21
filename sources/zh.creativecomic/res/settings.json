@@ -2,15 +2,21 @@
 	{
 		"type": "group",
 		"title": "帳號",
-		"footer": "登入後可閱讀已購買的付費章節。本裝置只保存存取權杖，不保存密碼。",
+		"footer": "會開啟 CCC 的登入頁，email 或社群帳號都可以。本裝置只保存存取權杖，不保存密碼。",
 		"items": [
 			{
 				"type": "login",
 				"key": "login",
 				"title": "登入",
-				"method": "basic",
-				"useEmail": true,
+				"method": "web",
+				"url": "https://www.creative-comic.tw/zh/login",
+				"localStorageKeys": [
+					"accessToken",
+					"refreshToken",
+					"userId"
+				],
 				"logoutTitle": "登出",
+				"clearCookiesOnLogOut": true,
 				"notification": "login",
 				"refreshes": [
 					"settings",
