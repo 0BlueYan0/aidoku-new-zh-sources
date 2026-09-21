@@ -22,6 +22,10 @@ use helper::*;
 const BANNER_TITLE: &str = "精選";
 const RANK_TITLE: &str = "閱覽排行";
 
+/// The app runs a limited number of requests at once (5 unless `source.json` says
+/// otherwise), so batched fan-out never hands it more than it will run.
+const REQUEST_BATCH: usize = 5;
+
 struct CreativeComicSource;
 
 /// Map a listing id onto the `/book` query it stands for: a sort order, and optionally
@@ -79,6 +83,8 @@ impl Source for CreativeComicSource {
 		page: i32,
 		filters: Vec<FilterValue>,
 	) -> Result<MangaPageResult> {
+		auth::ensure_guest_uuid();
+
 		let mut keyword = query;
 		let mut sort_by = "updated_at";
 		let mut genre: Option<String> = None;
@@ -131,6 +137,8 @@ impl Source for CreativeComicSource {
 		needs_details: bool,
 		needs_chapters: bool,
 	) -> Result<Manga> {
+		auth::ensure_guest_uuid();
+
 		if needs_details {
 			// Swallow failures: one unreachable book must not abort a whole library
 			// refresh.
@@ -152,6 +160,8 @@ impl Source for CreativeComicSource {
 	}
 
 	fn get_page_list(&self, _manga: Manga, chapter: Chapter) -> Result<Vec<Page>> {
+		auth::ensure_guest_uuid();
+
 		// Paid chapters answer 403 here, with no page list at all.
 		let content: ChapterContent = api_get(&format!("/book/chapter/{}", chapter.key))?;
 		let Some(detail) = content.chapter else {
@@ -166,14 +176,17 @@ impl Source for CreativeComicSource {
 		// that also pins them to the token in use now, which keeps working if the
 		// session refreshes mid-chapter.
 		let secret = auth::image_secret();
-		let mut requests: Vec<Request> = Vec::new();
-		for proportion in &detail.proportion {
-			requests.push(api_request(&format!(
-				"/book/chapter/image/{}",
-				proportion.id
-			))?);
+		let mut responses = Vec::new();
+		for batch in detail.proportion.chunks(REQUEST_BATCH) {
+			let mut requests: Vec<Request> = Vec::new();
+			for proportion in batch {
+				requests.push(api_request(&format!(
+					"/book/chapter/image/{}",
+					proportion.id
+				))?);
+			}
+			responses.extend(Request::send_all(requests));
 		}
-		let responses = Request::send_all(requests);
 
 		let mut pages: Vec<Page> = Vec::new();
 		for (proportion, response) in detail.proportion.iter().zip(responses) {
@@ -206,6 +219,8 @@ impl Source for CreativeComicSource {
 
 impl ListingProvider for CreativeComicSource {
 	fn get_manga_list(&self, listing: Listing, page: i32) -> Result<MangaPageResult> {
+		auth::ensure_guest_uuid();
+
 		let Some((sort_by, window)) = listing_query(&listing.id) else {
 			return Err(error!("Unknown listing: {}", listing.id));
 		};
@@ -216,6 +231,8 @@ impl ListingProvider for CreativeComicSource {
 
 impl Home for CreativeComicSource {
 	fn get_home(&self) -> Result<HomeLayout> {
+		auth::ensure_guest_uuid();
+
 		// Send an empty skeleton first so the home screen lays out immediately, then
 		// stream each row in. One request covers both rows.
 		send_partial_result(&HomePartialResult::Layout(HomeLayout {

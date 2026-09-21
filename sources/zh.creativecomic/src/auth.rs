@@ -81,11 +81,18 @@ pub fn image_secret() -> String {
 
 /// Fetch a guest uuid once and keep it, mirroring what the website stores in
 /// localStorage. A fresh uuid per launch would look like a flood of new visitors.
-fn guest_uuid() -> Option<String> {
-	if let Some(existing) = stored(UUID_KEY) {
-		return Some(existing);
+///
+/// This must only be called from the top of a `Source` entry point, never while another
+/// request is being assembled: it blocks on a request of its own, and the app runs a
+/// limited number of requests at once, so nesting one inside another can wedge them all.
+pub fn ensure_guest_uuid() {
+	if is_logged_in() || stored(UUID_KEY).is_some() {
+		return;
 	}
+	let _ = fetch_guest_uuid();
+}
 
+fn fetch_guest_uuid() -> Option<String> {
 	let url = format!("{API_URL}/guest");
 	let request = Request::get(&url)
 		.ok()?
@@ -101,12 +108,16 @@ fn guest_uuid() -> Option<String> {
 }
 
 /// Attach whichever credential this install has.
+///
+/// Deliberately does no networking: this runs while a request is being built, and
+/// fetching the uuid here would block that request on another one. `ensure_guest_uuid`
+/// handles that at the entry points instead.
 pub fn authorize(request: Request) -> Request {
 	let mut request = request;
 	if let Some(token) = access_token() {
 		let header = format!("Bearer {token}");
 		request.set_header("Authorization", header.as_str());
-	} else if let Some(uuid) = guest_uuid() {
+	} else if let Some(uuid) = stored(UUID_KEY) {
 		request.set_header("uuid", uuid.as_str());
 	}
 	request
@@ -300,10 +311,13 @@ fn fetch_member() -> Option<Member> {
 	read_envelope::<Member>(request).ok()
 }
 
-/// The account summary shown in settings.
+/// The account summary shown in settings, or `None` to leave the group out entirely.
 ///
-/// Those balances are also the only visible proof that signing in actually took, so
-/// when they cannot be read this says which failure it was instead of going blank.
+/// The group stays hidden while signed out and nothing is wrong, so readers who never
+/// sign in are not shown an empty panel. It appears when there is something to say: the
+/// balances once signed in, or which step failed when it did not take. Those balances
+/// are the only visible proof that signing in actually worked, so a failure names itself
+/// rather than going blank.
 pub fn account_footer() -> Option<String> {
 	if !is_logged_in() {
 		// If the login view ran but left no token, name what it did hand over; that is
@@ -317,9 +331,9 @@ pub fn account_footer() -> Option<String> {
 				"登入未完成：登入頁回呼 {calls} 次，交回「{seen}」，其中沒有 accessToken。請回報這行字。"
 			));
 		}
-		return Some(String::from(
-			"尚未登入。請先用上方登入，再按「同步登入狀態」。",
-		));
+		// Signed out with nothing wrong: hide the group. The static footer on the
+		// account group already explains the login and sync steps.
+		return None;
 	}
 
 	let member = match fetch_member() {
