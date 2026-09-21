@@ -118,6 +118,16 @@ pub struct ChapterEntry {
 	/// 1 when the chapter is free to read right now, whatever `buy_coin` says.
 	#[serde(default)]
 	pub is_free: i32,
+	// Which purchase routes the site actually offers. The amounts above stay populated
+	// even for routes that are switched off, so these flags decide what to show.
+	#[serde(default)]
+	pub is_coin_buy: i32,
+	#[serde(default)]
+	pub is_point_buy: i32,
+	#[serde(default)]
+	pub is_coin_rent: i32,
+	#[serde(default)]
+	pub is_point_rent: i32,
 	/// Days until the chapter becomes free, counted by the server. 0 or absent means
 	/// there is no upcoming unlock.
 	#[serde(default)]
@@ -428,18 +438,38 @@ pub fn chapter_title(entry: &ChapterEntry) -> Option<String> {
 	// Already owned, or already free. `is_free` is what decides this: most back
 	// catalogue chapters keep a non-zero `buy_coin` long after their free window opened,
 	// so pricing off the coin fields alone marks free chapters as paid.
-	let owned = entry.is_buy == 1 || entry.is_rent == 1 || entry.is_free == 1;
-	let coins = entry.buy_coin.max(entry.rent_coin);
-	let points = entry.buy_point.max(entry.rent_point);
-	if owned || (coins == 0 && points == 0) {
+	if entry.is_buy == 1 || entry.is_rent == 1 || entry.is_free == 1 {
 		return base;
 	}
 
-	let mut note = if coins > 0 {
-		format!("{coins}金幣")
-	} else {
-		format!("{points}點")
+	// A paid chapter usually offers more than one route - buying outright with coins and
+	// renting with points are priced separately - so every enabled one is listed.
+	let mut prices: Vec<String> = Vec::new();
+	let mut push = |amount: i32, unit: &str| {
+		if amount > 0 {
+			let label = format!("{amount}{unit}");
+			if !prices.contains(&label) {
+				prices.push(label);
+			}
+		}
 	};
+	if entry.is_coin_buy == 1 {
+		push(entry.buy_coin, "金幣");
+	}
+	if entry.is_coin_rent == 1 {
+		push(entry.rent_coin, "金幣");
+	}
+	if entry.is_point_buy == 1 {
+		push(entry.buy_point, "點");
+	}
+	if entry.is_point_rent == 1 {
+		push(entry.rent_point, "點");
+	}
+	if prices.is_empty() {
+		return base;
+	}
+
+	let mut note = prices.join("／");
 	// `free_date` also lists windows that already opened, so the server's countdown is
 	// what decides whether there is a future unlock worth mentioning.
 	if entry.free_day.unwrap_or(0) > 0 {
@@ -499,7 +529,9 @@ mod test {
 		let entry = ChapterEntry {
 			name: Some(String::from("男性凝視")),
 			buy_coin: 6,
+			is_coin_buy: 1,
 			rent_point: 600,
+			is_point_rent: 1,
 			free_day: Some(13),
 			free_date: Some(String::from(
 				"[[\"2026-10-05 20:00:00\", \"4000-01-01 00:00:00\"]]",
@@ -508,7 +540,7 @@ mod test {
 		};
 		assert_eq!(
 			chapter_title(&entry),
-			Some(String::from("男性凝視・6金幣・10/5免費"))
+			Some(String::from("男性凝視・6金幣／600點・10/5免費"))
 		);
 	}
 
@@ -536,6 +568,7 @@ mod test {
 		let entry = ChapterEntry {
 			name: Some(String::from("某話")),
 			buy_coin: 6,
+			is_coin_buy: 1,
 			free_day: None,
 			free_date: Some(String::from(
 				"[[\"2025-11-24 20:00:00\", \"4000-01-01 00:00:00\"]]",
@@ -555,6 +588,22 @@ mod test {
 			..Default::default()
 		};
 		assert_eq!(chapter_title(&entry), Some(String::from("男性凝視")));
+	}
+
+	/// The site leaves amounts populated on routes it has switched off, so only the
+	/// enabled ones may be shown.
+	#[aidoku_test]
+	fn only_enabled_purchase_routes_are_listed() {
+		let entry = ChapterEntry {
+			name: Some(String::from("某話")),
+			buy_coin: 6,
+			is_coin_buy: 1,
+			// Priced, but the site does not offer renting with points here.
+			rent_point: 600,
+			is_point_rent: 0,
+			..Default::default()
+		};
+		assert_eq!(chapter_title(&entry), Some(String::from("某話・6金幣")));
 	}
 
 	#[aidoku_test]
