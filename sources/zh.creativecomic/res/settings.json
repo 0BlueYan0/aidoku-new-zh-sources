@@ -1,0 +1,23 @@
+[
+	{
+		"type": "group",
+		"title": "帳號",
+		"footer": "登入後可閱讀已購買的付費章節。本裝置只保存存取權杖，不保存密碼。",
+		"items": [
+			{
+				"type": "login",
+				"key": "login",
+				"title": "登入",
+				"method": "basic",
+				"useEmail": true,
+				"logoutTitle": "登出",
+				"notification": "login",
+				"refreshes": [
+					"settings",
+					"listings",
+					"content"
+				]
+			}
+		]
+	}
+]
