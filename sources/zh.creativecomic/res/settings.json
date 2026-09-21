@@ -2,7 +2,7 @@
 	{
 		"type": "group",
 		"title": "帳號",
-		"footer": "先用「登入」在 CCC 的登入頁登入，再按「同步登入狀態」把登入資訊帶回圖源。CCC 不使用 cookie，所以這一步必須手動觸發。",
+		"footer": "先用「登入」在 CCC 的登入頁登入，再按「同步登入狀態」把登入資訊帶回圖源。CCC 不使用 cookie，所以這一步必須手動觸發，上方的登入按鈕也因此不會變成「登出」——要登出請用「清除登入狀態」。",
 		"items": [
 			{
 				"type": "login",
@@ -28,6 +28,19 @@
 				"type": "button",
 				"title": "同步登入狀態",
 				"notification": "syncLogin",
+				"refreshes": [
+					"settings",
+					"listings",
+					"content"
+				]
+			},
+			{
+				"type": "button",
+				"title": "清除登入狀態",
+				"notification": "clearLogin",
+				"destructive": true,
+				"confirmTitle": "清除登入狀態",
+				"confirmText": "清除",
 				"refreshes": [
 					"settings",
 					"listings",

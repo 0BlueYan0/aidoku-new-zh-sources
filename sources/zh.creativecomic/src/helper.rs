@@ -115,7 +115,16 @@ pub struct ChapterEntry {
 	pub is_buy: i32,
 	#[serde(default)]
 	pub is_rent: i32,
+	/// 1 when the chapter is free to read right now, whatever `buy_coin` says.
+	#[serde(default)]
+	pub is_free: i32,
+	/// Days until the chapter becomes free, counted by the server. 0 or absent means
+	/// there is no upcoming unlock.
+	#[serde(default)]
+	pub free_day: Option<i32>,
 	/// A JSON array rendered as a string, holding the window when the chapter unlocks.
+	/// It keeps windows that have already passed, so it is only read when `free_day`
+	/// says an unlock is still ahead.
 	#[serde(default)]
 	pub free_date: Option<String>,
 }
@@ -416,8 +425,10 @@ pub fn chapter_title(entry: &ChapterEntry) -> Option<String> {
 		.filter(|value| !value.is_empty())
 		.map(String::from);
 
-	// Already owned, or free to begin with.
-	let owned = entry.is_buy == 1 || entry.is_rent == 1;
+	// Already owned, or already free. `is_free` is what decides this: most back
+	// catalogue chapters keep a non-zero `buy_coin` long after their free window opened,
+	// so pricing off the coin fields alone marks free chapters as paid.
+	let owned = entry.is_buy == 1 || entry.is_rent == 1 || entry.is_free == 1;
 	let coins = entry.buy_coin.max(entry.rent_coin);
 	let points = entry.buy_point.max(entry.rent_point);
 	if owned || (coins == 0 && points == 0) {
@@ -429,8 +440,12 @@ pub fn chapter_title(entry: &ChapterEntry) -> Option<String> {
 	} else {
 		format!("{points}點")
 	};
-	if let Some(date) = free_date_label(entry.free_date.as_deref()) {
-		note.push_str(&format!("・{date}免費"));
+	// `free_date` also lists windows that already opened, so the server's countdown is
+	// what decides whether there is a future unlock worth mentioning.
+	if entry.free_day.unwrap_or(0) > 0 {
+		if let Some(date) = free_date_label(entry.free_date.as_deref()) {
+			note.push_str(&format!("・{date}免費"));
+		}
 	}
 
 	Some(match base {
@@ -485,6 +500,7 @@ mod test {
 			name: Some(String::from("男性凝視")),
 			buy_coin: 6,
 			rent_point: 600,
+			free_day: Some(13),
 			free_date: Some(String::from(
 				"[[\"2026-10-05 20:00:00\", \"4000-01-01 00:00:00\"]]",
 			)),
@@ -494,6 +510,39 @@ mod test {
 			chapter_title(&entry),
 			Some(String::from("男性凝視・6金幣・10/5免費"))
 		);
+	}
+
+	/// Book 512 keeps `buy_coin: 6` on 41 back-catalogue chapters that are already free,
+	/// each still carrying the long-past date its free window opened. Pricing off the
+	/// coin fields alone labelled every one of them as paid.
+	#[aidoku_test]
+	fn already_free_chapters_carry_no_price() {
+		let entry = ChapterEntry {
+			name: Some(String::from("十年之後")),
+			buy_coin: 6,
+			is_free: 1,
+			free_day: Some(0),
+			free_date: Some(String::from(
+				"[[\"2025-11-24 20:00:00\", \"4000-01-01 00:00:00\"]]",
+			)),
+			..Default::default()
+		};
+		assert_eq!(chapter_title(&entry), Some(String::from("十年之後")));
+	}
+
+	/// A paid chapter with no upcoming unlock must not advertise a date that has passed.
+	#[aidoku_test]
+	fn a_past_free_window_is_not_advertised() {
+		let entry = ChapterEntry {
+			name: Some(String::from("某話")),
+			buy_coin: 6,
+			free_day: None,
+			free_date: Some(String::from(
+				"[[\"2025-11-24 20:00:00\", \"4000-01-01 00:00:00\"]]",
+			)),
+			..Default::default()
+		};
+		assert_eq!(chapter_title(&entry), Some(String::from("某話・6金幣")));
 	}
 
 	/// A chapter the reader already bought should not keep advertising its price.

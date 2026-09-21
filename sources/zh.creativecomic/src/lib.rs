@@ -353,6 +353,9 @@ impl NotificationHandler for CreativeComicSource {
 				let synced = auth::sync_from_web_view();
 				println!("[ccc] session sync succeeded: {synced}");
 			}
+			// The app's own login button never flips to "log out" for this site,
+			// because it tracks state through a callback CCC can never trigger.
+			"clearLogin" => auth::clear(),
 			_ => {}
 		}
 	}
