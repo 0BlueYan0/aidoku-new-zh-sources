@@ -30,6 +30,9 @@ const JUST_LOGGED_IN_KEY: &str = "justLoggedIn";
 /// settings footer can say what arrived when no token could be found - the app's
 /// delivery of `localStorageKeys` is undocumented and no shipped source relies on it.
 const SEEN_KEYS_KEY: &str = "webLoginKeys";
+/// How many times the web login view has called back. Distinguishes "never called" from
+/// "called but handed over nothing", which look identical otherwise.
+const CALL_COUNT_KEY: &str = "webLoginCalls";
 
 /// The site embeds this OAuth client in its web bundle.
 const CLIENT_ID: &str = "2";
@@ -163,11 +166,18 @@ fn request_token(pairs: &[(&str, &str)]) -> bool {
 /// than in a cookie, which is why `settings.json` asks for those keys. The app merges
 /// what it collected into this one map, so both are looked up here by name.
 pub fn capture_web_login(values: &HashMap<String, String>) -> bool {
-	// Record the key names (never the values) so a failed sign-in can be diagnosed from
-	// the settings screen instead of needing a log server.
+	// Record the call count and the key names (never the values) so a failed sign-in can
+	// be diagnosed from the settings screen instead of needing a log server.
+	let calls = defaults_get::<i32>(CALL_COUNT_KEY).unwrap_or(0) + 1;
+	defaults_set(CALL_COUNT_KEY, DefaultValue::Int(calls));
 	let mut seen: Vec<String> = values.keys().cloned().collect();
 	seen.sort();
-	defaults_set(SEEN_KEYS_KEY, DefaultValue::String(seen.join(", ")));
+	let summary = if seen.is_empty() {
+		String::from("（沒有任何項目）")
+	} else {
+		seen.join(", ")
+	};
+	defaults_set(SEEN_KEYS_KEY, DefaultValue::String(summary));
 
 	let access = values
 		.get("accessToken")
@@ -207,6 +217,7 @@ pub fn clear() {
 	defaults_set(REFRESH_TOKEN_KEY, DefaultValue::Null);
 	defaults_set(JUST_LOGGED_IN_KEY, DefaultValue::Null);
 	defaults_set(SEEN_KEYS_KEY, DefaultValue::Null);
+	defaults_set(CALL_COUNT_KEY, DefaultValue::Null);
 }
 
 /// Aidoku posts the same notification for signing in and signing out, so the flag set
@@ -234,11 +245,14 @@ pub fn account_footer() -> Option<String> {
 		// If the login view ran but left no token, name what it did hand over; that is
 		// the one clue available for why sign-in did not take.
 		if let Some(seen) = stored(SEEN_KEYS_KEY) {
+			let calls = defaults_get::<i32>(CALL_COUNT_KEY).unwrap_or(0);
 			return Some(format!(
-				"登入未完成：登入頁只交回了 {seen}，其中沒有 accessToken。請回報這行字。"
+				"登入未完成：登入頁回呼 {calls} 次，交回「{seen}」，其中沒有 accessToken。請回報這行字。"
 			));
 		}
-		return Some(String::from("尚未登入。登入後可閱讀已購買的付費章節。"));
+		return Some(String::from(
+			"尚未登入。（若你已在登入頁登入卻仍顯示這行，表示登入頁從未回呼圖源——CCC 不使用 cookie，而 Aidoku 的網頁登入是靠 cookie 更新觸發的）",
+		));
 	}
 
 	let member = match fetch_member() {
