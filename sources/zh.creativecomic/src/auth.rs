@@ -10,6 +10,7 @@ use aidoku::{
 	alloc::{String, Vec},
 	imports::{
 		defaults::{defaults_get, defaults_set, DefaultValue},
+		js::WebView,
 		net::Request,
 	},
 	prelude::*,
@@ -18,7 +19,7 @@ use aidoku::{
 use serde::Deserialize;
 
 use crate::crypto;
-use crate::helper::{read_envelope, API_URL, DEVICE, USER_AGENT};
+use crate::helper::{read_envelope, API_URL, BASE_URL, DEVICE, USER_AGENT};
 
 const UUID_KEY: &str = "guestUuid";
 const ACCESS_TOKEN_KEY: &str = "accessToken";
@@ -33,6 +34,8 @@ const SEEN_KEYS_KEY: &str = "webLoginKeys";
 /// How many times the web login view has called back. Distinguishes "never called" from
 /// "called but handed over nothing", which look identical otherwise.
 const CALL_COUNT_KEY: &str = "webLoginCalls";
+/// What the last storage sync saw, so a failure can be read off the settings screen.
+const SYNC_RESULT_KEY: &str = "syncResult";
 
 /// The site embeds this OAuth client in its web bundle.
 const CLIENT_ID: &str = "2";
@@ -212,12 +215,73 @@ pub fn refresh() -> bool {
 	])
 }
 
+fn read_storage(webview: &WebView, key: &str) -> Option<String> {
+	// Quoting is safe here: every key is a literal defined in this file.
+	let script = format!("localStorage.getItem('{key}') || ''");
+	let value = webview.eval(&script).ok()?;
+	let value = value.trim();
+	if value.is_empty() || value == "null" || value == "undefined" {
+		return None;
+	}
+	Some(String::from(value))
+}
+
+/// Pick the session up out of the login web view's storage.
+///
+/// Aidoku never calls `handle_web_login` for this site: that callback is driven by
+/// cookie updates and CCC sets no cookies at all, keeping its session in `localStorage`
+/// instead. The tokens do exist after signing in, so this drives a web view against the
+/// same origin and reads them out directly.
+pub fn sync_from_web_view() -> bool {
+	let webview = WebView::new();
+
+	let request = match Request::get(BASE_URL) {
+		Ok(request) => request.header("User-Agent", USER_AGENT),
+		Err(_) => {
+			defaults_set(
+				SYNC_RESULT_KEY,
+				DefaultValue::String(String::from("無法建立請求")),
+			);
+			return false;
+		}
+	};
+	if webview.load_blocking(request).is_err() {
+		defaults_set(
+			SYNC_RESULT_KEY,
+			DefaultValue::String(String::from("無法載入 CCC 網頁")),
+		);
+		return false;
+	}
+	webview.wait_for_load();
+
+	let Some(access) = read_storage(&webview, "accessToken") else {
+		// Reaching here means the web view loaded but its storage held no session -
+		// most likely the login view and this one do not share a data store.
+		defaults_set(
+			SYNC_RESULT_KEY,
+			DefaultValue::String(String::from(
+				"網頁已載入，但它的 localStorage 裡沒有 accessToken（登入頁與背景網頁可能不共用儲存空間）",
+			)),
+		);
+		return false;
+	};
+
+	defaults_set(ACCESS_TOKEN_KEY, DefaultValue::String(access));
+	if let Some(refresh) = read_storage(&webview, "refreshToken") {
+		defaults_set(REFRESH_TOKEN_KEY, DefaultValue::String(refresh));
+	}
+	defaults_set(JUST_LOGGED_IN_KEY, DefaultValue::Bool(true));
+	defaults_set(SYNC_RESULT_KEY, DefaultValue::Null);
+	true
+}
+
 pub fn clear() {
 	defaults_set(ACCESS_TOKEN_KEY, DefaultValue::Null);
 	defaults_set(REFRESH_TOKEN_KEY, DefaultValue::Null);
 	defaults_set(JUST_LOGGED_IN_KEY, DefaultValue::Null);
 	defaults_set(SEEN_KEYS_KEY, DefaultValue::Null);
 	defaults_set(CALL_COUNT_KEY, DefaultValue::Null);
+	defaults_set(SYNC_RESULT_KEY, DefaultValue::Null);
 }
 
 /// Aidoku posts the same notification for signing in and signing out, so the flag set
@@ -244,6 +308,9 @@ pub fn account_footer() -> Option<String> {
 	if !is_logged_in() {
 		// If the login view ran but left no token, name what it did hand over; that is
 		// the one clue available for why sign-in did not take.
+		if let Some(reason) = stored(SYNC_RESULT_KEY) {
+			return Some(format!("同步失敗：{reason}"));
+		}
 		if let Some(seen) = stored(SEEN_KEYS_KEY) {
 			let calls = defaults_get::<i32>(CALL_COUNT_KEY).unwrap_or(0);
 			return Some(format!(
@@ -251,7 +318,7 @@ pub fn account_footer() -> Option<String> {
 			));
 		}
 		return Some(String::from(
-			"尚未登入。（若你已在登入頁登入卻仍顯示這行，表示登入頁從未回呼圖源——CCC 不使用 cookie，而 Aidoku 的網頁登入是靠 cookie 更新觸發的）",
+			"尚未登入。請先用上方登入，再按「同步登入狀態」。",
 		));
 	}
 

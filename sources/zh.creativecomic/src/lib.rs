@@ -343,8 +343,17 @@ impl WebLoginHandler for CreativeComicSource {
 
 impl NotificationHandler for CreativeComicSource {
 	fn handle_notification(&self, notification: String) {
-		if notification == "login" {
-			auth::handle_login_notification();
+		match notification.as_str() {
+			"login" => auth::handle_login_notification(),
+			// The site keeps its session in localStorage and sets no cookies, so the
+			// web login callback never fires; this button reads the session across.
+			"syncLogin" => {
+				// The settings footer reports the reason when this fails, so there is
+				// nothing to branch on here.
+				let synced = auth::sync_from_web_view();
+				println!("[ccc] session sync succeeded: {synced}");
+			}
+			_ => {}
 		}
 	}
 }

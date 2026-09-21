@@ -2,7 +2,7 @@
 	{
 		"type": "group",
 		"title": "帳號",
-		"footer": "會開啟 CCC 的登入頁，email 或社群帳號都可以。本裝置只保存存取權杖，不保存密碼。",
+		"footer": "先用「登入」在 CCC 的登入頁登入，再按「同步登入狀態」把登入資訊帶回圖源。CCC 不使用 cookie，所以這一步必須手動觸發。",
 		"items": [
 			{
 				"type": "login",
@@ -18,6 +18,16 @@
 				"logoutTitle": "登出",
 				"clearCookiesOnLogOut": true,
 				"notification": "login",
+				"refreshes": [
+					"settings",
+					"listings",
+					"content"
+				]
+			},
+			{
+				"type": "button",
+				"title": "同步登入狀態",
+				"notification": "syncLogin",
 				"refreshes": [
 					"settings",
 					"listings",
