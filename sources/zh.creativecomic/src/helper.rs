@@ -287,13 +287,16 @@ pub fn read_envelope<T: serde::de::DeserializeOwned>(request: Request) -> Result
 /// than while a request is being assembled: the app runs a limited number of requests
 /// at once and nesting one inside another can wedge them all.
 pub fn api_get<T: serde::de::DeserializeOwned>(path: &str) -> Result<T> {
+	// Noted before sending, so the renewal below can tell "this token is dead" from
+	// "another request already replaced it while this one was in flight".
+	let used = auth::access_token();
 	match send_api(api_request(path)?) {
 		Outcome::Ok(data) => Ok(data),
 		Outcome::Unauthorized => {
 			// The stored token is dead. `recover_session` either renews it or drops
 			// it, so the retry goes out with a fresh token or as a guest - either way
 			// it is worth one more attempt before the source reports a failure.
-			auth::recover_session();
+			auth::recover_session(used.as_deref());
 			read_envelope(api_request(path)?)
 		}
 		Outcome::Unreachable(message) => Err(error!("{message}")),

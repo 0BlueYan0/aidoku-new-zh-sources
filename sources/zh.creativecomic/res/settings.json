@@ -28,7 +28,6 @@
 				"type": "button",
 				"title": "同步登入狀態",
 				"notification": "syncLogin",
-				"requiresFalse": "loggedIn",
 				"refreshes": [
 					"settings",
 					"listings",
@@ -42,7 +41,6 @@
 				"destructive": true,
 				"confirmTitle": "清除登入狀態",
 				"confirmText": "這會同時登出 CCC 網站，之後要重新登入才能讀取已購買的章節。",
-				"requires": "loggedIn",
 				"refreshes": [
 					"settings",
 					"listings",

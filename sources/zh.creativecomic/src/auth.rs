@@ -22,7 +22,6 @@ use aidoku::{
 	prelude::*,
 	HashMap,
 };
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde::Deserialize;
 
 use crate::crypto;
@@ -31,9 +30,6 @@ use crate::helper::{api_request, read_envelope, send_api, Outcome, API_URL, BASE
 const UUID_KEY: &str = "guestUuid";
 const ACCESS_TOKEN_KEY: &str = "accessToken";
 const REFRESH_TOKEN_KEY: &str = "refreshToken";
-/// Unix seconds at which the stored access token stops being accepted, when that is
-/// knowable. Absent for a token whose lifetime the site never told us.
-const EXPIRES_AT_KEY: &str = "tokenExpiresAt";
 /// When renewal last failed to reach the server, so it is not retried on every request.
 const FAILED_AT_KEY: &str = "tokenFailedAt";
 /// Set when the session is dead and cannot be renewed, so the settings footer can say
@@ -59,8 +55,6 @@ const SYNC_RESULT_KEY: &str = "syncResult";
 const CLIENT_ID: &str = "2";
 const CLIENT_SECRET: &str = "9eAhsCX3VWtyqTmkUo5EEaoH4MNPxrn6ZRwse7tE";
 
-/// Renew this many seconds before the stored expiry, so a token cannot die in flight.
-const EXPIRY_MARGIN: i64 = 60;
 /// How long to wait after renewal could not reach the server before trying again.
 const FAIL_BACKOFF: i64 = 600;
 /// How long after a captured sign-in the `login` notification still means "just signed
@@ -70,26 +64,12 @@ const JUST_LOGGED_IN_TTL: i64 = 60;
 /// The localStorage entries CCC keeps its session in.
 const SESSION_STORAGE_KEYS: [&str; 3] = ["accessToken", "refreshToken", "userId"];
 
-/// Mirrors "is there a session on this device" as a plain bool, purely so
-/// `settings.json` can point `requires` / `requiresFalse` at it and grey out the button
-/// that would do nothing. The app offers no busy state for a button, so which of the two
-/// is tappable is the clearest signal available that the last press did something.
-const LOGGED_IN_FLAG_KEY: &str = "loggedIn";
-
-fn set_logged_in_flag(value: bool) {
-	defaults_set(LOGGED_IN_FLAG_KEY, DefaultValue::Bool(value));
-}
-
 #[derive(Deserialize)]
 struct TokenResponse {
 	#[serde(default)]
 	access_token: Option<String>,
 	#[serde(default)]
 	refresh_token: Option<String>,
-	/// Seconds the new access token is good for. Absent on some grants, in which case
-	/// the token's own `exp` claim is used instead.
-	#[serde(default)]
-	expires_in: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -142,45 +122,14 @@ pub fn image_secret() -> String {
 // Token storage
 // ---------------------------------------------------------------------------
 
-/// Read the `exp` claim out of a JWT payload without pulling in a JWT crate.
+/// Store an access token.
 ///
-/// The tokens CCC issues are opaque to us, so this is best effort: anything that does
-/// not parse leaves the expiry unknown and the session falls back to renewing when a
-/// request comes back 401.
-fn jwt_expiry(token: &str) -> Option<i64> {
-	let payload = token.split('.').nth(1)?;
-	let decoded = URL_SAFE_NO_PAD.decode(payload).ok()?;
-	let text = String::from_utf8(decoded).ok()?;
-	let marker = text.find("\"exp\"")?;
-	let digits: String = text[marker + 5..]
-		.chars()
-		.take(32)
-		.skip_while(|character| !character.is_ascii_digit())
-		.take_while(|character| character.is_ascii_digit())
-		.collect();
-	digits.parse::<i64>().ok()
-}
-
-/// Store an access token together with whatever is known about when it dies.
-fn store_access_token(access: &str, expires_in: Option<i64>) {
+/// No expiry is derived or kept. Renewing ahead of time would mean a blocking call to
+/// the token endpoint at the top of every entry point, which is the one thing the app's
+/// request limit cannot take; a dead token is caught by the 401 handling in `api_get`
+/// instead, which runs only after a request has already come back.
+fn set_access_token(access: &str) {
 	defaults_set(ACCESS_TOKEN_KEY, DefaultValue::String(String::from(access)));
-	set_logged_in_flag(true);
-	// Prefer the server's own countdown; fall back to the token's `exp` claim, which is
-	// the only thing available for a session picked up out of the web view.
-	//
-	// An expiry already in the past is discarded rather than stored: a misread claim or
-	// a skewed device clock would otherwise make `ensure_session` renew on every single
-	// entry point, rotating the refresh token on each request with nothing to stop it.
-	// Not knowing when the token dies is safe - that falls back to renewing on the
-	// first 401 - while believing it died an hour ago is not.
-	let expires_at = expires_in
-		.map(|seconds| current_date() + seconds)
-		.or_else(|| jwt_expiry(access))
-		.filter(|expires_at| *expires_at > current_date());
-	match expires_at {
-		Some(value) => set_timestamp(EXPIRES_AT_KEY, value),
-		None => defaults_set(EXPIRES_AT_KEY, DefaultValue::Null),
-	}
 }
 
 // ---------------------------------------------------------------------------
@@ -190,14 +139,17 @@ fn store_access_token(access: &str, expires_in: Option<i64>) {
 /// Fetch a guest uuid once and keep it, mirroring what the website stores in
 /// localStorage. A fresh uuid per launch would look like a flood of new visitors.
 ///
-/// This runs even while signed in, so that a session which dies later can fall straight
-/// back to guest browsing instead of failing every request.
+/// Signed in, this does nothing at all: the bearer token is the credential and no
+/// request is made. That matters more than having a guest uuid ready in reserve - this
+/// runs at the top of every entry point, and a blocking request there is multiplied by
+/// however many entry points the app is running at once. A session that later dies is
+/// dropped by `recover_session`, and the entry point after that fetches the uuid.
 ///
 /// This must only be called from the top of a `Source` entry point, never while another
 /// request is being assembled: it blocks on a request of its own, and the app runs a
 /// limited number of requests at once, so nesting one inside another can wedge them all.
 pub fn ensure_guest_uuid() {
-	if stored(UUID_KEY).is_some() {
+	if is_logged_in() || stored(UUID_KEY).is_some() {
 		return;
 	}
 	if fetch_guest_uuid().is_none() {
@@ -223,8 +175,8 @@ fn fetch_guest_uuid() -> Option<String> {
 /// Attach whichever credential this install has.
 ///
 /// Deliberately does no networking: this runs while a request is being built, and
-/// fetching the uuid here would block that request on another one. `prepare` handles
-/// that at the entry points instead.
+/// fetching the uuid here would block that request on another one. `ensure_guest_uuid`
+/// handles that at the entry points instead.
 pub fn authorize(request: Request) -> Request {
 	let mut request = request;
 	if let Some(token) = access_token() {
@@ -234,28 +186,6 @@ pub fn authorize(request: Request) -> Request {
 		request.set_header("uuid", uuid.as_str());
 	}
 	request
-}
-
-/// Run at the top of every `Source` entry point, before any request is assembled.
-pub fn prepare() {
-	ensure_session();
-	ensure_guest_uuid();
-}
-
-/// Renew the session before a request can fail on it.
-///
-/// Reads only defaults unless the stored token is already past its expiry, so the usual
-/// case costs nothing at all. A token whose lifetime is unknown is left to the 401
-/// handling in `api_get`.
-fn ensure_session() {
-	if !is_logged_in() {
-		return;
-	}
-	let expires_at = timestamp(EXPIRES_AT_KEY);
-	if expires_at == 0 || current_date() < expires_at - EXPIRY_MARGIN {
-		return;
-	}
-	recover_session();
 }
 
 // ---------------------------------------------------------------------------
@@ -320,7 +250,7 @@ fn request_token(pairs: &[(&str, &str)]) -> TokenOutcome {
 		return refused(status);
 	};
 
-	store_access_token(&access, parsed.expires_in);
+	set_access_token(&access);
 	if let Some(refresh) = parsed.refresh_token.filter(|value| !value.is_empty()) {
 		defaults_set(REFRESH_TOKEN_KEY, DefaultValue::String(refresh));
 	}
@@ -363,10 +293,17 @@ fn refresh() -> TokenOutcome {
 /// other four are refused with a token that is merely superseded - dropping the session
 /// on that would undo the renewal that just worked. The stored token is therefore
 /// compared before and after, and only a session that nobody replaced is cleared.
-pub fn recover_session() -> bool {
+pub fn recover_session(used: Option<&str>) -> bool {
 	let Some(before) = access_token() else {
 		return false;
 	};
+
+	// Another request already renewed while this one was in flight, so the retry only
+	// needs to go out with the token that is stored now. Without this, one expiry during
+	// a library refresh becomes five simultaneous calls to the token endpoint.
+	if used.is_some_and(|used| used != before) {
+		return true;
+	}
 
 	let now = current_date();
 	if now - timestamp(FAILED_AT_KEY) < FAIL_BACKOFF {
@@ -432,7 +369,7 @@ pub fn capture_web_login(values: &HashMap<String, String>) -> bool {
 		return false;
 	};
 
-	store_access_token(&access, None);
+	set_access_token(&access);
 	if let Some(refresh) = values
 		.get("refreshToken")
 		.filter(|value| !value.is_empty())
@@ -494,7 +431,7 @@ pub fn sync_from_web_view() -> bool {
 		return false;
 	};
 
-	store_access_token(&access, None);
+	set_access_token(&access);
 	if let Some(refresh) = read_storage(&webview, "refreshToken") {
 		defaults_set(REFRESH_TOKEN_KEY, DefaultValue::String(refresh));
 	}
@@ -506,10 +443,8 @@ pub fn sync_from_web_view() -> bool {
 
 /// Forget the session on this device.
 pub fn clear() {
-	set_logged_in_flag(false);
 	defaults_set(ACCESS_TOKEN_KEY, DefaultValue::Null);
 	defaults_set(REFRESH_TOKEN_KEY, DefaultValue::Null);
-	defaults_set(EXPIRES_AT_KEY, DefaultValue::Null);
 	defaults_set(FAILED_AT_KEY, DefaultValue::Null);
 	defaults_set(NEEDS_RELOGIN_KEY, DefaultValue::Null);
 	defaults_set(JUST_LOGGED_IN_KEY, DefaultValue::Null);
@@ -580,7 +515,7 @@ pub fn handle_login_notification() {
 		return;
 	}
 	println!("[ccc] logged out");
-	clear_web_session();
+	clear();
 }
 
 // ---------------------------------------------------------------------------
@@ -643,12 +578,13 @@ pub fn account_footer() -> Option<String> {
 		return None;
 	}
 
+	let used = access_token();
 	match fetch_member() {
 		Outcome::Ok(member) => Some(describe(member)),
 		// The token is dead. The reader is right here waiting, so renew it now and say
 		// plainly which of the two failures happened if it does not work.
 		Outcome::Unauthorized => {
-			if recover_session() {
+			if recover_session(used.as_deref()) {
 				if let Outcome::Ok(member) = fetch_member() {
 					return Some(describe(member));
 				}
@@ -667,30 +603,3 @@ pub fn account_footer() -> Option<String> {
 	}
 }
 
-#[cfg(test)]
-mod test {
-	use super::*;
-	use aidoku_test::aidoku_test;
-
-	/// A Laravel Passport access token, whose payload carries `exp`. Reading it is what
-	/// lets a session synced out of the web view - which comes with no `expires_in` -
-	/// be renewed before a request fails on it.
-	const JWT_WITH_EXP: &str = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiIyIiwianRpIjoiYWJjIiwiaWF0IjoxNzg5MDAwMDAwLCJuYmYiOjE3ODkwMDAwMDAsImV4cCI6MTc5MDAwMDAwMCwic3ViIjoiNDIiLCJzY29wZXMiOltdfQ.sig";
-	const JWT_WITHOUT_EXP: &str =
-		"eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiIyIiwic3ViIjoiNDIifQ.sig";
-
-	#[aidoku_test]
-	fn reads_the_expiry_out_of_a_jwt() {
-		assert_eq!(jwt_expiry(JWT_WITH_EXP), Some(1790000000));
-	}
-
-	/// Anything unreadable has to leave the expiry unknown rather than guess one: an
-	/// invented expiry in the past would renew a perfectly good session on every call.
-	#[aidoku_test]
-	fn an_unreadable_token_has_no_known_expiry() {
-		assert_eq!(jwt_expiry(JWT_WITHOUT_EXP), None);
-		assert_eq!(jwt_expiry("not-a-jwt"), None);
-		assert_eq!(jwt_expiry(""), None);
-		assert_eq!(jwt_expiry("a.!!!!.c"), None);
-	}
-}
