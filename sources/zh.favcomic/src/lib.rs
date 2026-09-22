@@ -289,6 +289,11 @@ impl DeepLinkHandler for FavComicSource {
 
 impl BasicLoginHandler for FavComicSource {
 	fn handle_basic_login(&self, _key: String, username: String, password: String) -> Result<bool> {
+		// Answering with an error here changes nothing: the login dialog shows the app's
+		// own wording whatever the source returns (verified on device 2026-09-22), and
+		// the source cannot ask for the settings page to be redrawn either. So a login
+		// failure has to be explained by the static footer in `settings.json`, which is
+		// always drawn, rather than from here.
 		Ok(auth::handle_login(&username, &password))
 	}
 }
@@ -309,16 +314,28 @@ impl DynamicSettings for FavComicSource {
 	///
 	/// The balance and quota numbers only exist on the site, and a reader who cannot see them
 	/// has no way to tell a working session from a lapsed one.
+	/// Never answers with an empty list: a source that hands the app no dynamic settings
+	/// gets a settings screen whose buttons stop responding, which reads as the whole
+	/// source having frozen. Signed out this makes no request either - the hint is a
+	/// constant, while `account_footer` fetches the account page.
 	fn get_dynamic_settings(&self) -> Result<Vec<Setting>> {
-		if auth::credentials().is_none() {
-			return Ok(Vec::new());
-		}
+		let footer = if auth::hit_device_limit() {
+			// The app shows the same generic failure whatever went wrong, so without
+			// this a correct password reads as a wrong one.
+			String::from(
+				"登入失敗：這個帳號同時登入的裝置已達站方上限（實測 3 台）。\n請到喜漫網站登入，按「清除其他設備並重新登入」（需要輸入寄到 email 的 6 位驗證碼），再回來這裡登入。App 內無法解除。",
+			)
+		} else if auth::credentials().is_some() {
+			auth::account_footer()
+		} else {
+			String::from("尚未登入。登入後可在這裡看到金幣、優惠券與會員狀態。")
+		};
 
 		Ok(vec![GroupSetting {
 			key: "accountInfo".into(),
 			title: "帳號資訊".into(),
 			items: Vec::new(),
-			footer: Some(auth::account_footer().into()),
+			footer: Some(footer.into()),
 			..Default::default()
 		}
 		.into()])

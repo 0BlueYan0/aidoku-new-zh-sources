@@ -402,6 +402,10 @@ impl NotificationHandler for KomiicSource {
 /// login row still says "logged in" then, so the user has to be told to log out
 /// first.
 const RELOGIN_HINT: &str = "登入已失效或密碼已變更，請先登出再重新登入";
+/// Shown while signed out. The group cannot simply be left out: a source that hands the
+/// app an empty list of dynamic settings gets a settings screen whose buttons stop
+/// responding, which reads as the whole source having frozen.
+const SIGNED_OUT_HINT: &str = "尚未登入。訪客每日的圖片額度有限，登入後可在這裡看到自己的額度。";
 
 /// Account summary shown under the login row. This is also the only honest
 /// signal of login state in the UI: the app's own login row just records that a
@@ -441,29 +445,25 @@ fn account_footer() -> String {
 }
 
 impl DynamicSettings for KomiicSource {
+	/// Never answers with an empty list - see `SIGNED_OUT_HINT`. Signed out, this makes
+	/// no request either: the hint is a constant.
 	fn get_dynamic_settings(&self) -> Result<Vec<Setting>> {
 		let footer = if auth::needs_relogin() {
-			Some(String::from(RELOGIN_HINT))
+			String::from(RELOGIN_HINT)
 		} else if auth::token().is_some() {
-			Some(account_footer())
+			account_footer()
 		} else {
-			None
+			String::from(SIGNED_OUT_HINT)
 		};
 
-		let mut settings: Vec<Setting> = Vec::new();
-		if let Some(footer) = footer {
-			settings.push(
-				GroupSetting {
-					key: "accountInfo".into(),
-					title: "帳號資訊".into(),
-					items: Vec::new(),
-					footer: Some(footer.into()),
-					..Default::default()
-				}
-				.into(),
-			);
+		Ok(aidoku::alloc::vec![GroupSetting {
+			key: "accountInfo".into(),
+			title: "帳號資訊".into(),
+			items: Vec::new(),
+			footer: Some(footer.into()),
+			..Default::default()
 		}
-		Ok(settings)
+		.into()])
 	}
 }
 

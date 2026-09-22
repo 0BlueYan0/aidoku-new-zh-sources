@@ -1,0 +1,43 @@
+{
+	"info": {
+		"id": "zh.creativecomic",
+		"name": "CCC追漫台",
+		"version": 1,
+		"url": "https://www.creative-comic.tw",
+		"contentRating": 0,
+		"languages": [
+			"zh"
+		],
+		"minAppVersion": "0.7.1"
+	},
+	"config": {
+		"supportsAuthorSearch": true,
+		"supportsTagSearch": true
+	},
+	"listings": [
+		{
+			"id": "update",
+			"name": "最新更新"
+		},
+		{
+			"id": "week",
+			"name": "本週更新"
+		},
+		{
+			"id": "month",
+			"name": "本月更新"
+		},
+		{
+			"id": "read",
+			"name": "閱覽排行"
+		},
+		{
+			"id": "like",
+			"name": "推薦排行"
+		},
+		{
+			"id": "collect",
+			"name": "收藏排行"
+		}
+	]
+}

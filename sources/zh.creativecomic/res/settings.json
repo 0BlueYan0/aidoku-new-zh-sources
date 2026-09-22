@@ -1,0 +1,52 @@
+[
+	{
+		"type": "group",
+		"title": "帳號",
+		"footer": "登入後按「同步登入狀態」，下方出現「帳號資訊」（暱稱、金幣、點數）就是成功了。\n※ 登入頁最後會出現紅色驚嘆號，那不代表登入失敗 —— 直接關掉登入頁，再按「同步登入狀態」即可。\n登出請按「清除登入狀態」。付費章節只能在 CCC 網站購買或租借，App 內無法直接購買。",
+		"items": [
+			{
+				"type": "login",
+				"key": "login",
+				"title": "登入",
+				"method": "web",
+				"url": "https://www.creative-comic.tw/zh/login",
+				"localStorageKeys": [
+					"accessToken",
+					"refreshToken",
+					"userId"
+				],
+				"logoutTitle": "登出",
+				"clearCookiesOnLogOut": true,
+				"notification": "login",
+				"refreshes": [
+					"settings",
+					"listings",
+					"content"
+				]
+			},
+			{
+				"type": "button",
+				"title": "同步登入狀態",
+				"notification": "syncLogin",
+				"refreshes": [
+					"settings",
+					"listings",
+					"content"
+				]
+			},
+			{
+				"type": "button",
+				"title": "清除登入狀態",
+				"notification": "clearLogin",
+				"destructive": true,
+				"confirmTitle": "清除登入狀態",
+				"confirmText": "清除後要重新登入才能讀取已購買的章節。",
+				"refreshes": [
+					"settings",
+					"listings",
+					"content"
+				]
+			}
+		]
+	}
+]
