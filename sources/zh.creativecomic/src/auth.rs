@@ -12,6 +12,7 @@ use aidoku::{
 		defaults::{defaults_get, defaults_set, DefaultValue},
 		js::WebView,
 		net::Request,
+		std::current_date,
 	},
 	prelude::*,
 	HashMap,
@@ -36,6 +37,18 @@ const SEEN_KEYS_KEY: &str = "webLoginKeys";
 const CALL_COUNT_KEY: &str = "webLoginCalls";
 /// What the last storage sync saw, so a failure can be read off the settings screen.
 const SYNC_RESULT_KEY: &str = "syncResult";
+/// Unix seconds before which `ensure_session` does nothing at all. This gate is what
+/// keeps automatic renewal affordable - see that function.
+const NEXT_CHECK_KEY: &str = "sessionNextCheck";
+/// Set when the stored session is dead and the refresh token cannot revive it.
+const NEEDS_RELOGIN_KEY: &str = "needsRelogin";
+
+/// How long a session that just answered is trusted before being probed again.
+const CHECK_INTERVAL: i64 = 1800;
+/// How soon to probe again when the probe itself could not reach the server.
+const PROBE_RETRY: i64 = 60;
+/// How long to wait after the token endpoint refused to renew.
+const FAIL_BACKOFF: i64 = 600;
 
 /// The OAuth client the site embeds in its own web bundle. Both values are served to
 /// every visitor of creative-comic.tw, so neither is a secret; they are reproduced here
@@ -65,6 +78,22 @@ struct Member {
 
 fn stored(key: &str) -> Option<String> {
 	defaults_get::<String>(key).filter(|value| !value.is_empty())
+}
+
+/// Unix seconds stored as a string, so the value cannot overflow an i32.
+fn timestamp(key: &str) -> i64 {
+	defaults_get::<String>(key)
+		.and_then(|value| value.parse::<i64>().ok())
+		.unwrap_or(0)
+}
+
+fn set_timestamp(key: &str, value: i64) {
+	defaults_set(key, DefaultValue::String(format!("{value}")));
+}
+
+/// Set when the stored session is dead and nothing on the device can revive it.
+pub fn needs_relogin() -> bool {
+	defaults_get::<bool>(NEEDS_RELOGIN_KEY).unwrap_or(false)
 }
 
 pub fn access_token() -> Option<String> {
@@ -109,6 +138,77 @@ fn fetch_guest_uuid() -> Option<String> {
 	Some(uuid)
 }
 
+/// What a probe of the stored session found.
+enum Probe {
+	/// The session is still accepted.
+	Live,
+	/// CCC refused it. A dead token is refused on every endpoint, not just this one.
+	Dead,
+	/// No usable answer, which says nothing about the session.
+	Unknown,
+}
+
+/// Ask CCC whether the stored token is still accepted.
+fn probe_session() -> Probe {
+	let Ok(request) = crate::helper::api_request("/member") else {
+		return Probe::Unknown;
+	};
+	let Ok(response) = request.send() else {
+		return Probe::Unknown;
+	};
+	match response.status_code() {
+		200 => Probe::Live,
+		401 => Probe::Dead,
+		_ => Probe::Unknown,
+	}
+}
+
+/// Keep the session alive while the reader browses, so an expired token does not simply
+/// stop the source until someone opens the settings screen.
+///
+/// Called from the top of every `Source` entry point, which is only affordable because of
+/// the gate: while the session was verified recently this reads two defaults and returns.
+/// **Every branch below moves the gate forward.** An earlier attempt renewed from inside
+/// `api_get` with no gate at all, so a dead token - which CCC refuses on *every* endpoint -
+/// meant one token request per content request, and the home screen alone issues eight.
+/// The cost of an ungated renewal is multiplied by the number of entry points, which is
+/// what turns it from an optimisation into a freeze.
+///
+/// Same shape as `zh.komiic`'s `ensure_session`, deliberately.
+pub fn ensure_session() {
+	if !is_logged_in() || needs_relogin() {
+		return;
+	}
+
+	let now = current_date();
+	if now < timestamp(NEXT_CHECK_KEY) {
+		return;
+	}
+	// Moved before the probe so that entry points running at the same time do not each
+	// send one; whichever gets here first speaks for all of them.
+	set_timestamp(NEXT_CHECK_KEY, now + PROBE_RETRY);
+
+	match probe_session() {
+		Probe::Live => set_timestamp(NEXT_CHECK_KEY, now + CHECK_INTERVAL),
+		Probe::Dead => match refresh() {
+			TokenOutcome::Renewed => {
+				println!("[ccc] session renewed");
+				set_timestamp(NEXT_CHECK_KEY, now + CHECK_INTERVAL);
+			}
+			TokenOutcome::Rejected => {
+				// Nothing on the device can revive this. Drop it so browsing carries on
+				// as a guest, and let the settings footer explain.
+				println!("[ccc] session cannot be renewed, falling back to guest");
+				clear();
+				defaults_set(NEEDS_RELOGIN_KEY, DefaultValue::Bool(true));
+			}
+			TokenOutcome::Unreachable => set_timestamp(NEXT_CHECK_KEY, now + FAIL_BACKOFF),
+		},
+		// Says nothing about the session, so try again soon rather than acting on it.
+		Probe::Unknown => set_timestamp(NEXT_CHECK_KEY, now + PROBE_RETRY),
+	}
+}
+
 /// Attach whichever credential this install has.
 ///
 /// Deliberately does no networking: this runs while a request is being built, and
@@ -139,7 +239,17 @@ fn form_encode(pairs: &[(&str, &str)]) -> String {
 }
 
 /// POST the OAuth token endpoint. Returns true when new tokens were stored.
-fn request_token(pairs: &[(&str, &str)]) -> bool {
+enum TokenOutcome {
+	/// New tokens were issued and stored.
+	Renewed,
+	/// The server answered and refused. CCC replies `410 Cannot decrypt the refresh
+	/// token` for one that is invalid or already spent.
+	Rejected,
+	/// No usable answer; worth retrying later.
+	Unreachable,
+}
+
+fn request_token(pairs: &[(&str, &str)]) -> TokenOutcome {
 	let url = format!("{API_URL}/token");
 	let body = form_encode(pairs);
 	let request = match Request::post(&url) {
@@ -151,29 +261,45 @@ fn request_token(pairs: &[(&str, &str)]) -> bool {
 			.body(body),
 		Err(_) => {
 			println!("[ccc] ERROR building the token request");
-			return false;
+			return TokenOutcome::Unreachable;
 		}
 	};
 
-	// The endpoint answers with a bare OAuth2 payload rather than the usual envelope.
-	let response: TokenResponse = match request.json_owned() {
+	let response = match request.send() {
 		Ok(response) => response,
 		Err(_) => {
-			println!("[ccc] ERROR the token endpoint did not return a usable payload");
-			return false;
+			println!("[ccc] ERROR the token endpoint could not be reached");
+			return TokenOutcome::Unreachable;
+		}
+	};
+	let status = response.status_code();
+
+	// A 4xx is CCC saying no - a spent refresh token comes back `410 Cannot decrypt the
+	// refresh token`. Anything else is worth retrying, so the two are told apart by the
+	// status rather than by the absence of a token.
+	let refused = |status: i32| {
+		if (400..500).contains(&status) {
+			println!("[ccc] the token endpoint refused the grant (HTTP {status})");
+			TokenOutcome::Rejected
+		} else {
+			println!("[ccc] ERROR the token endpoint returned no access token (HTTP {status})");
+			TokenOutcome::Unreachable
 		}
 	};
 
-	let Some(access) = response.access_token.filter(|value| !value.is_empty()) else {
-		println!("[ccc] ERROR the token endpoint returned no access token");
-		return false;
+	// A successful grant answers with a bare OAuth2 payload rather than the usual envelope.
+	let Ok(parsed) = response.get_json_owned::<TokenResponse>() else {
+		return refused(status);
+	};
+	let Some(access) = parsed.access_token.clone().filter(|value| !value.is_empty()) else {
+		return refused(status);
 	};
 
 	defaults_set(ACCESS_TOKEN_KEY, DefaultValue::String(access));
-	if let Some(refresh) = response.refresh_token.filter(|value| !value.is_empty()) {
+	if let Some(refresh) = parsed.refresh_token.filter(|value| !value.is_empty()) {
 		defaults_set(REFRESH_TOKEN_KEY, DefaultValue::String(refresh));
 	}
-	true
+	TokenOutcome::Renewed
 }
 
 /// Take the tokens out of whatever the web login view handed over.
@@ -211,14 +337,17 @@ pub fn capture_web_login(values: &HashMap<String, String>) -> bool {
 	{
 		defaults_set(REFRESH_TOKEN_KEY, DefaultValue::String(refresh));
 	}
+	defaults_set(NEEDS_RELOGIN_KEY, DefaultValue::Null);
+	defaults_set(NEXT_CHECK_KEY, DefaultValue::Null);
 	defaults_set(JUST_LOGGED_IN_KEY, DefaultValue::Bool(true));
 	true
 }
 
 /// Swap the refresh token for a fresh pair. Returns true when it worked.
-pub fn refresh() -> bool {
+fn refresh() -> TokenOutcome {
 	let Some(refresh_token) = stored(REFRESH_TOKEN_KEY) else {
-		return false;
+		// Nothing to renew with, and nothing will change that on its own.
+		return TokenOutcome::Rejected;
 	};
 	request_token(&[
 		("grant_type", "refresh_token"),
@@ -291,6 +420,8 @@ pub fn sync_from_web_view() -> bool {
 	if let Some(refresh) = read_storage(&webview, "refreshToken") {
 		defaults_set(REFRESH_TOKEN_KEY, DefaultValue::String(refresh));
 	}
+	defaults_set(NEEDS_RELOGIN_KEY, DefaultValue::Null);
+	defaults_set(NEXT_CHECK_KEY, DefaultValue::Null);
 	defaults_set(JUST_LOGGED_IN_KEY, DefaultValue::Bool(true));
 	defaults_set(SYNC_RESULT_KEY, DefaultValue::Null);
 	true
@@ -360,6 +491,8 @@ pub fn clear_web_session() {
 }
 
 pub fn clear() {
+	defaults_set(NEXT_CHECK_KEY, DefaultValue::Null);
+	defaults_set(NEEDS_RELOGIN_KEY, DefaultValue::Null);
 	defaults_set(ACCESS_TOKEN_KEY, DefaultValue::Null);
 	defaults_set(REFRESH_TOKEN_KEY, DefaultValue::Null);
 	defaults_set(JUST_LOGGED_IN_KEY, DefaultValue::Null);
@@ -395,6 +528,11 @@ fn fetch_member() -> Option<Member> {
 /// The balances, once signed in, are also the only visible proof that signing in worked,
 /// so a failure names the next step rather than going blank.
 pub fn account_footer() -> Option<String> {
+	if needs_relogin() {
+		return Some(String::from(
+			"登入已失效且無法自動恢復，請按「清除登入狀態」後重新登入。",
+		));
+	}
 	if !is_logged_in() {
 		// Signed out: nothing to fetch, and defaults are all this needs to read.
 		if let Some(reason) = stored(SYNC_RESULT_KEY) {
@@ -415,9 +553,17 @@ pub fn account_footer() -> Option<String> {
 
 	let member = match fetch_member() {
 		Some(member) => Some(member),
-		// A stale access token is the usual cause, so try the refresh token once.
-		None if refresh() => fetch_member(),
-		None => None,
+		// A stale token is the usual cause. The gate is cleared first so the check is not
+		// skipped just because one ran recently - the reader is here now, looking at it.
+		None => {
+			defaults_set(NEXT_CHECK_KEY, DefaultValue::Null);
+			ensure_session();
+			if is_logged_in() {
+				fetch_member()
+			} else {
+				None
+			}
+		}
 	};
 
 	let Some(member) = member else {

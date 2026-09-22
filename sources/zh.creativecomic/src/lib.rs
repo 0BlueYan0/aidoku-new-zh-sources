@@ -84,6 +84,7 @@ impl Source for CreativeComicSource {
 		page: i32,
 		filters: Vec<FilterValue>,
 	) -> Result<MangaPageResult> {
+		auth::ensure_session();
 		auth::ensure_guest_uuid();
 
 		let mut keyword = query;
@@ -138,6 +139,7 @@ impl Source for CreativeComicSource {
 		needs_details: bool,
 		needs_chapters: bool,
 	) -> Result<Manga> {
+		auth::ensure_session();
 		auth::ensure_guest_uuid();
 
 		if needs_details {
@@ -161,6 +163,7 @@ impl Source for CreativeComicSource {
 	}
 
 	fn get_page_list(&self, _manga: Manga, chapter: Chapter) -> Result<Vec<Page>> {
+		auth::ensure_session();
 		auth::ensure_guest_uuid();
 
 		// Paid chapters answer 403 here, with no page list at all.
@@ -225,6 +228,7 @@ impl Source for CreativeComicSource {
 
 impl ListingProvider for CreativeComicSource {
 	fn get_manga_list(&self, listing: Listing, page: i32) -> Result<MangaPageResult> {
+		auth::ensure_session();
 		auth::ensure_guest_uuid();
 
 		let Some((sort_by, window)) = listing_query(&listing.id) else {
@@ -237,6 +241,7 @@ impl ListingProvider for CreativeComicSource {
 
 impl Home for CreativeComicSource {
 	fn get_home(&self) -> Result<HomeLayout> {
+		auth::ensure_session();
 		auth::ensure_guest_uuid();
 
 		// Send an empty skeleton first so the home screen lays out immediately, then
@@ -427,6 +432,7 @@ impl DeepLinkHandler for CreativeComicSource {
 				// The only branch that makes a request, so the credential is set up here
 				// rather than at the top: without one CCC answers `403 uuid錯誤`, and a
 				// deep link is exactly what a fresh install reaches first.
+				auth::ensure_session();
 				auth::ensure_guest_uuid();
 				let content: ChapterContent = api_get(&format!("/book/chapter/{key}"))?;
 				if let Some(detail) = content.chapter {
