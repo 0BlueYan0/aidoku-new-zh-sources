@@ -228,6 +228,27 @@ pub fn refresh() -> bool {
 	])
 }
 
+/// The localStorage entries CCC keeps its session in.
+const SESSION_STORAGE_KEYS: [&str; 3] = ["accessToken", "refreshToken", "userId"];
+
+/// Open the site in a background web view, on the same origin as the login page.
+///
+/// Two details matter and both have bitten us:
+///
+/// * `BASE_URL` redirects to `/zh/`, so the language-prefixed url is loaded directly and
+///   the web view performs one navigation instead of two.
+/// * `load_blocking` already returns once the page has loaded. Calling `wait_for_load`
+///   after it was waiting for a *second* load that, with no redirect left to follow,
+///   never comes - and that call has no timeout and returns no error, so it simply never
+///   came back and the app froze with it.
+fn open_site() -> Option<WebView> {
+	let webview = WebView::new();
+	let url = format!("{BASE_URL}/zh/");
+	let request = Request::get(&url).ok()?.header("User-Agent", USER_AGENT);
+	webview.load_blocking(request).ok()?;
+	Some(webview)
+}
+
 fn read_storage(webview: &WebView, key: &str) -> Option<String> {
 	// Quoting is safe here: every key is a literal defined in this file.
 	let script = format!("localStorage.getItem('{key}') || ''");
@@ -246,26 +267,13 @@ fn read_storage(webview: &WebView, key: &str) -> Option<String> {
 /// instead. The tokens do exist after signing in, so this drives a web view against the
 /// same origin and reads them out directly.
 pub fn sync_from_web_view() -> bool {
-	let webview = WebView::new();
-
-	let request = match Request::get(BASE_URL) {
-		Ok(request) => request.header("User-Agent", USER_AGENT),
-		Err(_) => {
-			defaults_set(
-				SYNC_RESULT_KEY,
-				DefaultValue::String(String::from("無法建立請求")),
-			);
-			return false;
-		}
-	};
-	if webview.load_blocking(request).is_err() {
+	let Some(webview) = open_site() else {
 		defaults_set(
 			SYNC_RESULT_KEY,
-			DefaultValue::String(String::from("無法載入 CCC 網頁")),
+			DefaultValue::String(String::from("連不上 CCC，請確認網路後再試一次。")),
 		);
 		return false;
-	}
-	webview.wait_for_load();
+	};
 
 	let Some(access) = read_storage(&webview, "accessToken") else {
 		// Reaching here means the web view loaded but its storage held no session -
@@ -315,6 +323,40 @@ pub fn purge_experimental_state() {
 	}
 	clear();
 	println!("[ccc] cleared session state left by an earlier version");
+}
+
+/// Sign out of CCC as well as out of Aidoku.
+///
+/// `clearCookiesOnLogOut` only clears cookies, and CCC keeps its session in
+/// `localStorage`, so on its own it leaves the site signed in: the login page comes back
+/// already authenticated and the sync button restores the very same account.
+pub fn clear_web_session() {
+	match open_site() {
+		Some(webview) => {
+			// `eval` hands back whatever the script evaluates to, and that has to be a
+			// string. `localStorage.removeItem(...)` evaluates to `undefined`, which comes
+			// back as an error even though the removal worked - reporting a failure that
+			// never happened. So the script ends by reading the keys back: that gives
+			// `eval` its string and makes the log honest, because empty means the session
+			// really is gone.
+			let names = SESSION_STORAGE_KEYS
+				.iter()
+				.map(|key| format!("'{key}'"))
+				.collect::<Vec<String>>()
+				.join(",");
+			// Keys are literals defined in this file, so the quoting is safe.
+			let script = format!(
+				"var k=[{names}];				 k.forEach(function(n){{try{{localStorage.removeItem(n)}}catch(e){{}}}});				 k.filter(function(n){{return localStorage.getItem(n)}}).join(',')"
+			);
+			match webview.eval(&script) {
+				Ok(left) if left.trim().is_empty() => println!("[ccc] site session cleared"),
+				Ok(left) => println!("[ccc] ERROR the site's storage still holds {left}"),
+				Err(_) => println!("[ccc] ERROR could not run the storage clearing script"),
+			}
+		}
+		None => println!("[ccc] ERROR could not open the web view to clear the site session"),
+	}
+	clear();
 }
 
 pub fn clear() {

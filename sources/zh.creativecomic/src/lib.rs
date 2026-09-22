@@ -378,7 +378,7 @@ impl NotificationHandler for CreativeComicSource {
 			}
 			// The app's own login button never flips to "log out" for this site,
 			// because it tracks state through a callback CCC can never trigger.
-			"clearLogin" => auth::clear(),
+			"clearLogin" => auth::clear_web_session(),
 			_ => {}
 		}
 	}
