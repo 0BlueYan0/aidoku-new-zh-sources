@@ -35,10 +35,9 @@ const FAILED_AT_KEY: &str = "tokenFailedAt";
 /// Set when the session is dead and cannot be renewed, so the settings footer can say
 /// so instead of leaving the reader guessing.
 const NEEDS_RELOGIN_KEY: &str = "needsRelogin";
-/// When `handle_web_login` last handed over a session. Written *only* there, so its
-/// absence is what tells the `login` notification apart from a real sign-out - see
-/// `handle_login_notification`.
-const JUST_LOGGED_IN_KEY: &str = "justLoggedInAt";
+/// Set whenever a session is picked up, so the `login` notification that follows can be
+/// told apart from a sign-out; the app posts the same name for both.
+const JUST_LOGGED_IN_KEY: &str = "justLoggedIn";
 /// Names of the entries the web login view actually handed over. Recorded so a sign-in
 /// that did not take can be diagnosed from the log - the app's delivery of
 /// `localStorageKeys` is undocumented and no shipped source relies on it.
@@ -57,9 +56,6 @@ const CLIENT_SECRET: &str = "9eAhsCX3VWtyqTmkUo5EEaoH4MNPxrn6ZRwse7tE";
 
 /// How long to wait after renewal could not reach the server before trying again.
 const FAIL_BACKOFF: i64 = 600;
-/// How long after a captured sign-in the `login` notification still means "just signed
-/// in" rather than "signed out".
-const JUST_LOGGED_IN_TTL: i64 = 60;
 
 /// The localStorage entries CCC keeps its session in.
 const SESSION_STORAGE_KEYS: [&str; 3] = ["accessToken", "refreshToken", "userId"];
@@ -378,7 +374,7 @@ pub fn capture_web_login(values: &HashMap<String, String>) -> bool {
 		defaults_set(REFRESH_TOKEN_KEY, DefaultValue::String(refresh));
 	}
 	defaults_set(NEEDS_RELOGIN_KEY, DefaultValue::Null);
-	set_timestamp(JUST_LOGGED_IN_KEY, current_date());
+	defaults_set(JUST_LOGGED_IN_KEY, DefaultValue::Bool(true));
 	true
 }
 
@@ -438,6 +434,7 @@ pub fn sync_from_web_view() -> bool {
 	defaults_set(NEEDS_RELOGIN_KEY, DefaultValue::Null);
 	defaults_set(FAILED_AT_KEY, DefaultValue::Null);
 	defaults_set(SYNC_RESULT_KEY, DefaultValue::Null);
+	defaults_set(JUST_LOGGED_IN_KEY, DefaultValue::Bool(true));
 	true
 }
 
@@ -493,29 +490,19 @@ pub fn clear_web_session() {
 }
 
 /// Aidoku posts `login` both when a login finishes and when the user logs out, and the
-/// name alone does not say which.
+/// name alone does not say which; the flag set when a session was picked up is what
+/// tells them apart.
 ///
-/// A sign-out is only ever inferred when `handle_web_login` has actually handed a
-/// session over at some point: that is the one situation in which the app is tracking
-/// the login state itself and can genuinely be offering a logout. On CCC today it never
-/// does - the site sets no cookies, so the callback never fires and the app's login row
-/// never flips to "logged in" - which leaves this a no-op, and deliberately so. The
-/// earlier version read every `login` notification as a possible sign-out and so could
-/// only ever fire on an event whose meaning has never been observed, throwing away a
-/// session the reader had just synced. Signing out runs through the explicit "clear
-/// login" button instead.
+/// Treating an unmarked notification as a sign-out is what clears the session, and that
+/// matters more than it looks: closing the login page fires this *and* a full refresh of
+/// settings, listings and content. Leaving a dead token in place there sends every one
+/// of those refreshes out with a credential the server rejects.
 pub fn handle_login_notification() {
-	let marked_at = timestamp(JUST_LOGGED_IN_KEY);
-	if marked_at == 0 {
-		println!("[ccc] login notification received; stored session left unchanged");
-		return;
+	if defaults_get::<bool>(JUST_LOGGED_IN_KEY).unwrap_or(false) {
+		defaults_set(JUST_LOGGED_IN_KEY, DefaultValue::Null);
+	} else {
+		clear();
 	}
-	if current_date() - marked_at < JUST_LOGGED_IN_TTL {
-		// The notification for the sign-in that just happened.
-		return;
-	}
-	println!("[ccc] logged out");
-	clear();
 }
 
 // ---------------------------------------------------------------------------
@@ -525,7 +512,7 @@ pub fn handle_login_notification() {
 fn fetch_member() -> Outcome<Member> {
 	match api_request("/member") {
 		Ok(request) => send_api(request),
-		Err(_) => Outcome::Unreachable(String::from("無法建立請求")),
+		Err(_) => Outcome::Unreachable,
 	}
 }
 
@@ -597,7 +584,7 @@ pub fn account_footer() -> Option<String> {
 				Some(String::from("登入暫時失效，稍後會自動重試，請稍後再回來看看。"))
 			}
 		}
-		Outcome::Unreachable(_) => Some(String::from(
+		Outcome::Unreachable => Some(String::from(
 			"目前無法連線到 CCC，暫時讀不到帳號資訊（登入狀態未變）。",
 		)),
 	}

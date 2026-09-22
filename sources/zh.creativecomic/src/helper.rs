@@ -241,7 +241,7 @@ pub enum Outcome<T> {
 	/// HTTP 401: whatever credential was attached is not accepted.
 	Unauthorized,
 	/// No usable answer - offline, a server error, or an unreadable payload.
-	Unreachable(String),
+	Unreachable,
 }
 
 /// Send a request and unwrap the `{code, message, data}` envelope, reporting the
@@ -249,7 +249,7 @@ pub enum Outcome<T> {
 pub fn send_api<T: serde::de::DeserializeOwned>(request: Request) -> Outcome<T> {
 	let response = match request.send() {
 		Ok(response) => response,
-		Err(_) => return Outcome::Unreachable(String::from("無法連線到 CCC")),
+		Err(_) => return Outcome::Unreachable,
 	};
 	if response.status_code() == 401 {
 		return Outcome::Unauthorized;
@@ -257,50 +257,41 @@ pub fn send_api<T: serde::de::DeserializeOwned>(request: Request) -> Outcome<T> 
 
 	let envelope: Envelope<T> = match response.get_json_owned() {
 		Ok(envelope) => envelope,
-		Err(_) => return Outcome::Unreachable(String::from("CCC 回應無法解析")),
+		Err(_) => return Outcome::Unreachable,
 	};
 	// Some deployments answer 200 with the error in the envelope instead.
 	if envelope.code == 401 {
 		return Outcome::Unauthorized;
 	}
 	if envelope.code != 0 {
-		return Outcome::Unreachable(format!("API error {}: {}", envelope.code, envelope.message));
+		println!("[ccc] API error {}: {}", envelope.code, envelope.message);
+		return Outcome::Unreachable;
 	}
 	match envelope.data {
 		Some(data) => Outcome::Ok(data),
-		None => Outcome::Unreachable(String::from("API returned an empty payload")),
+		None => Outcome::Unreachable,
 	}
 }
 
-/// Send a request that carries no credential, so a 401 is just a failure.
-pub fn read_envelope<T: serde::de::DeserializeOwned>(request: Request) -> Result<T> {
-	match send_api(request) {
-		Outcome::Ok(data) => Ok(data),
-		Outcome::Unauthorized => bail!("CCC 拒絕了這次請求（401）"),
-		Outcome::Unreachable(message) => Err(error!("{message}")),
-	}
-}
-
-/// GET an API path, renewing a dead session once before giving up.
+/// Send a request and unwrap the `{code, message, data}` envelope.
 ///
-/// The renewal happens here, after the first request has already completed, rather
-/// than while a request is being assembled: the app runs a limited number of requests
-/// at once and nesting one inside another can wedge them all.
-pub fn api_get<T: serde::de::DeserializeOwned>(path: &str) -> Result<T> {
-	// Noted before sending, so the renewal below can tell "this token is dead" from
-	// "another request already replaced it while this one was in flight".
-	let used = auth::access_token();
-	match send_api(api_request(path)?) {
-		Outcome::Ok(data) => Ok(data),
-		Outcome::Unauthorized => {
-			// The stored token is dead. `recover_session` either renews it or drops
-			// it, so the retry goes out with a fresh token or as a guest - either way
-			// it is worth one more attempt before the source reports a failure.
-			auth::recover_session(used.as_deref());
-			read_envelope(api_request(path)?)
-		}
-		Outcome::Unreachable(message) => Err(error!("{message}")),
+/// One request in, one result out, and nothing else sent on the way. Everything on the
+/// content path goes through here, and the app runs only a handful of requests at once,
+/// so anything that fires a second request from in here multiplies across every entry
+/// point the app happens to be running - which is how this source has wedged before.
+/// Session renewal therefore lives on the settings screen, never here.
+pub fn read_envelope<T: serde::de::DeserializeOwned>(request: Request) -> Result<T> {
+	let envelope: Envelope<T> = request.json_owned()?;
+	if envelope.code != 0 {
+		bail!("API error {}: {}", envelope.code, envelope.message);
 	}
+	envelope
+		.data
+		.ok_or_else(|| error!("API returned an empty payload"))
+}
+
+pub fn api_get<T: serde::de::DeserializeOwned>(path: &str) -> Result<T> {
+	read_envelope(api_request(path)?)
 }
 
 // ---------------------------------------------------------------------------
