@@ -65,10 +65,15 @@ fn aes_cbc_decrypt(ciphertext: &[u8], key: &[u8; 32], iv: &[u8; 16]) -> Option<V
 		return None;
 	}
 	let mut buffer = ciphertext.to_vec();
-	let plaintext = Aes256CbcDec::new(key.into(), iv.into())
+	// Decryption happens in place, so the plaintext is this same buffer minus the
+	// padding. Taking its length and truncating avoids copying a whole page image
+	// a second time: pages run to megabytes and every extra copy is peak memory.
+	let length = Aes256CbcDec::new(key.into(), iv.into())
 		.decrypt_padded_mut::<Pkcs7>(&mut buffer)
-		.ok()?;
-	Some(plaintext.to_vec())
+		.ok()?
+		.len();
+	buffer.truncate(length);
+	Some(buffer)
 }
 
 /// Unwrap the per-page key returned by `GET /book/chapter/image/{id}`.

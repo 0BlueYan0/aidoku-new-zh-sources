@@ -83,7 +83,7 @@ impl Source for CreativeComicSource {
 		page: i32,
 		filters: Vec<FilterValue>,
 	) -> Result<MangaPageResult> {
-		auth::ensure_guest_uuid();
+		auth::prepare();
 
 		let mut keyword = query;
 		let mut sort_by = "updated_at";
@@ -91,11 +91,11 @@ impl Source for CreativeComicSource {
 
 		for filter in filters {
 			match filter {
-				// Author and artist searches both go through the site's full-text
-				// search: its dedicated `author` parameter takes a numeric id, not a
-				// name, while `keyword` does match author names.
+				// Author search goes through the site's full-text search: its dedicated
+				// `author` parameter takes a numeric id, not a name, while `keyword`
+				// does match author names.
 				FilterValue::Text { id, value } => {
-					if (id == "author" || id == "artist") && !value.is_empty() {
+					if id == "author" && !value.is_empty() {
 						keyword = Some(value);
 					}
 				}
@@ -137,7 +137,7 @@ impl Source for CreativeComicSource {
 		needs_details: bool,
 		needs_chapters: bool,
 	) -> Result<Manga> {
-		auth::ensure_guest_uuid();
+		auth::prepare();
 
 		if needs_details {
 			// Swallow failures: one unreachable book must not abort a whole library
@@ -160,7 +160,7 @@ impl Source for CreativeComicSource {
 	}
 
 	fn get_page_list(&self, _manga: Manga, chapter: Chapter) -> Result<Vec<Page>> {
-		auth::ensure_guest_uuid();
+		auth::prepare();
 
 		// Paid chapters answer 403 here, with no page list at all.
 		let content: ChapterContent = api_get(&format!("/book/chapter/{}", chapter.key))?;
@@ -188,11 +188,25 @@ impl Source for CreativeComicSource {
 			responses.extend(Request::send_all(requests));
 		}
 
+		// Drawn one at a time rather than zipped: were the response list ever to come
+		// back short, zipping would drop those pages off the end of the chapter without
+		// a word, while this leaves them in place as pages that failed to decrypt.
+		let mut responses = responses.into_iter();
 		let mut pages: Vec<Page> = Vec::new();
-		for (proportion, response) in detail.proportion.iter().zip(responses) {
-			let unwrapped = response
-				.ok()
-				.and_then(|response| response.get_json_owned::<Envelope<ImageKey>>().ok())
+		for proportion in &detail.proportion {
+			let unwrapped = responses
+				.next()
+				.and_then(|response| response.ok())
+				.and_then(|response| {
+					if response.status_code() == 401 {
+						println!(
+							"[ccc] ERROR CCC refused the key for page {} (401)",
+							proportion.id
+						);
+						return None;
+					}
+					response.get_json_owned::<Envelope<ImageKey>>().ok()
+				})
 				.and_then(|envelope| envelope.data)
 				.and_then(|payload| crypto::unwrap_page_key(&payload.key, &secret));
 
@@ -219,7 +233,7 @@ impl Source for CreativeComicSource {
 
 impl ListingProvider for CreativeComicSource {
 	fn get_manga_list(&self, listing: Listing, page: i32) -> Result<MangaPageResult> {
-		auth::ensure_guest_uuid();
+		auth::prepare();
 
 		let Some((sort_by, window)) = listing_query(&listing.id) else {
 			return Err(error!("Unknown listing: {}", listing.id));
@@ -231,7 +245,7 @@ impl ListingProvider for CreativeComicSource {
 
 impl Home for CreativeComicSource {
 	fn get_home(&self) -> Result<HomeLayout> {
-		auth::ensure_guest_uuid();
+		auth::prepare();
 
 		// Send an empty skeleton first so the home screen lays out immediately, then
 		// stream each row in. One request covers both rows.
@@ -371,8 +385,10 @@ impl NotificationHandler for CreativeComicSource {
 				println!("[ccc] session sync succeeded: {synced}");
 			}
 			// The app's own login button never flips to "log out" for this site,
-			// because it tracks state through a callback CCC can never trigger.
-			"clearLogin" => auth::clear(),
+			// because it tracks state through a callback CCC can never trigger, so
+			// this button is the only way out. It signs out of the site as well,
+			// otherwise the login page comes back already authenticated.
+			"clearLogin" => auth::clear_web_session(),
 			_ => {}
 		}
 	}
@@ -415,6 +431,10 @@ impl DeepLinkHandler for CreativeComicSource {
 		// lookup to find the manga this chapter belongs to.
 		if let Some(rest) = url.split("/reader_comic/").nth(1) {
 			if let Some(key) = leading_id(rest) {
+				// The only branch that makes a request, so the credential is set up
+				// here rather than at the top: without one CCC answers `403 uuid錯誤`,
+				// and a deep link is exactly what a fresh install reaches first.
+				auth::prepare();
 				let content: ChapterContent = api_get(&format!("/book/chapter/{key}"))?;
 				if let Some(detail) = content.chapter {
 					if detail.book > 0 {

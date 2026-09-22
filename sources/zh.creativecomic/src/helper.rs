@@ -229,19 +229,75 @@ pub fn api_request(path: &str) -> Result<Request> {
 	Ok(auth::authorize(request))
 }
 
-/// Send a request and unwrap the `{code, message, data}` envelope.
-pub fn read_envelope<T: serde::de::DeserializeOwned>(request: Request) -> Result<T> {
-	let envelope: Envelope<T> = request.json_owned()?;
-	if envelope.code != 0 {
-		bail!("API error {}: {}", envelope.code, envelope.message);
-	}
-	envelope
-		.data
-		.ok_or_else(|| error!("API returned an empty payload"))
+/// What a request came back as.
+///
+/// CCC answers `401 {"code":401,"message":"Unauthenticated."}` on *every* endpoint
+/// once the bearer token is dead - it does not quietly fall back to guest access -
+/// so a dead token takes the whole source down rather than degrading it. That makes
+/// 401 worth telling apart from "offline": the first is fixed by renewing the token,
+/// the second only by waiting.
+pub enum Outcome<T> {
+	Ok(T),
+	/// HTTP 401: whatever credential was attached is not accepted.
+	Unauthorized,
+	/// No usable answer - offline, a server error, or an unreadable payload.
+	Unreachable(String),
 }
 
+/// Send a request and unwrap the `{code, message, data}` envelope, reporting the
+/// three cases apart.
+pub fn send_api<T: serde::de::DeserializeOwned>(request: Request) -> Outcome<T> {
+	let response = match request.send() {
+		Ok(response) => response,
+		Err(_) => return Outcome::Unreachable(String::from("無法連線到 CCC")),
+	};
+	if response.status_code() == 401 {
+		return Outcome::Unauthorized;
+	}
+
+	let envelope: Envelope<T> = match response.get_json_owned() {
+		Ok(envelope) => envelope,
+		Err(_) => return Outcome::Unreachable(String::from("CCC 回應無法解析")),
+	};
+	// Some deployments answer 200 with the error in the envelope instead.
+	if envelope.code == 401 {
+		return Outcome::Unauthorized;
+	}
+	if envelope.code != 0 {
+		return Outcome::Unreachable(format!("API error {}: {}", envelope.code, envelope.message));
+	}
+	match envelope.data {
+		Some(data) => Outcome::Ok(data),
+		None => Outcome::Unreachable(String::from("API returned an empty payload")),
+	}
+}
+
+/// Send a request that carries no credential, so a 401 is just a failure.
+pub fn read_envelope<T: serde::de::DeserializeOwned>(request: Request) -> Result<T> {
+	match send_api(request) {
+		Outcome::Ok(data) => Ok(data),
+		Outcome::Unauthorized => bail!("CCC 拒絕了這次請求（401）"),
+		Outcome::Unreachable(message) => Err(error!("{message}")),
+	}
+}
+
+/// GET an API path, renewing a dead session once before giving up.
+///
+/// The renewal happens here, after the first request has already completed, rather
+/// than while a request is being assembled: the app runs a limited number of requests
+/// at once and nesting one inside another can wedge them all.
 pub fn api_get<T: serde::de::DeserializeOwned>(path: &str) -> Result<T> {
-	read_envelope(api_request(path)?)
+	match send_api(api_request(path)?) {
+		Outcome::Ok(data) => Ok(data),
+		Outcome::Unauthorized => {
+			// The stored token is dead. `recover_session` either renews it or drops
+			// it, so the retry goes out with a fresh token or as a guest - either way
+			// it is worth one more attempt before the source reports a failure.
+			auth::recover_session();
+			read_envelope(api_request(path)?)
+		}
+		Outcome::Unreachable(message) => Err(error!("{message}")),
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -381,31 +437,64 @@ impl RankEntry {
 	}
 }
 
+/// Units that mark the number in front of them as the chapter number.
+const CHAPTER_UNITS: [char; 6] = ['話', '话', '回', '集', '章', '篇'];
+
 /// Pull a chapter number out of the site's own label.
+///
+/// A number followed by a chapter unit wins over any number earlier in the label, so
+/// "第1季第3話" reads as chapter 3 rather than season 1. When no number carries a unit
+/// the first one is used, which covers plain labels like "EP.5".
 ///
 /// Entries with no number in their label - announcements, extras, the prologue - get no
 /// chapter number at all. The sequence index is deliberately *not* used as a fallback:
 /// it counts those unnumbered entries too, so it runs ahead of the real numbering and
 /// would label a mid-series announcement as a later chapter than the newest one.
 pub fn chapter_number(vol_name: Option<&str>) -> Option<f32> {
-	if let Some(label) = vol_name {
-		let mut digits = String::new();
+	let characters: Vec<char> = vol_name?.chars().collect();
+	let mut numbers: Vec<(f32, bool)> = Vec::new();
+	let mut index = 0;
+
+	while index < characters.len() {
+		if !characters[index].is_ascii_digit() {
+			index += 1;
+			continue;
+		}
+
+		// Walk one run of digits, allowing a single decimal point that has another
+		// digit behind it so a trailing full stop is not swallowed.
+		let start = index;
 		let mut seen_dot = false;
-		for character in label.chars() {
+		while index < characters.len() {
+			let character = characters[index];
 			if character.is_ascii_digit() {
-				digits.push(character);
-			} else if character == '.' && !digits.is_empty() && !seen_dot {
+				index += 1;
+			} else if character == '.'
+				&& !seen_dot
+				&& characters.get(index + 1).is_some_and(char::is_ascii_digit)
+			{
 				seen_dot = true;
-				digits.push(character);
-			} else if !digits.is_empty() {
+				index += 1;
+			} else {
 				break;
 			}
 		}
-		if let Ok(value) = digits.trim_end_matches('.').parse::<f32>() {
-			return Some(value);
+
+		let unit = characters[index..]
+			.iter()
+			.find(|character| !character.is_whitespace())
+			.is_some_and(|character| CHAPTER_UNITS.contains(character));
+		let digits: String = characters[start..index].iter().collect();
+		if let Ok(value) = digits.parse::<f32>() {
+			numbers.push((value, unit));
 		}
 	}
-	None
+
+	numbers
+		.iter()
+		.find(|(_, unit)| *unit)
+		.or_else(|| numbers.first())
+		.map(|(value, _)| *value)
 }
 
 /// The first timestamp inside the `free_date` blob, shortened to month/day.
@@ -502,6 +591,24 @@ mod test {
 		assert_eq!(chapter_number(Some("第 12 話")), Some(12.0));
 		assert_eq!(chapter_number(Some("第4话")), Some(4.0));
 		assert_eq!(chapter_number(Some("第 0.6 話")), Some(0.6));
+	}
+
+	/// A label that numbers a season as well as the chapter must report the chapter.
+	/// CCC has not been seen using this form, so this pins the behaviour rather than
+	/// recording an observation.
+	#[aidoku_test]
+	fn the_number_carrying_a_chapter_unit_wins() {
+		assert_eq!(chapter_number(Some("第1季第3話")), Some(3.0));
+		assert_eq!(chapter_number(Some("2026 新年特別篇 第 7 回")), Some(7.0));
+		// Nothing carries a unit, so the first number still stands.
+		assert_eq!(chapter_number(Some("EP.5")), Some(5.0));
+	}
+
+	/// A trailing full stop is punctuation, not a decimal point.
+	#[aidoku_test]
+	fn a_trailing_dot_is_not_part_of_the_number() {
+		assert_eq!(chapter_number(Some("第 3 話.")), Some(3.0));
+		assert_eq!(chapter_number(Some("12.")), Some(12.0));
 	}
 
 	/// Unnumbered entries must stay unnumbered. Book 512 has an announcement at index 47

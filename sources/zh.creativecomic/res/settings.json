@@ -40,7 +40,7 @@
 				"notification": "clearLogin",
 				"destructive": true,
 				"confirmTitle": "清除登入狀態",
-				"confirmText": "清除",
+				"confirmText": "這會同時登出 CCC 網站，之後要重新登入才能讀取已購買的章節。",
 				"refreshes": [
 					"settings",
 					"listings",

@@ -3,6 +3,11 @@
 //! Every API call must identify itself, either with a `uuid` header (guests) or a
 //! bearer token (signed in). Without one the API answers `403 uuid錯誤`.
 //!
+//! A *dead* bearer token is worse than none: CCC answers
+//! `401 {"code":401,"message":"Unauthenticated."}` on every endpoint, `/book` included,
+//! rather than falling back to guest access. So an expired session does not degrade the
+//! source, it stops it. Renewal therefore has to be automatic - see `recover_session`.
+//!
 //! Only the tokens are persisted, never the password: CCC issues a refresh token, so
 //! there is no reason to keep credentials on the device.
 
@@ -12,21 +17,28 @@ use aidoku::{
 		defaults::{defaults_get, defaults_set, DefaultValue},
 		js::WebView,
 		net::Request,
+		std::current_date,
 	},
 	prelude::*,
 	HashMap,
 };
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde::Deserialize;
 
 use crate::crypto;
-use crate::helper::{read_envelope, API_URL, BASE_URL, DEVICE, USER_AGENT};
+use crate::helper::{api_request, read_envelope, send_api, Outcome, API_URL, BASE_URL, DEVICE, USER_AGENT};
 
 const UUID_KEY: &str = "guestUuid";
 const ACCESS_TOKEN_KEY: &str = "accessToken";
 const REFRESH_TOKEN_KEY: &str = "refreshToken";
-/// Set by `handle_basic_login` so the follow-up notification can tell a sign-in from a
-/// sign-out; Aidoku posts the same notification name for both.
-const JUST_LOGGED_IN_KEY: &str = "justLoggedIn";
+/// Unix seconds at which the stored access token stops being accepted, when that is
+/// knowable. Absent for a token whose lifetime the site never told us.
+const EXPIRES_AT_KEY: &str = "tokenExpiresAt";
+/// When renewal last failed to reach the server, so it is not retried on every request.
+const FAILED_AT_KEY: &str = "tokenFailedAt";
+/// Set when the session is dead and cannot be renewed, so the settings footer can say
+/// so instead of leaving the reader guessing.
+const NEEDS_RELOGIN_KEY: &str = "needsRelogin";
 /// Names of the entries the web login view actually handed over. Recorded so the
 /// settings footer can say what arrived when no token could be found - the app's
 /// delivery of `localStorageKeys` is undocumented and no shipped source relies on it.
@@ -37,9 +49,19 @@ const CALL_COUNT_KEY: &str = "webLoginCalls";
 /// What the last storage sync saw, so a failure can be read off the settings screen.
 const SYNC_RESULT_KEY: &str = "syncResult";
 
-/// The site embeds this OAuth client in its web bundle.
+/// The OAuth client the site embeds in its own web bundle. Both values are served to
+/// every visitor of creative-comic.tw, so neither is a secret; they are reproduced here
+/// because the token endpoint requires them.
 const CLIENT_ID: &str = "2";
 const CLIENT_SECRET: &str = "9eAhsCX3VWtyqTmkUo5EEaoH4MNPxrn6ZRwse7tE";
+
+/// Renew this many seconds before the stored expiry, so a token cannot die in flight.
+const EXPIRY_MARGIN: i64 = 60;
+/// How long to wait after renewal could not reach the server before trying again.
+const FAIL_BACKOFF: i64 = 600;
+
+/// The localStorage entries CCC keeps its session in.
+const SESSION_STORAGE_KEYS: [&str; 3] = ["accessToken", "refreshToken", "userId"];
 
 #[derive(Deserialize)]
 struct TokenResponse {
@@ -47,6 +69,10 @@ struct TokenResponse {
 	access_token: Option<String>,
 	#[serde(default)]
 	refresh_token: Option<String>,
+	/// Seconds the new access token is good for. Absent on some grants, in which case
+	/// the token's own `exp` claim is used instead.
+	#[serde(default)]
+	expires_in: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -65,6 +91,17 @@ fn stored(key: &str) -> Option<String> {
 	defaults_get::<String>(key).filter(|value| !value.is_empty())
 }
 
+/// Unix seconds stored as a string, so the value cannot overflow an i32.
+fn timestamp(key: &str) -> i64 {
+	defaults_get::<String>(key)
+		.and_then(|value| value.parse::<i64>().ok())
+		.unwrap_or(0)
+}
+
+fn set_timestamp(key: &str, value: i64) {
+	defaults_set(key, DefaultValue::String(format!("{value}")));
+}
+
 pub fn access_token() -> Option<String> {
 	stored(ACCESS_TOKEN_KEY)
 }
@@ -73,23 +110,74 @@ pub fn is_logged_in() -> bool {
 	access_token().is_some()
 }
 
+/// Set when the stored session is dead and nothing on the device can renew it.
+pub fn needs_relogin() -> bool {
+	defaults_get::<bool>(NEEDS_RELOGIN_KEY).unwrap_or(false)
+}
+
 /// The credential page images are encrypted against: the access token when signed in,
 /// otherwise the site's public guest secret.
 pub fn image_secret() -> String {
 	access_token().unwrap_or_else(|| String::from(crypto::GUEST_SECRET))
 }
 
+// ---------------------------------------------------------------------------
+// Token storage
+// ---------------------------------------------------------------------------
+
+/// Read the `exp` claim out of a JWT payload without pulling in a JWT crate.
+///
+/// The tokens CCC issues are opaque to us, so this is best effort: anything that does
+/// not parse leaves the expiry unknown and the session falls back to renewing when a
+/// request comes back 401.
+fn jwt_expiry(token: &str) -> Option<i64> {
+	let payload = token.split('.').nth(1)?;
+	let decoded = URL_SAFE_NO_PAD.decode(payload).ok()?;
+	let text = String::from_utf8(decoded).ok()?;
+	let marker = text.find("\"exp\"")?;
+	let digits: String = text[marker + 5..]
+		.chars()
+		.take(32)
+		.skip_while(|character| !character.is_ascii_digit())
+		.take_while(|character| character.is_ascii_digit())
+		.collect();
+	digits.parse::<i64>().ok()
+}
+
+/// Store an access token together with whatever is known about when it dies.
+fn store_access_token(access: &str, expires_in: Option<i64>) {
+	defaults_set(ACCESS_TOKEN_KEY, DefaultValue::String(String::from(access)));
+	// Prefer the server's own countdown; fall back to the token's `exp` claim, which is
+	// the only thing available for a session picked up out of the web view.
+	let expires_at = expires_in
+		.map(|seconds| current_date() + seconds)
+		.or_else(|| jwt_expiry(access));
+	match expires_at {
+		Some(value) => set_timestamp(EXPIRES_AT_KEY, value),
+		None => defaults_set(EXPIRES_AT_KEY, DefaultValue::Null),
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Credentials on the wire
+// ---------------------------------------------------------------------------
+
 /// Fetch a guest uuid once and keep it, mirroring what the website stores in
 /// localStorage. A fresh uuid per launch would look like a flood of new visitors.
+///
+/// This runs even while signed in, so that a session which dies later can fall straight
+/// back to guest browsing instead of failing every request.
 ///
 /// This must only be called from the top of a `Source` entry point, never while another
 /// request is being assembled: it blocks on a request of its own, and the app runs a
 /// limited number of requests at once, so nesting one inside another can wedge them all.
 pub fn ensure_guest_uuid() {
-	if is_logged_in() || stored(UUID_KEY).is_some() {
+	if stored(UUID_KEY).is_some() {
 		return;
 	}
-	let _ = fetch_guest_uuid();
+	if fetch_guest_uuid().is_none() {
+		println!("[ccc] ERROR could not obtain a guest uuid; requests may be refused");
+	}
 }
 
 fn fetch_guest_uuid() -> Option<String> {
@@ -110,8 +198,8 @@ fn fetch_guest_uuid() -> Option<String> {
 /// Attach whichever credential this install has.
 ///
 /// Deliberately does no networking: this runs while a request is being built, and
-/// fetching the uuid here would block that request on another one. `ensure_guest_uuid`
-/// handles that at the entry points instead.
+/// fetching the uuid here would block that request on another one. `prepare` handles
+/// that at the entry points instead.
 pub fn authorize(request: Request) -> Request {
 	let mut request = request;
 	if let Some(token) = access_token() {
@@ -121,6 +209,97 @@ pub fn authorize(request: Request) -> Request {
 		request.set_header("uuid", uuid.as_str());
 	}
 	request
+}
+
+/// Run at the top of every `Source` entry point, before any request is assembled.
+pub fn prepare() {
+	ensure_session();
+	ensure_guest_uuid();
+}
+
+/// Renew the session before a request can fail on it.
+///
+/// Reads only defaults unless the stored token is already past its expiry, so the usual
+/// case costs nothing at all. A token whose lifetime is unknown is left to the 401
+/// handling in `api_get`.
+fn ensure_session() {
+	if !is_logged_in() {
+		return;
+	}
+	let expires_at = timestamp(EXPIRES_AT_KEY);
+	if expires_at == 0 || current_date() < expires_at - EXPIRY_MARGIN {
+		return;
+	}
+	recover_session();
+}
+
+// ---------------------------------------------------------------------------
+// Renewal
+// ---------------------------------------------------------------------------
+
+enum TokenOutcome {
+	/// New tokens were issued and stored.
+	Renewed,
+	/// The server answered and refused. CCC replies `410 Cannot decrypt the refresh
+	/// token` for one that is invalid or already spent.
+	Rejected,
+	/// No usable answer; worth retrying later.
+	Unreachable,
+}
+
+/// POST the OAuth token endpoint.
+fn request_token(pairs: &[(&str, &str)]) -> TokenOutcome {
+	let url = format!("{API_URL}/token");
+	let body = form_encode(pairs);
+	let request = match Request::post(&url) {
+		Ok(request) => request
+			.header("User-Agent", USER_AGENT)
+			.header("device", DEVICE)
+			.header("Accept-Language", "zh")
+			.header("Content-Type", "application/x-www-form-urlencoded")
+			.body(body),
+		Err(_) => {
+			println!("[ccc] ERROR building the token request");
+			return TokenOutcome::Unreachable;
+		}
+	};
+
+	let response = match request.send() {
+		Ok(response) => response,
+		Err(_) => {
+			println!("[ccc] ERROR the token endpoint could not be reached");
+			return TokenOutcome::Unreachable;
+		}
+	};
+	let status = response.status_code();
+
+	// A 4xx is CCC saying no - a spent refresh token comes back `410 Cannot decrypt the
+	// refresh token`. Anything else is worth retrying, so the two are told apart by the
+	// status rather than by the absence of a token.
+	let refused = |status: i32| {
+		if (400..500).contains(&status) {
+			println!("[ccc] the token endpoint refused the grant (HTTP {status})");
+			TokenOutcome::Rejected
+		} else {
+			println!("[ccc] ERROR the token endpoint returned no access token (HTTP {status})");
+			TokenOutcome::Unreachable
+		}
+	};
+
+	// The endpoint answers a successful grant with a bare OAuth2 payload rather than the
+	// usual envelope; failures come back as `{code, message}` with a 4xx status.
+	let Ok(parsed) = response.get_json_owned::<TokenResponse>() else {
+		return refused(status);
+	};
+	let Some(access) = parsed.access_token.clone().filter(|value| !value.is_empty()) else {
+		return refused(status);
+	};
+
+	store_access_token(&access, parsed.expires_in);
+	if let Some(refresh) = parsed.refresh_token.filter(|value| !value.is_empty()) {
+		defaults_set(REFRESH_TOKEN_KEY, DefaultValue::String(refresh));
+	}
+	TokenOutcome::Renewed
 }
 
 fn form_encode(pairs: &[(&str, &str)]) -> String {
@@ -136,49 +315,76 @@ fn form_encode(pairs: &[(&str, &str)]) -> String {
 	body
 }
 
-/// POST the OAuth token endpoint. Returns true when new tokens were stored.
-fn request_token(pairs: &[(&str, &str)]) -> bool {
-	let url = format!("{API_URL}/token");
-	let body = form_encode(pairs);
-	let request = match Request::post(&url) {
-		Ok(request) => request
-			.header("User-Agent", USER_AGENT)
-			.header("device", DEVICE)
-			.header("Accept-Language", "zh")
-			.header("Content-Type", "application/x-www-form-urlencoded")
-			.body(body),
-		Err(_) => {
-			println!("[ccc] ERROR building the token request");
-			return false;
-		}
+/// Swap the refresh token for a fresh pair.
+fn refresh() -> TokenOutcome {
+	let Some(refresh_token) = stored(REFRESH_TOKEN_KEY) else {
+		// Nothing to renew with: a session captured before refresh tokens were kept,
+		// or one the web view handed over without one.
+		return TokenOutcome::Rejected;
 	};
+	request_token(&[
+		("grant_type", "refresh_token"),
+		("client_id", CLIENT_ID),
+		("client_secret", CLIENT_SECRET),
+		("refresh_token", refresh_token.as_str()),
+	])
+}
 
-	// The endpoint answers with a bare OAuth2 payload rather than the usual envelope.
-	let response: TokenResponse = match request.json_owned() {
-		Ok(response) => response,
-		Err(_) => {
-			println!("[ccc] ERROR the token endpoint did not return a usable payload");
-			return false;
-		}
-	};
-
-	let Some(access) = response.access_token.filter(|value| !value.is_empty()) else {
-		println!("[ccc] ERROR the token endpoint returned no access token");
+/// React to a session that is no longer accepted: renew it, or drop it so the source
+/// keeps working as a guest. Returns true when a fresh token is now stored.
+///
+/// Safe to call from several requests at once. CCC rotates the refresh token, so when a
+/// library refresh has five requests fail together the first renewal succeeds and the
+/// other four are refused with a token that is merely superseded - dropping the session
+/// on that would undo the renewal that just worked. The stored token is therefore
+/// compared before and after, and only a session that nobody replaced is cleared.
+pub fn recover_session() -> bool {
+	let Some(before) = access_token() else {
 		return false;
 	};
 
-	defaults_set(ACCESS_TOKEN_KEY, DefaultValue::String(access));
-	if let Some(refresh) = response.refresh_token.filter(|value| !value.is_empty()) {
-		defaults_set(REFRESH_TOKEN_KEY, DefaultValue::String(refresh));
+	let now = current_date();
+	if now - timestamp(FAILED_AT_KEY) < FAIL_BACKOFF {
+		return false;
 	}
-	true
+
+	match refresh() {
+		TokenOutcome::Renewed => {
+			defaults_set(FAILED_AT_KEY, DefaultValue::Null);
+			defaults_set(NEEDS_RELOGIN_KEY, DefaultValue::Null);
+			println!("[ccc] session renewed");
+			true
+		}
+		TokenOutcome::Rejected => {
+			if access_token().as_deref() == Some(before.as_str()) {
+				println!("[ccc] session cannot be renewed, falling back to guest");
+				clear();
+				defaults_set(NEEDS_RELOGIN_KEY, DefaultValue::Bool(true));
+			}
+			false
+		}
+		TokenOutcome::Unreachable => {
+			set_timestamp(FAILED_AT_KEY, now);
+			println!("[ccc] session renewal could not reach CCC, will retry later");
+			false
+		}
+	}
 }
+
+// ---------------------------------------------------------------------------
+// Signing in and out
+// ---------------------------------------------------------------------------
 
 /// Take the tokens out of whatever the web login view handed over.
 ///
 /// The site keeps its session in `localStorage` (`accessToken` / `refreshToken`) rather
 /// than in a cookie, which is why `settings.json` asks for those keys. The app merges
 /// what it collected into this one map, so both are looked up here by name.
+///
+/// In practice this is never reached: the callback is driven by cookie updates and CCC
+/// sets no cookies at all. `sync_from_web_view` is what actually picks the session up.
+/// It stays because it costs nothing and would work if the app ever does deliver the
+/// requested `localStorageKeys`.
 pub fn capture_web_login(values: &HashMap<String, String>) -> bool {
 	// Record the call count and the key names (never the values) so a failed sign-in can
 	// be diagnosed from the settings screen instead of needing a log server.
@@ -201,7 +407,7 @@ pub fn capture_web_login(values: &HashMap<String, String>) -> bool {
 		return false;
 	};
 
-	defaults_set(ACCESS_TOKEN_KEY, DefaultValue::String(access));
+	store_access_token(&access, None);
 	if let Some(refresh) = values
 		.get("refreshToken")
 		.filter(|value| !value.is_empty())
@@ -209,21 +415,8 @@ pub fn capture_web_login(values: &HashMap<String, String>) -> bool {
 	{
 		defaults_set(REFRESH_TOKEN_KEY, DefaultValue::String(refresh));
 	}
-	defaults_set(JUST_LOGGED_IN_KEY, DefaultValue::Bool(true));
+	defaults_set(NEEDS_RELOGIN_KEY, DefaultValue::Null);
 	true
-}
-
-/// Swap the refresh token for a fresh pair. Returns true when it worked.
-pub fn refresh() -> bool {
-	let Some(refresh_token) = stored(REFRESH_TOKEN_KEY) else {
-		return false;
-	};
-	request_token(&[
-		("grant_type", "refresh_token"),
-		("client_id", CLIENT_ID),
-		("client_secret", CLIENT_SECRET),
-		("refresh_token", refresh_token.as_str()),
-	])
 }
 
 fn read_storage(webview: &WebView, key: &str) -> Option<String> {
@@ -237,6 +430,15 @@ fn read_storage(webview: &WebView, key: &str) -> Option<String> {
 	Some(String::from(value))
 }
 
+/// Open the site in a background web view, ready to read or write its storage.
+fn open_site() -> Option<WebView> {
+	let webview = WebView::new();
+	let request = Request::get(BASE_URL).ok()?.header("User-Agent", USER_AGENT);
+	webview.load_blocking(request).ok()?;
+	webview.wait_for_load();
+	Some(webview)
+}
+
 /// Pick the session up out of the login web view's storage.
 ///
 /// Aidoku never calls `handle_web_login` for this site: that callback is driven by
@@ -244,26 +446,13 @@ fn read_storage(webview: &WebView, key: &str) -> Option<String> {
 /// instead. The tokens do exist after signing in, so this drives a web view against the
 /// same origin and reads them out directly.
 pub fn sync_from_web_view() -> bool {
-	let webview = WebView::new();
-
-	let request = match Request::get(BASE_URL) {
-		Ok(request) => request.header("User-Agent", USER_AGENT),
-		Err(_) => {
-			defaults_set(
-				SYNC_RESULT_KEY,
-				DefaultValue::String(String::from("無法建立請求")),
-			);
-			return false;
-		}
-	};
-	if webview.load_blocking(request).is_err() {
+	let Some(webview) = open_site() else {
 		defaults_set(
 			SYNC_RESULT_KEY,
 			DefaultValue::String(String::from("無法載入 CCC 網頁")),
 		);
 		return false;
-	}
-	webview.wait_for_load();
+	};
 
 	let Some(access) = read_storage(&webview, "accessToken") else {
 		// Reaching here means the web view loaded but its storage held no session -
@@ -277,38 +466,86 @@ pub fn sync_from_web_view() -> bool {
 		return false;
 	};
 
-	defaults_set(ACCESS_TOKEN_KEY, DefaultValue::String(access));
+	store_access_token(&access, None);
 	if let Some(refresh) = read_storage(&webview, "refreshToken") {
 		defaults_set(REFRESH_TOKEN_KEY, DefaultValue::String(refresh));
 	}
-	defaults_set(JUST_LOGGED_IN_KEY, DefaultValue::Bool(true));
+	defaults_set(NEEDS_RELOGIN_KEY, DefaultValue::Null);
+	defaults_set(FAILED_AT_KEY, DefaultValue::Null);
 	defaults_set(SYNC_RESULT_KEY, DefaultValue::Null);
 	true
 }
 
+/// Forget the session on this device.
 pub fn clear() {
 	defaults_set(ACCESS_TOKEN_KEY, DefaultValue::Null);
 	defaults_set(REFRESH_TOKEN_KEY, DefaultValue::Null);
-	defaults_set(JUST_LOGGED_IN_KEY, DefaultValue::Null);
+	defaults_set(EXPIRES_AT_KEY, DefaultValue::Null);
+	defaults_set(FAILED_AT_KEY, DefaultValue::Null);
+	defaults_set(NEEDS_RELOGIN_KEY, DefaultValue::Null);
 	defaults_set(SEEN_KEYS_KEY, DefaultValue::Null);
 	defaults_set(CALL_COUNT_KEY, DefaultValue::Null);
 	defaults_set(SYNC_RESULT_KEY, DefaultValue::Null);
 }
 
-/// Aidoku posts the same notification for signing in and signing out, so the flag set
-/// during `handle_basic_login` is what tells them apart.
+/// Sign out of CCC as well as out of Aidoku.
+///
+/// `clearCookiesOnLogOut` only clears cookies, and CCC keeps its session in
+/// `localStorage`, so on its own it leaves the site signed in: the login page would come
+/// back already authenticated and the sync button would restore the very same account.
+/// Clearing the site's own storage is what makes "clear login" mean what it says.
+pub fn clear_web_session() {
+	match open_site() {
+		Some(webview) => {
+			for key in SESSION_STORAGE_KEYS {
+				// Keys are literals defined in this file, so the quoting is safe.
+				if webview
+					.eval(&format!("localStorage.removeItem('{key}')"))
+					.is_err()
+				{
+					println!("[ccc] ERROR could not clear {key} from the site's storage");
+				}
+			}
+		}
+		None => println!("[ccc] ERROR could not open the web view to clear the site session"),
+	}
+	clear();
+}
+
+/// Aidoku posts `login` both when a login finishes and when the user logs out, and from
+/// here the two are indistinguishable.
+///
+/// Nothing is inferred from it. CCC sets no cookies, so the app's login row never flips
+/// to "logged in" and never offers a logout; a branch that read this notification as a
+/// sign-out could therefore only fire on an event whose meaning has never been observed,
+/// and its one effect would be to throw away a session the reader had just synced.
+/// Signing out runs through the explicit "clear login" button instead.
 pub fn handle_login_notification() {
-	let just_logged_in = defaults_get::<bool>(JUST_LOGGED_IN_KEY).unwrap_or(false);
-	if just_logged_in {
-		defaults_set(JUST_LOGGED_IN_KEY, DefaultValue::Null);
-	} else {
-		clear();
+	println!("[ccc] login notification received; stored session left unchanged");
+}
+
+// ---------------------------------------------------------------------------
+// Account summary
+// ---------------------------------------------------------------------------
+
+fn fetch_member() -> Outcome<Member> {
+	match api_request("/member") {
+		Ok(request) => send_api(request),
+		Err(_) => Outcome::Unreachable(String::from("無法建立請求")),
 	}
 }
 
-fn fetch_member() -> Option<Member> {
-	let request = crate::helper::api_request("/member").ok()?;
-	read_envelope::<Member>(request).ok()
+fn describe(member: Member) -> String {
+	let name = member
+		.nickname
+		.filter(|value| !value.is_empty())
+		.or(member.name)
+		.unwrap_or_else(|| String::from("已登入"));
+	format!(
+		"{name}・金幣 {}・點數 {}",
+		member.coin.unwrap_or(0),
+		member.point.unwrap_or(0)
+	)
 }
 
 /// The account summary shown in settings, or `None` to leave the group out entirely.
@@ -317,8 +554,16 @@ fn fetch_member() -> Option<Member> {
 /// sign in are not shown an empty panel. It appears when there is something to say: the
 /// balances once signed in, or which step failed when it did not take. Those balances
 /// are the only visible proof that signing in actually worked, so a failure names itself
-/// rather than going blank.
+/// rather than going blank - and names the *right* failure: being offline is not the
+/// same as being signed out, and telling a reader on a train to log in again invites
+/// them to throw away a session that is perfectly good.
 pub fn account_footer() -> Option<String> {
+	if needs_relogin() {
+		return Some(String::from(
+			"登入已失效且無法自動續期，請按「清除登入狀態」後重新登入。",
+		));
+	}
+
 	if !is_logged_in() {
 		// If the login view ran but left no token, name what it did hand over; that is
 		// the one clue available for why sign-in did not take.
@@ -336,26 +581,54 @@ pub fn account_footer() -> Option<String> {
 		return None;
 	}
 
-	let member = match fetch_member() {
-		Some(member) => Some(member),
-		// A stale access token is the usual cause, so try the refresh token once.
-		None if refresh() => fetch_member(),
-		None => None,
-	};
+	match fetch_member() {
+		Outcome::Ok(member) => Some(describe(member)),
+		// The token is dead. The reader is right here waiting, so renew it now and say
+		// plainly which of the two failures happened if it does not work.
+		Outcome::Unauthorized => {
+			if recover_session() {
+				if let Outcome::Ok(member) = fetch_member() {
+					return Some(describe(member));
+				}
+			}
+			if needs_relogin() {
+				Some(String::from(
+					"登入已失效且無法自動續期，請按「清除登入狀態」後重新登入。",
+				))
+			} else {
+				Some(String::from("登入已失效，正在重試續期，稍後再回來看看。"))
+			}
+		}
+		Outcome::Unreachable(_) => Some(String::from(
+			"目前無法連線到 CCC，暫時讀不到帳號資訊（登入狀態未變）。",
+		)),
+	}
+}
 
-	let Some(member) = member else {
-		return Some(String::from("登入已失效，請重新登入。"));
-	};
+#[cfg(test)]
+mod test {
+	use super::*;
+	use aidoku_test::aidoku_test;
 
-	let name = member
-		.nickname
-		.filter(|value| !value.is_empty())
-		.or(member.name)
-		.unwrap_or_else(|| String::from("已登入"));
+	/// A Laravel Passport access token, whose payload carries `exp`. Reading it is what
+	/// lets a session synced out of the web view - which comes with no `expires_in` -
+	/// be renewed before a request fails on it.
+	const JWT_WITH_EXP: &str = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiIyIiwianRpIjoiYWJjIiwiaWF0IjoxNzg5MDAwMDAwLCJuYmYiOjE3ODkwMDAwMDAsImV4cCI6MTc5MDAwMDAwMCwic3ViIjoiNDIiLCJzY29wZXMiOltdfQ.sig";
+	const JWT_WITHOUT_EXP: &str =
+		"eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiIyIiwic3ViIjoiNDIifQ.sig";
 
-	let mut parts: Vec<String> = Vec::new();
-	parts.push(name);
-	parts.push(format!("金幣 {}", member.coin.unwrap_or(0)));
-	parts.push(format!("點數 {}", member.point.unwrap_or(0)));
-	Some(parts.join("・"))
+	#[aidoku_test]
+	fn reads_the_expiry_out_of_a_jwt() {
+		assert_eq!(jwt_expiry(JWT_WITH_EXP), Some(1790000000));
+	}
+
+	/// Anything unreadable has to leave the expiry unknown rather than guess one: an
+	/// invented expiry in the past would renew a perfectly good session on every call.
+	#[aidoku_test]
+	fn an_unreadable_token_has_no_known_expiry() {
+		assert_eq!(jwt_expiry(JWT_WITHOUT_EXP), None);
+		assert_eq!(jwt_expiry("not-a-jwt"), None);
+		assert_eq!(jwt_expiry(""), None);
+		assert_eq!(jwt_expiry("a.!!!!.c"), None);
+	}
 }
