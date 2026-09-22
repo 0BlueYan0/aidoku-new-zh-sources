@@ -45,8 +45,6 @@ const RENEW_MARGIN: i64 = 86_400;
 const RETRY_BACKOFF: i64 = 600;
 /// A `login` notification this soon after a successful login is that login, not a logout.
 const LOGIN_WINDOW: i64 = 60;
-/// How long a scraped account summary is reused before being fetched again.
-const FOOTER_TTL: i64 = 60;
 
 fn timestamp(key: &str) -> i64 {
 	defaults_get::<String>(key)
@@ -193,6 +191,9 @@ pub fn handle_login(email: &str, password: &str) -> bool {
 	match login(email, password) {
 		LoginOutcome::Success => {
 			store_credentials(email, password);
+			// One request, here where the reader is already waiting for the login, so the
+			// settings screen never has to fetch anything itself.
+			refresh_account_cache();
 			// Only a login the reader performed may claim the `login` notification that follows.
 			// A silent renewal must not, or a logout right after one would be mistaken for a login
 			// and leave the credentials behind.
@@ -284,23 +285,30 @@ pub fn logout() {
 	clear_auth();
 }
 
-/// The account summary, reusing the last one for `FOOTER_TTL` seconds.
+/// The account summary for the settings screen. **Makes no request.**
 ///
-/// The settings screen is what calls this, and it can be drawn several times in a row -
-/// notably right after a login, which also kicks off a refresh of content and listings.
-/// Scraping the account page on every one of those draws puts a 51 KB fetch in the way of
-/// refreshes that are already using up the handful of requests the app runs at once.
-pub fn account_footer_cached() -> String {
-	let now = current_date();
-	if now - timestamp(FOOTER_CACHED_AT_KEY) < FOOTER_TTL {
-		if let Some(cached) = defaults_get::<String>(FOOTER_CACHE_KEY).filter(|v| !v.is_empty()) {
-			return cached;
-		}
+/// Drawing the settings screen must not fetch anything. A login already sets off a
+/// refresh of settings, listings and content at the same moment, and the home screen
+/// alone builds eight page fetches in a row; adding a 51 KB account-page fetch to that
+/// burst puts it in a queue for the handful of requests the app runs at once. So the
+/// summary is scraped once, at login, and only read back here.
+pub fn account_footer_reported() -> String {
+	if needs_relogin() {
+		return String::from("儲存的帳號密碼已失效，請先登出再重新登入");
 	}
+	defaults_get::<String>(FOOTER_CACHE_KEY)
+		.filter(|value| !value.is_empty())
+		.unwrap_or_else(|| String::from("已登入。帳號數值會在下次登入時更新。"))
+}
+
+/// Scrape the account summary and keep it for the settings screen.
+///
+/// Called where a request is already expected and the reader is waiting - right after a
+/// login - never from the settings screen itself.
+fn refresh_account_cache() {
 	let footer = account_footer();
-	defaults_set(FOOTER_CACHE_KEY, DefaultValue::String(footer.clone()));
-	set_timestamp(FOOTER_CACHED_AT_KEY, now);
-	footer
+	defaults_set(FOOTER_CACHE_KEY, DefaultValue::String(footer));
+	set_timestamp(FOOTER_CACHED_AT_KEY, current_date());
 }
 
 /// Builds the account summary shown under the login setting.
