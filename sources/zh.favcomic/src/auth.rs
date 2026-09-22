@@ -36,6 +36,8 @@ const DEVICE_LIMIT_KEY: &str = "auth_device_limit";
 /// the few requests the app runs at once.
 const FOOTER_CACHE_KEY: &str = "auth_footer_cache";
 const FOOTER_CACHED_AT_KEY: &str = "auth_footer_cached_at";
+/// How long a scraped account summary is reused before the settings screen fetches again.
+const FOOTER_TTL: i64 = 60;
 
 /// The site issues its token cookie with `Max-Age=604800`.
 const TOKEN_LIFETIME: i64 = 604_800;
@@ -292,23 +294,30 @@ pub fn logout() {
 /// alone builds eight page fetches in a row; adding a 51 KB account-page fetch to that
 /// burst puts it in a queue for the handful of requests the app runs at once. So the
 /// summary is scraped once, at login, and only read back here.
-pub fn account_footer_reported() -> String {
+pub fn account_footer_cached() -> String {
 	if needs_relogin() {
 		return String::from("儲存的帳號密碼已失效，請先登出再重新登入");
 	}
-	defaults_get::<String>(FOOTER_CACHE_KEY)
-		.filter(|value| !value.is_empty())
-		.unwrap_or_else(|| String::from("已登入。帳號數值會在下次登入時更新。"))
+	let now = current_date();
+	if now - timestamp(FOOTER_CACHED_AT_KEY) < FOOTER_TTL {
+		if let Some(cached) =
+			defaults_get::<String>(FOOTER_CACHE_KEY).filter(|value| !value.is_empty())
+		{
+			return cached;
+		}
+	}
+	refresh_account_cache()
 }
 
 /// Scrape the account summary and keep it for the settings screen.
 ///
 /// Called where a request is already expected and the reader is waiting - right after a
 /// login - never from the settings screen itself.
-fn refresh_account_cache() {
+fn refresh_account_cache() -> String {
 	let footer = account_footer();
-	defaults_set(FOOTER_CACHE_KEY, DefaultValue::String(footer));
+	defaults_set(FOOTER_CACHE_KEY, DefaultValue::String(footer.clone()));
 	set_timestamp(FOOTER_CACHED_AT_KEY, current_date());
+	footer
 }
 
 /// Builds the account summary shown under the login setting.
@@ -321,7 +330,16 @@ pub fn account_footer() -> String {
 		return String::from("儲存的帳號密碼已失效，請先登出再重新登入");
 	}
 
-	let Ok(document) = crate::helper::fetch_html(&format!("{}/menu", base_url())) else {
+	// Deliberately not `fetch_html`: that renews the session first, and this runs while
+	// the settings screen is being drawn. komiic and creativecomic both read their account
+	// figures without touching the session, and a login attempt has no business being in
+	// the way of a screen redraw. Renewal happens on the content paths instead.
+	let document = crate::helper::request(&format!("{}/menu", base_url())).and_then(|request| {
+		request
+			.html()
+			.map_err(|_| aidoku::error!("could not read the account page"))
+	});
+	let Ok(document) = document else {
 		return String::from("無法連線到喜漫漫畫，請檢查網路");
 	};
 

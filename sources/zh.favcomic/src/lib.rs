@@ -326,7 +326,7 @@ impl DynamicSettings for FavComicSource {
 				"登入失敗：這個帳號同時登入的裝置已達站方上限（實測 3 台）。\n請到喜漫網站登入，按「清除其他設備並重新登入」（需要輸入寄到 email 的 6 位驗證碼），再回來這裡登入。App 內無法解除。",
 			)
 		} else if auth::credentials().is_some() {
-			auth::account_footer_reported()
+			auth::account_footer_cached()
 		} else {
 			String::from("尚未登入。登入後可在這裡看到金幣、優惠券與會員狀態。")
 		};
