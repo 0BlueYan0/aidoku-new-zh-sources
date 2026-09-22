@@ -30,6 +30,12 @@ const NEEDS_RELOGIN_KEY: &str = "auth_needs_relogin";
 /// Set when the site refused the login because too many devices are already signed in.
 /// Kept apart from `NEEDS_RELOGIN_KEY`: there the password is wrong, here it is right.
 const DEVICE_LIMIT_KEY: &str = "auth_device_limit";
+/// The last account summary that was scraped, and when. The settings screen renders more
+/// than once around a login - the login itself also refreshes content and listings - and
+/// every render used to re-fetch a 51 KB page while those refreshes were competing for
+/// the few requests the app runs at once.
+const FOOTER_CACHE_KEY: &str = "auth_footer_cache";
+const FOOTER_CACHED_AT_KEY: &str = "auth_footer_cached_at";
 
 /// The site issues its token cookie with `Max-Age=604800`.
 const TOKEN_LIFETIME: i64 = 604_800;
@@ -39,6 +45,8 @@ const RENEW_MARGIN: i64 = 86_400;
 const RETRY_BACKOFF: i64 = 600;
 /// A `login` notification this soon after a successful login is that login, not a logout.
 const LOGIN_WINDOW: i64 = 60;
+/// How long a scraped account summary is reused before being fetched again.
+const FOOTER_TTL: i64 = 60;
 
 fn timestamp(key: &str) -> i64 {
 	defaults_get::<String>(key)
@@ -71,6 +79,8 @@ pub fn clear_auth() {
 		FAILED_AT_KEY,
 		NEEDS_RELOGIN_KEY,
 		DEVICE_LIMIT_KEY,
+		FOOTER_CACHE_KEY,
+		FOOTER_CACHED_AT_KEY,
 	] {
 		defaults_set(key, DefaultValue::Null);
 	}
@@ -263,6 +273,25 @@ pub fn logout() {
 		let _ = request.header("User-Agent", USER_AGENT).send();
 	}
 	clear_auth();
+}
+
+/// The account summary, reusing the last one for `FOOTER_TTL` seconds.
+///
+/// The settings screen is what calls this, and it can be drawn several times in a row -
+/// notably right after a login, which also kicks off a refresh of content and listings.
+/// Scraping the account page on every one of those draws puts a 51 KB fetch in the way of
+/// refreshes that are already using up the handful of requests the app runs at once.
+pub fn account_footer_cached() -> String {
+	let now = current_date();
+	if now - timestamp(FOOTER_CACHED_AT_KEY) < FOOTER_TTL {
+		if let Some(cached) = defaults_get::<String>(FOOTER_CACHE_KEY).filter(|v| !v.is_empty()) {
+			return cached;
+		}
+	}
+	let footer = account_footer();
+	defaults_set(FOOTER_CACHE_KEY, DefaultValue::String(footer.clone()));
+	set_timestamp(FOOTER_CACHED_AT_KEY, now);
+	footer
 }
 
 /// Builds the account summary shown under the login setting.
