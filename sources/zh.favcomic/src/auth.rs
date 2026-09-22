@@ -268,8 +268,20 @@ pub fn retry_after_lock() -> bool {
 /// Ends the session on the site so it clears the token cookie from the shared jar, then forgets
 /// the credentials.
 pub fn logout() {
-	if let Ok(request) = Request::get(format!("{}/logout", base_url())) {
-		let _ = request.header("User-Agent", USER_AGENT).send();
+	// HEAD rather than GET: the site answers `/logout` with a 302 to its home page, and
+	// letting that be followed as a GET pulls 156 KB down while this notification handler -
+	// and the app with it - waits. HEAD ends the session just the same (the reply still
+	// carries the fresh `Set-Cookie`) and transfers nothing: measured 0 bytes against
+	// 156 672. Logging out was the one path that froze while logging in did not, and this
+	// request was the only thing on it that logging in does not also do.
+	//
+	// The timeout is a backstop for the same reason: inside a notification handler, a
+	// request that never finishes takes the whole app down with it.
+	if let Ok(request) = Request::head(format!("{}/logout", base_url())) {
+		let _ = request
+			.header("User-Agent", USER_AGENT)
+			.timeout(10.0)
+			.send();
 	}
 	clear_auth();
 }
