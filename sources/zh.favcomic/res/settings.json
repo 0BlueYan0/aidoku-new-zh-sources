@@ -39,8 +39,9 @@
 				"logoutTitle": "登出",
 				"notification": "login",
 				"refreshes": [
-					"content",
-					"listings"
+					"settings",
+					"listings",
+					"content"
 				]
 			}
 		]
