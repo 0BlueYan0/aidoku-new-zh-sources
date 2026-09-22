@@ -316,7 +316,7 @@ impl DynamicSettings for FavComicSource {
 	/// has no way to tell a working session from a lapsed one.
 	/// Never answers with an empty list: a source that hands the app no dynamic settings
 	/// gets a settings screen whose buttons stop responding, which reads as the whole
-	/// source having frozen. Signed out, this makes no request either - the hint is a
+	/// source having frozen. Signed out this makes no request either - the hint is a
 	/// constant, while `account_footer` fetches the account page.
 	fn get_dynamic_settings(&self) -> Result<Vec<Setting>> {
 		let footer = if auth::hit_device_limit() {
@@ -326,7 +326,7 @@ impl DynamicSettings for FavComicSource {
 				"登入失敗：這個帳號同時登入的裝置已達站方上限（實測 3 台）。\n請到喜漫網站登入，按「清除其他設備並重新登入」（需要輸入寄到 email 的 6 位驗證碼），再回來這裡登入。App 內無法解除。",
 			)
 		} else if auth::credentials().is_some() {
-			auth::account_footer_cached()
+			auth::account_footer()
 		} else {
 			String::from("尚未登入。登入後可在這裡看到金幣、優惠券與會員狀態。")
 		};
