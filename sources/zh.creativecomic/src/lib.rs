@@ -366,9 +366,6 @@ impl WebLoginHandler for CreativeComicSource {
 
 impl NotificationHandler for CreativeComicSource {
 	fn handle_notification(&self, notification: String) {
-		// TEMPORARY: counted so the settings screen can show whether a button press
-		// reaches the source at all.
-		auth::note_notification(&notification);
 		match notification.as_str() {
 			"login" => auth::handle_login_notification(),
 			// The site keeps its session in localStorage and sets no cookies, so the
@@ -388,6 +385,9 @@ impl NotificationHandler for CreativeComicSource {
 }
 
 impl DynamicSettings for CreativeComicSource {
+	/// Never answers with an empty list: handing the app no dynamic settings at all
+	/// leaves this source's settings screen unusable - the buttons stop responding and
+	/// it reads as a freeze. `account_footer` therefore always has something to say.
 	fn get_dynamic_settings(&self) -> Result<Vec<Setting>> {
 		let mut settings: Vec<Setting> = Vec::new();
 		if let Some(footer) = auth::account_footer() {
