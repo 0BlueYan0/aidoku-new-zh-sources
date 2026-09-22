@@ -27,6 +27,9 @@ const EXPIRES_AT_KEY: &str = "auth_expires_at";
 const LOGGED_IN_AT_KEY: &str = "auth_logged_in_at";
 const FAILED_AT_KEY: &str = "auth_failed_at";
 const NEEDS_RELOGIN_KEY: &str = "auth_needs_relogin";
+/// Set when the site refused the login because too many devices are already signed in.
+/// Kept apart from `NEEDS_RELOGIN_KEY`: there the password is wrong, here it is right.
+const DEVICE_LIMIT_KEY: &str = "auth_device_limit";
 
 /// The site issues its token cookie with `Max-Age=604800`.
 const TOKEN_LIFETIME: i64 = 604_800;
@@ -67,6 +70,7 @@ pub fn clear_auth() {
 		LOGGED_IN_AT_KEY,
 		FAILED_AT_KEY,
 		NEEDS_RELOGIN_KEY,
+		DEVICE_LIMIT_KEY,
 	] {
 		defaults_set(key, DefaultValue::Null);
 	}
@@ -77,9 +81,40 @@ pub fn needs_relogin() -> bool {
 	defaults_get::<bool>(NEEDS_RELOGIN_KEY).unwrap_or(false)
 }
 
+/// Whether the last login attempt failed because the account has too many devices
+/// signed in. Reported in settings, because the reader cannot tell this apart from a
+/// wrong password otherwise - the app shows the same generic failure for both.
+pub fn hit_device_limit() -> bool {
+	defaults_get::<bool>(DEVICE_LIMIT_KEY).unwrap_or(false)
+}
+
+/// True when the login response is the site's "too many devices" answer.
+///
+/// `common.js` on the site branches on exactly this: `result.code === 4` makes its login
+/// page reveal a verification-code field, set a hidden `force` flag to 1, and relabel the
+/// button to clearing the other devices. The code is emailed, and the login form here has
+/// nowhere to type one, so this cannot be resolved from inside the app.
+fn is_device_limit(text: &str) -> bool {
+	let Some(rest) = text.split("\"code\"").nth(1) else {
+		return false;
+	};
+	let digits: String = rest
+		.trim_start()
+		.strip_prefix(':')
+		.unwrap_or("")
+		.trim_start()
+		.chars()
+		.take_while(|character| character.is_ascii_digit())
+		.collect();
+	digits == "4"
+}
+
 pub enum LoginOutcome {
 	/// The site accepted the credentials and set a fresh token cookie.
 	Success,
+	/// The credentials are right, but the account already has as many devices signed in
+	/// as the site allows. Nothing here can resolve it - see `is_device_limit`.
+	DeviceLimit,
 	/// The site answered, but refused these credentials. Retrying changes nothing.
 	Rejected,
 	/// No usable answer. Worth retrying after a backoff.
@@ -123,7 +158,15 @@ pub fn login(email: &str, password: &str) -> LoginOutcome {
 		set_timestamp(EXPIRES_AT_KEY, now + TOKEN_LIFETIME);
 		defaults_set(FAILED_AT_KEY, DefaultValue::Null);
 		defaults_set(NEEDS_RELOGIN_KEY, DefaultValue::Null);
+		defaults_set(DEVICE_LIMIT_KEY, DefaultValue::Null);
 		return LoginOutcome::Success;
+	}
+
+	// Checked before the generic refusal: this answer is also `result: fail`, and taking
+	// it for a wrong password would wipe credentials that are perfectly good.
+	if is_device_limit(&text) {
+		println!("[favcomic] login refused: too many devices signed in");
+		return LoginOutcome::DeviceLimit;
 	}
 
 	if text.contains("\"result\":\"fail\"") {
@@ -145,6 +188,13 @@ pub fn handle_login(email: &str, password: &str) -> bool {
 			// and leave the credentials behind.
 			set_timestamp(LOGGED_IN_AT_KEY, current_date());
 			true
+		}
+		// The password is right, so the credentials are not what is wrong and must not be
+		// wiped. Nothing here can clear the other devices, so this is recorded for the
+		// settings screen to explain and the attempt ends.
+		LoginOutcome::DeviceLimit => {
+			defaults_set(DEVICE_LIMIT_KEY, DefaultValue::Bool(true));
+			false
 		}
 		LoginOutcome::Rejected => {
 			clear_auth();
@@ -168,6 +218,13 @@ fn renew_with_stored_credentials() -> bool {
 
 	match login(&email, &password) {
 		LoginOutcome::Success => true,
+		// Not a credential problem, so the stored password stays; back off like any other
+		// failure the site may recover from once the reader frees a device slot.
+		LoginOutcome::DeviceLimit => {
+			defaults_set(DEVICE_LIMIT_KEY, DefaultValue::Bool(true));
+			set_timestamp(FAILED_AT_KEY, now);
+			false
+		}
 		LoginOutcome::Rejected => {
 			// The password changed or the account is gone: stop retrying and tell the reader.
 			defaults_set(NEEDS_RELOGIN_KEY, DefaultValue::Bool(true));
@@ -282,4 +339,33 @@ pub fn handle_login_notification() {
 		return;
 	}
 	logout();
+}
+
+#[cfg(test)]
+mod test {
+	use super::*;
+	use aidoku_test::aidoku_test;
+
+	/// `common.js` on the site branches on `result.code === 4` to mean "too many devices
+	/// signed in". It arrives as `result: fail` like a wrong password does, so telling the
+	/// two apart is the whole point - mistaking it for a wrong password wipes credentials
+	/// that are correct.
+	#[aidoku_test]
+	fn spots_the_too_many_devices_answer() {
+		assert!(is_device_limit(
+			r#"{"result":"fail","code":4,"msg":"登入裝置過多"}"#
+		));
+		assert!(is_device_limit(r#"{"code": 4,"result":"fail"}"#));
+	}
+
+	/// A wrong password must stay a wrong password, and a longer code starting with 4
+	/// must not be read as 4.
+	#[aidoku_test]
+	fn leaves_every_other_answer_alone() {
+		assert!(!is_device_limit(r#"{"result":"fail","code":1}"#));
+		assert!(!is_device_limit(r#"{"result":"fail","code":40}"#));
+		assert!(!is_device_limit(r#"{"result":"fail"}"#));
+		assert!(!is_device_limit(r#"{"result":"success","code":0}"#));
+		assert!(!is_device_limit(""));
+	}
 }
