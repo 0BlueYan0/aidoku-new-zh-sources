@@ -20,7 +20,7 @@ use aidoku::{
 use serde::Deserialize;
 
 use crate::crypto;
-use crate::helper::{read_envelope, API_URL, BASE_URL, DEVICE, USER_AGENT};
+use crate::helper::{read_envelope, Envelope, API_URL, BASE_URL, DEVICE, USER_AGENT};
 
 const UUID_KEY: &str = "guestUuid";
 const ACCESS_TOKEN_KEY: &str = "accessToken";
@@ -138,28 +138,40 @@ fn fetch_guest_uuid() -> Option<String> {
 	Some(uuid)
 }
 
-/// What a probe of the stored session found.
-enum Probe {
-	/// The session is still accepted.
-	Live,
-	/// CCC refused it. A dead token is refused on every endpoint, not just this one.
+/// What asking CCC about the stored session produced.
+enum MemberResult {
+	/// The session is accepted and this is the account behind it.
+	Ok(Member),
+	/// CCC refused the credential. A dead token is refused on every endpoint, not only
+	/// this one, so it means the session is gone rather than that this call failed.
 	Dead,
-	/// No usable answer, which says nothing about the session.
+	/// No usable answer - offline, a server error, an unreadable payload. Says nothing
+	/// about the session, and must not be reported as one having expired.
 	Unknown,
 }
 
-/// Ask CCC whether the stored token is still accepted.
-fn probe_session() -> Probe {
+/// Fetch the account behind the stored token.
+///
+/// The three outcomes are kept apart because they need opposite responses: a dead session
+/// should be renewed, an unreachable server should just be waited out, and telling a
+/// reader on a train that their login expired invites them to throw away a good one.
+fn fetch_member() -> MemberResult {
 	let Ok(request) = crate::helper::api_request("/member") else {
-		return Probe::Unknown;
+		return MemberResult::Unknown;
 	};
 	let Ok(response) = request.send() else {
-		return Probe::Unknown;
+		return MemberResult::Unknown;
 	};
-	match response.status_code() {
-		200 => Probe::Live,
-		401 => Probe::Dead,
-		_ => Probe::Unknown,
+	if response.status_code() == 401 {
+		return MemberResult::Dead;
+	}
+	match response.get_json_owned::<Envelope<Member>>() {
+		Ok(envelope) if envelope.code == 401 => MemberResult::Dead,
+		Ok(envelope) => match envelope.data {
+			Some(member) if envelope.code == 0 => MemberResult::Ok(member),
+			_ => MemberResult::Unknown,
+		},
+		Err(_) => MemberResult::Unknown,
 	}
 }
 
@@ -188,9 +200,9 @@ pub fn ensure_session() {
 	// send one; whichever gets here first speaks for all of them.
 	set_timestamp(NEXT_CHECK_KEY, now + PROBE_RETRY);
 
-	match probe_session() {
-		Probe::Live => set_timestamp(NEXT_CHECK_KEY, now + CHECK_INTERVAL),
-		Probe::Dead => match refresh() {
+	match fetch_member() {
+		MemberResult::Ok(_) => set_timestamp(NEXT_CHECK_KEY, now + CHECK_INTERVAL),
+		MemberResult::Dead => match refresh() {
 			TokenOutcome::Renewed => {
 				println!("[ccc] session renewed");
 				set_timestamp(NEXT_CHECK_KEY, now + CHECK_INTERVAL);
@@ -205,7 +217,7 @@ pub fn ensure_session() {
 			TokenOutcome::Unreachable => set_timestamp(NEXT_CHECK_KEY, now + FAIL_BACKOFF),
 		},
 		// Says nothing about the session, so try again soon rather than acting on it.
-		Probe::Unknown => set_timestamp(NEXT_CHECK_KEY, now + PROBE_RETRY),
+		MemberResult::Unknown => set_timestamp(NEXT_CHECK_KEY, now + PROBE_RETRY),
 	}
 }
 
@@ -512,11 +524,6 @@ pub fn handle_login_notification() {
 	}
 }
 
-fn fetch_member() -> Option<Member> {
-	let request = crate::helper::api_request("/member").ok()?;
-	read_envelope::<Member>(request).ok()
-}
-
 /// The account summary shown in settings. Always says something.
 ///
 /// Returning nothing here is not an option: an empty answer leaves `get_dynamic_settings`
@@ -551,34 +558,40 @@ pub fn account_footer() -> Option<String> {
 		));
 	}
 
-	let member = match fetch_member() {
-		Some(member) => Some(member),
-		// A stale token is the usual cause. The gate is cleared first so the check is not
-		// skipped just because one ran recently - the reader is here now, looking at it.
-		None => {
+	match fetch_member() {
+		MemberResult::Ok(member) => Some(describe(member)),
+		// Being unable to reach CCC is not the same as being signed out, and saying so
+		// would invite the reader to log out of a session that is perfectly good.
+		MemberResult::Unknown => Some(String::from(
+			"目前無法連線到 CCC，暫時讀不到帳號資訊（登入狀態未變）。",
+		)),
+		MemberResult::Dead => {
+			// The reader is looking at this right now, so renew immediately instead of
+			// waiting for the gate that `ensure_session` would otherwise respect.
 			defaults_set(NEXT_CHECK_KEY, DefaultValue::Null);
 			ensure_session();
-			if is_logged_in() {
-				fetch_member()
-			} else {
-				None
+			if needs_relogin() {
+				return Some(String::from(
+					"登入已失效且無法自動恢復，請按「清除登入狀態」後重新登入。",
+				));
+			}
+			match fetch_member() {
+				MemberResult::Ok(member) => Some(describe(member)),
+				_ => Some(String::from("登入已失效，稍後會自動重試，請稍後再回來看看。")),
 			}
 		}
-	};
+	}
+}
 
-	let Some(member) = member else {
-		return Some(String::from("登入已失效，請重新登入。"));
-	};
-
+fn describe(member: Member) -> String {
 	let name = member
 		.nickname
 		.filter(|value| !value.is_empty())
 		.or(member.name)
 		.unwrap_or_else(|| String::from("已登入"));
-
-	let mut parts: Vec<String> = Vec::new();
-	parts.push(name);
-	parts.push(format!("金幣 {}", member.coin.unwrap_or(0)));
-	parts.push(format!("點數 {}", member.point.unwrap_or(0)));
-	Some(parts.join("・"))
+	format!(
+		"{name}・金幣 {}・點數 {}",
+		member.coin.unwrap_or(0),
+		member.point.unwrap_or(0)
+	)
 }
