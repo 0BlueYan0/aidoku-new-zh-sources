@@ -43,9 +43,9 @@ const NEEDS_RELOGIN_KEY: &str = "needsRelogin";
 /// absence is what tells the `login` notification apart from a real sign-out - see
 /// `handle_login_notification`.
 const JUST_LOGGED_IN_KEY: &str = "justLoggedInAt";
-/// Names of the entries the web login view actually handed over. Recorded so the
-/// settings footer can say what arrived when no token could be found - the app's
-/// delivery of `localStorageKeys` is undocumented and no shipped source relies on it.
+/// Names of the entries the web login view actually handed over. Recorded so a sign-in
+/// that did not take can be diagnosed from the log - the app's delivery of
+/// `localStorageKeys` is undocumented and no shipped source relies on it.
 const SEEN_KEYS_KEY: &str = "webLoginKeys";
 /// How many times the web login view has called back. Distinguishes "never called" from
 /// "called but handed over nothing", which look identical otherwise.
@@ -475,18 +475,20 @@ pub fn sync_from_web_view() -> bool {
 	let Some(webview) = open_site() else {
 		defaults_set(
 			SYNC_RESULT_KEY,
-			DefaultValue::String(String::from("無法載入 CCC 網頁")),
+			DefaultValue::String(String::from("連不上 CCC，請確認網路後再試一次。")),
 		);
 		return false;
 	};
 
 	let Some(access) = read_storage(&webview, "accessToken") else {
 		// Reaching here means the web view loaded but its storage held no session -
-		// most likely the login view and this one do not share a data store.
+		// most likely the login view and this one do not share a data store. That
+		// belongs in the log; what the reader gets is the step to take next.
+		println!("[ccc] ERROR the site loaded but its storage held no accessToken");
 		defaults_set(
 			SYNC_RESULT_KEY,
 			DefaultValue::String(String::from(
-				"網頁已載入，但它的 localStorage 裡沒有 accessToken（登入頁與背景網頁可能不共用儲存空間）",
+				"讀不到登入資料。請先按「登入」完成登入，再按一次「同步登入狀態」。",
 			)),
 		);
 		return false;
@@ -617,20 +619,23 @@ fn describe(member: Member) -> String {
 pub fn account_footer() -> Option<String> {
 	if needs_relogin() {
 		return Some(String::from(
-			"登入已失效且無法自動續期，請按「清除登入狀態」後重新登入。",
+			"登入已失效，無法自動恢復。請按「清除登入狀態」後重新登入。",
 		));
 	}
 
 	if !is_logged_in() {
-		// If the login view ran but left no token, name what it did hand over; that is
-		// the one clue available for why sign-in did not take.
+		// The stored reason is already written as something the reader can act on, so
+		// it stands on its own.
 		if let Some(reason) = stored(SYNC_RESULT_KEY) {
-			return Some(format!("同步失敗：{reason}"));
+			return Some(reason);
 		}
+		// The login view ran but left no token. What it did hand over is a clue for us,
+		// not for the reader, so it goes to the log and they get the next step.
 		if let Some(seen) = stored(SEEN_KEYS_KEY) {
 			let calls = defaults_get::<i32>(CALL_COUNT_KEY).unwrap_or(0);
-			return Some(format!(
-				"登入未完成：登入頁回呼 {calls} 次，交回「{seen}」，其中沒有 accessToken。請回報這行字。"
+			println!("[ccc] web login called back {calls} time(s) handing over: {seen}");
+			return Some(String::from(
+				"登入尚未完成。請按「登入」登入後，再按「同步登入狀態」。",
 			));
 		}
 		// Signed out with nothing wrong: hide the group. The static footer on the
@@ -650,10 +655,10 @@ pub fn account_footer() -> Option<String> {
 			}
 			if needs_relogin() {
 				Some(String::from(
-					"登入已失效且無法自動續期，請按「清除登入狀態」後重新登入。",
+					"登入已失效，無法自動恢復。請按「清除登入狀態」後重新登入。",
 				))
 			} else {
-				Some(String::from("登入已失效，正在重試續期，稍後再回來看看。"))
+				Some(String::from("登入暫時失效，稍後會自動重試，請稍後再回來看看。"))
 			}
 		}
 		Outcome::Unreachable(_) => Some(String::from(
