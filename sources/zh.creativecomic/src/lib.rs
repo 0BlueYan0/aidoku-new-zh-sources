@@ -366,6 +366,9 @@ impl WebLoginHandler for CreativeComicSource {
 
 impl NotificationHandler for CreativeComicSource {
 	fn handle_notification(&self, notification: String) {
+		// TEMPORARY: counted so the settings screen can show whether a button press
+		// reaches the source at all.
+		auth::note_notification(&notification);
 		match notification.as_str() {
 			"login" => auth::handle_login_notification(),
 			// The site keeps its session in localStorage and sets no cookies, so the

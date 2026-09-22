@@ -37,6 +37,15 @@ const CALL_COUNT_KEY: &str = "webLoginCalls";
 /// What the last storage sync saw, so a failure can be read off the settings screen.
 const SYNC_RESULT_KEY: &str = "syncResult";
 
+/// How many times each notification has reached this source. TEMPORARY, for diagnosis:
+/// when both buttons look like they do nothing, the first thing worth knowing is whether
+/// the press arrives here at all, and the log server on this setup receives nothing.
+const NOTIFY_COUNT_KEYS: [(&str, &str); 3] = [
+	("login", "nLogin"),
+	("syncLogin", "nSync"),
+	("clearLogin", "nClear"),
+];
+
 /// The OAuth client the site embeds in its own web bundle. Both values are served to
 /// every visitor of creative-comic.tw, so neither is a secret; they are reproduced here
 /// because the token endpoint requires them.
@@ -337,6 +346,34 @@ pub fn handle_login_notification() {
 	}
 }
 
+/// Record that a notification arrived. TEMPORARY, see `NOTIFY_COUNT_KEYS`.
+pub fn note_notification(name: &str) {
+	for (notification, key) in NOTIFY_COUNT_KEYS {
+		if notification == name {
+			let count = defaults_get::<i32>(key).unwrap_or(0) + 1;
+			defaults_set(key, DefaultValue::Int(count));
+		}
+	}
+}
+
+/// What this device has, in text the reader can send back. TEMPORARY, see
+/// `NOTIFY_COUNT_KEYS`. Defaults reads only - no request is made.
+fn diagnostics() -> String {
+	let count = |key: &str| defaults_get::<i32>(key).unwrap_or(0);
+	let mark = |present: bool| if present { "有" } else { "無" };
+	format!(
+		"診斷（暫時顯示）\n按鈕次數：登入 {} ・同步 {} ・清除 {}\ntoken {} ・uuid {} ・登入頁回呼 {} 次（交回「{}」）\n最後同步：{}",
+		count("nLogin"),
+		count("nSync"),
+		count("nClear"),
+		mark(is_logged_in()),
+		mark(stored(UUID_KEY).is_some()),
+		defaults_get::<i32>(CALL_COUNT_KEY).unwrap_or(0),
+		stored(SEEN_KEYS_KEY).unwrap_or_else(|| String::from("沒有")),
+		stored(SYNC_RESULT_KEY).unwrap_or_else(|| String::from("沒有紀錄")),
+	)
+}
+
 fn fetch_member() -> Option<Member> {
 	let request = crate::helper::api_request("/member").ok()?;
 	read_envelope::<Member>(request).ok()
@@ -351,20 +388,10 @@ fn fetch_member() -> Option<Member> {
 /// rather than going blank.
 pub fn account_footer() -> Option<String> {
 	if !is_logged_in() {
-		// If the login view ran but left no token, name what it did hand over; that is
-		// the one clue available for why sign-in did not take.
-		if let Some(reason) = stored(SYNC_RESULT_KEY) {
-			return Some(format!("同步失敗：{reason}"));
-		}
-		if let Some(seen) = stored(SEEN_KEYS_KEY) {
-			let calls = defaults_get::<i32>(CALL_COUNT_KEY).unwrap_or(0);
-			return Some(format!(
-				"登入未完成：登入頁回呼 {calls} 次，交回「{seen}」，其中沒有 accessToken。請回報這行字。"
-			));
-		}
-		// Signed out with nothing wrong: hide the group. The static footer on the
-		// account group already explains the login and sync steps.
-		return None;
+		// Signed out: nothing to fetch, so report what the device actually holds. Reads
+		// defaults only, so this path makes no request at all - it renders even when
+		// every CCC host is unreachable, and cannot itself be what freezes anything.
+		return Some(diagnostics());
 	}
 
 	let member = match fetch_member() {
