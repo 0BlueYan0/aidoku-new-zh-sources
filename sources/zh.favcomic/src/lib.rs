@@ -289,20 +289,12 @@ impl DeepLinkHandler for FavComicSource {
 
 impl BasicLoginHandler for FavComicSource {
 	fn handle_basic_login(&self, _key: String, username: String, password: String) -> Result<bool> {
-		if auth::handle_login(&username, &password) {
-			return Ok(true);
-		}
-
-		// Whether the app shows a source-supplied message in the login dialog has never
-		// been tested here, and no shipped source returns an error from this method - they
-		// all answer `Ok(false)`. For chapter loading the text is definitely discarded, so
-		// this is the one place worth finding out: the device limit is the single login
-		// failure a reader cannot act on without being told what it is. A wrong password
-		// still answers `Ok(false)`, so only this one branch changes.
-		if auth::hit_device_limit() {
-			bail!("同時登入的裝置已達上限，請到喜漫網站按「清除其他設備並重新登入」");
-		}
-		Ok(false)
+		// Answering with an error here changes nothing: the login dialog shows the app's
+		// own wording whatever the source returns (verified on device 2026-09-22), and
+		// the source cannot ask for the settings page to be redrawn either. So a login
+		// failure has to be explained by the static footer in `settings.json`, which is
+		// always drawn, rather than from here.
+		Ok(auth::handle_login(&username, &password))
 	}
 }
 
