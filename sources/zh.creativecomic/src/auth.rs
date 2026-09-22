@@ -39,6 +39,10 @@ const FAILED_AT_KEY: &str = "tokenFailedAt";
 /// Set when the session is dead and cannot be renewed, so the settings footer can say
 /// so instead of leaving the reader guessing.
 const NEEDS_RELOGIN_KEY: &str = "needsRelogin";
+/// When `handle_web_login` last handed over a session. Written *only* there, so its
+/// absence is what tells the `login` notification apart from a real sign-out - see
+/// `handle_login_notification`.
+const JUST_LOGGED_IN_KEY: &str = "justLoggedInAt";
 /// Names of the entries the web login view actually handed over. Recorded so the
 /// settings footer can say what arrived when no token could be found - the app's
 /// delivery of `localStorageKeys` is undocumented and no shipped source relies on it.
@@ -59,6 +63,9 @@ const CLIENT_SECRET: &str = "9eAhsCX3VWtyqTmkUo5EEaoH4MNPxrn6ZRwse7tE";
 const EXPIRY_MARGIN: i64 = 60;
 /// How long to wait after renewal could not reach the server before trying again.
 const FAIL_BACKOFF: i64 = 600;
+/// How long after a captured sign-in the `login` notification still means "just signed
+/// in" rather than "signed out".
+const JUST_LOGGED_IN_TTL: i64 = 60;
 
 /// The localStorage entries CCC keeps its session in.
 const SESSION_STORAGE_KEYS: [&str; 3] = ["accessToken", "refreshToken", "userId"];
@@ -149,9 +156,16 @@ fn store_access_token(access: &str, expires_in: Option<i64>) {
 	defaults_set(ACCESS_TOKEN_KEY, DefaultValue::String(String::from(access)));
 	// Prefer the server's own countdown; fall back to the token's `exp` claim, which is
 	// the only thing available for a session picked up out of the web view.
+	//
+	// An expiry already in the past is discarded rather than stored: a misread claim or
+	// a skewed device clock would otherwise make `ensure_session` renew on every single
+	// entry point, rotating the refresh token on each request with nothing to stop it.
+	// Not knowing when the token dies is safe - that falls back to renewing on the
+	// first 401 - while believing it died an hour ago is not.
 	let expires_at = expires_in
 		.map(|seconds| current_date() + seconds)
-		.or_else(|| jwt_expiry(access));
+		.or_else(|| jwt_expiry(access))
+		.filter(|expires_at| *expires_at > current_date());
 	match expires_at {
 		Some(value) => set_timestamp(EXPIRES_AT_KEY, value),
 		None => defaults_set(EXPIRES_AT_KEY, DefaultValue::Null),
@@ -416,6 +430,7 @@ pub fn capture_web_login(values: &HashMap<String, String>) -> bool {
 		defaults_set(REFRESH_TOKEN_KEY, DefaultValue::String(refresh));
 	}
 	defaults_set(NEEDS_RELOGIN_KEY, DefaultValue::Null);
+	set_timestamp(JUST_LOGGED_IN_KEY, current_date());
 	true
 }
 
@@ -483,6 +498,7 @@ pub fn clear() {
 	defaults_set(EXPIRES_AT_KEY, DefaultValue::Null);
 	defaults_set(FAILED_AT_KEY, DefaultValue::Null);
 	defaults_set(NEEDS_RELOGIN_KEY, DefaultValue::Null);
+	defaults_set(JUST_LOGGED_IN_KEY, DefaultValue::Null);
 	defaults_set(SEEN_KEYS_KEY, DefaultValue::Null);
 	defaults_set(CALL_COUNT_KEY, DefaultValue::Null);
 	defaults_set(SYNC_RESULT_KEY, DefaultValue::Null);
@@ -512,16 +528,30 @@ pub fn clear_web_session() {
 	clear();
 }
 
-/// Aidoku posts `login` both when a login finishes and when the user logs out, and from
-/// here the two are indistinguishable.
+/// Aidoku posts `login` both when a login finishes and when the user logs out, and the
+/// name alone does not say which.
 ///
-/// Nothing is inferred from it. CCC sets no cookies, so the app's login row never flips
-/// to "logged in" and never offers a logout; a branch that read this notification as a
-/// sign-out could therefore only fire on an event whose meaning has never been observed,
-/// and its one effect would be to throw away a session the reader had just synced.
-/// Signing out runs through the explicit "clear login" button instead.
+/// A sign-out is only ever inferred when `handle_web_login` has actually handed a
+/// session over at some point: that is the one situation in which the app is tracking
+/// the login state itself and can genuinely be offering a logout. On CCC today it never
+/// does - the site sets no cookies, so the callback never fires and the app's login row
+/// never flips to "logged in" - which leaves this a no-op, and deliberately so. The
+/// earlier version read every `login` notification as a possible sign-out and so could
+/// only ever fire on an event whose meaning has never been observed, throwing away a
+/// session the reader had just synced. Signing out runs through the explicit "clear
+/// login" button instead.
 pub fn handle_login_notification() {
-	println!("[ccc] login notification received; stored session left unchanged");
+	let marked_at = timestamp(JUST_LOGGED_IN_KEY);
+	if marked_at == 0 {
+		println!("[ccc] login notification received; stored session left unchanged");
+		return;
+	}
+	if current_date() - marked_at < JUST_LOGGED_IN_TTL {
+		// The notification for the sign-in that just happened.
+		return;
+	}
+	println!("[ccc] logged out");
+	clear_web_session();
 }
 
 // ---------------------------------------------------------------------------
