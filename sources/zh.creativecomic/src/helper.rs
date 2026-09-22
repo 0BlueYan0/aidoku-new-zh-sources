@@ -229,57 +229,7 @@ pub fn api_request(path: &str) -> Result<Request> {
 	Ok(auth::authorize(request))
 }
 
-/// What a request came back as.
-///
-/// CCC answers `401 {"code":401,"message":"Unauthenticated."}` on *every* endpoint
-/// once the bearer token is dead - it does not quietly fall back to guest access -
-/// so a dead token takes the whole source down rather than degrading it. That makes
-/// 401 worth telling apart from "offline": the first is fixed by renewing the token,
-/// the second only by waiting.
-pub enum Outcome<T> {
-	Ok(T),
-	/// HTTP 401: whatever credential was attached is not accepted.
-	Unauthorized,
-	/// No usable answer - offline, a server error, or an unreadable payload.
-	Unreachable,
-}
-
-/// Send a request and unwrap the `{code, message, data}` envelope, reporting the
-/// three cases apart.
-pub fn send_api<T: serde::de::DeserializeOwned>(request: Request) -> Outcome<T> {
-	let response = match request.send() {
-		Ok(response) => response,
-		Err(_) => return Outcome::Unreachable,
-	};
-	if response.status_code() == 401 {
-		return Outcome::Unauthorized;
-	}
-
-	let envelope: Envelope<T> = match response.get_json_owned() {
-		Ok(envelope) => envelope,
-		Err(_) => return Outcome::Unreachable,
-	};
-	// Some deployments answer 200 with the error in the envelope instead.
-	if envelope.code == 401 {
-		return Outcome::Unauthorized;
-	}
-	if envelope.code != 0 {
-		println!("[ccc] API error {}: {}", envelope.code, envelope.message);
-		return Outcome::Unreachable;
-	}
-	match envelope.data {
-		Some(data) => Outcome::Ok(data),
-		None => Outcome::Unreachable,
-	}
-}
-
 /// Send a request and unwrap the `{code, message, data}` envelope.
-///
-/// One request in, one result out, and nothing else sent on the way. Everything on the
-/// content path goes through here, and the app runs only a handful of requests at once,
-/// so anything that fires a second request from in here multiplies across every entry
-/// point the app happens to be running - which is how this source has wedged before.
-/// Session renewal therefore lives on the settings screen, never here.
 pub fn read_envelope<T: serde::de::DeserializeOwned>(request: Request) -> Result<T> {
 	let envelope: Envelope<T> = request.json_owned()?;
 	if envelope.code != 0 {
@@ -431,9 +381,6 @@ impl RankEntry {
 	}
 }
 
-/// Units that mark the number in front of them as the chapter number.
-const CHAPTER_UNITS: [char; 6] = ['話', '话', '回', '集', '章', '篇'];
-
 /// Pull a chapter number out of the site's own label.
 ///
 /// A number followed by a chapter unit wins over any number earlier in the label, so
@@ -445,6 +392,9 @@ const CHAPTER_UNITS: [char; 6] = ['話', '话', '回', '集', '章', '篇'];
 /// it counts those unnumbered entries too, so it runs ahead of the real numbering and
 /// would label a mid-series announcement as a later chapter than the newest one.
 pub fn chapter_number(vol_name: Option<&str>) -> Option<f32> {
+	/// Units that mark the number in front of them as the chapter number.
+	const CHAPTER_UNITS: [char; 6] = ['話', '话', '回', '集', '章', '篇'];
+
 	let characters: Vec<char> = vol_name?.chars().collect();
 	let mut numbers: Vec<(f32, bool)> = Vec::new();
 	let mut index = 0;
@@ -455,8 +405,8 @@ pub fn chapter_number(vol_name: Option<&str>) -> Option<f32> {
 			continue;
 		}
 
-		// Walk one run of digits, allowing a single decimal point that has another
-		// digit behind it so a trailing full stop is not swallowed.
+		// Walk one run of digits, allowing a single decimal point that has another digit
+		// behind it, so a trailing full stop is not swallowed.
 		let start = index;
 		let mut seen_dot = false;
 		while index < characters.len() {
@@ -594,7 +544,6 @@ mod test {
 	fn the_number_carrying_a_chapter_unit_wins() {
 		assert_eq!(chapter_number(Some("第1季第3話")), Some(3.0));
 		assert_eq!(chapter_number(Some("2026 新年特別篇 第 7 回")), Some(7.0));
-		// Nothing carries a unit, so the first number still stands.
 		assert_eq!(chapter_number(Some("EP.5")), Some(5.0));
 	}
 

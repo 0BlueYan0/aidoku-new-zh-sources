@@ -197,16 +197,7 @@ impl Source for CreativeComicSource {
 			let unwrapped = responses
 				.next()
 				.and_then(|response| response.ok())
-				.and_then(|response| {
-					if response.status_code() == 401 {
-						println!(
-							"[ccc] ERROR CCC refused the key for page {} (401)",
-							proportion.id
-						);
-						return None;
-					}
-					response.get_json_owned::<Envelope<ImageKey>>().ok()
-				})
+				.and_then(|response| response.get_json_owned::<Envelope<ImageKey>>().ok())
 				.and_then(|envelope| envelope.data)
 				.and_then(|payload| crypto::unwrap_page_key(&payload.key, &secret));
 
@@ -385,10 +376,8 @@ impl NotificationHandler for CreativeComicSource {
 				println!("[ccc] session sync succeeded: {synced}");
 			}
 			// The app's own login button never flips to "log out" for this site,
-			// because it tracks state through a callback CCC can never trigger, so
-			// this button is the only way out. It signs out of the site as well,
-			// otherwise the login page comes back already authenticated.
-			"clearLogin" => auth::clear_web_session(),
+			// because it tracks state through a callback CCC can never trigger.
+			"clearLogin" => auth::clear(),
 			_ => {}
 		}
 	}
@@ -431,9 +420,9 @@ impl DeepLinkHandler for CreativeComicSource {
 		// lookup to find the manga this chapter belongs to.
 		if let Some(rest) = url.split("/reader_comic/").nth(1) {
 			if let Some(key) = leading_id(rest) {
-				// The only branch that makes a request, so the credential is set up
-				// here rather than at the top: without one CCC answers `403 uuid錯誤`,
-				// and a deep link is exactly what a fresh install reaches first.
+				// The only branch that makes a request, so the credential is set up here
+				// rather than at the top: without one CCC answers `403 uuid錯誤`, and a
+				// deep link is exactly what a fresh install reaches first.
 				auth::ensure_guest_uuid();
 				let content: ChapterContent = api_get(&format!("/book/chapter/{key}"))?;
 				if let Some(detail) = content.chapter {
