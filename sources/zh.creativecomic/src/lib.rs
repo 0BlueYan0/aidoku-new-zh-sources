@@ -74,6 +74,7 @@ fn build_chapters(list: ChapterList) -> Vec<Chapter> {
 
 impl Source for CreativeComicSource {
 	fn new() -> Self {
+		auth::purge_experimental_state();
 		Self
 	}
 

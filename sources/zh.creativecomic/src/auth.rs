@@ -288,6 +288,35 @@ pub fn sync_from_web_view() -> bool {
 	true
 }
 
+/// Keys written by versions 8 to 12 that no later version reads.
+const ORPHAN_KEYS: [&str; 4] = ["tokenExpiresAt", "tokenFailedAt", "needsRelogin", "loggedIn"];
+/// Marks that the cleanup below has already run on this device.
+const STATE_PURGED_KEY: &str = "statePurged";
+
+/// Drop the session once, on devices that ran versions 8 to 12.
+///
+/// Those versions renewed the session by themselves, and CCC rotates the refresh token on
+/// every renewal, so a device that ran them can be left holding an access token the
+/// server rejects alongside a refresh token it has already spent. Nothing here clears
+/// such a pair on its own - a dead token is simply attached to every request, which CCC
+/// answers 401 on every endpoint - so the reader would be stuck signing in to a source
+/// that never accepts the result. Dropping it costs one sign-in and ends that.
+///
+/// Defaults writes only. This runs while the source is loading, where a request would
+/// block everything behind it.
+pub fn purge_experimental_state() {
+	if defaults_get::<bool>(STATE_PURGED_KEY).unwrap_or(false) {
+		return;
+	}
+	// Written first, so a cleanup that somehow fails part way cannot run on every load.
+	defaults_set(STATE_PURGED_KEY, DefaultValue::Bool(true));
+	for key in ORPHAN_KEYS {
+		defaults_set(key, DefaultValue::Null);
+	}
+	clear();
+	println!("[ccc] cleared session state left by an earlier version");
+}
+
 pub fn clear() {
 	defaults_set(ACCESS_TOKEN_KEY, DefaultValue::Null);
 	defaults_set(REFRESH_TOKEN_KEY, DefaultValue::Null);
