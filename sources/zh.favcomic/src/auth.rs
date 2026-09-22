@@ -218,6 +218,15 @@ fn renew_with_stored_credentials() -> bool {
 	if needs_relogin() {
 		return false;
 	}
+	// Too many devices signed in cannot be resolved from here - it needs a code the site
+	// emails - so retrying is pure cost. And the cost is not one request: `fetch_html`
+	// calls `ensure_session` before every fetch the source makes, and the home screen
+	// alone builds eight of them in a row, so a retrying renewal puts a login attempt in
+	// front of each one and the source stops keeping up. The reader clears the block on
+	// the website and signs in again, which is what lifts this flag.
+	if hit_device_limit() {
+		return false;
+	}
 	let Some((email, password)) = credentials() else {
 		return false;
 	};
