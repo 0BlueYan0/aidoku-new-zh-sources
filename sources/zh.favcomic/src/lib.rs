@@ -309,16 +309,22 @@ impl DynamicSettings for FavComicSource {
 	///
 	/// The balance and quota numbers only exist on the site, and a reader who cannot see them
 	/// has no way to tell a working session from a lapsed one.
+	/// Never answers with an empty list: a source that hands the app no dynamic settings
+	/// gets a settings screen whose buttons stop responding, which reads as the whole
+	/// source having frozen. Signed out, this makes no request either - the hint is a
+	/// constant, while `account_footer` fetches the account page.
 	fn get_dynamic_settings(&self) -> Result<Vec<Setting>> {
-		if auth::credentials().is_none() {
-			return Ok(Vec::new());
-		}
+		let footer = if auth::credentials().is_some() {
+			auth::account_footer()
+		} else {
+			String::from("尚未登入。登入後可在這裡看到金幣、優惠券與會員狀態。")
+		};
 
 		Ok(vec![GroupSetting {
 			key: "accountInfo".into(),
 			title: "帳號資訊".into(),
 			items: Vec::new(),
-			footer: Some(auth::account_footer().into()),
+			footer: Some(footer.into()),
 			..Default::default()
 		}
 		.into()])
