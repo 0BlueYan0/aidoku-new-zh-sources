@@ -70,6 +70,16 @@ const JUST_LOGGED_IN_TTL: i64 = 60;
 /// The localStorage entries CCC keeps its session in.
 const SESSION_STORAGE_KEYS: [&str; 3] = ["accessToken", "refreshToken", "userId"];
 
+/// Mirrors "is there a session on this device" as a plain bool, purely so
+/// `settings.json` can point `requires` / `requiresFalse` at it and grey out the button
+/// that would do nothing. The app offers no busy state for a button, so which of the two
+/// is tappable is the clearest signal available that the last press did something.
+const LOGGED_IN_FLAG_KEY: &str = "loggedIn";
+
+fn set_logged_in_flag(value: bool) {
+	defaults_set(LOGGED_IN_FLAG_KEY, DefaultValue::Bool(value));
+}
+
 #[derive(Deserialize)]
 struct TokenResponse {
 	#[serde(default)]
@@ -154,6 +164,7 @@ fn jwt_expiry(token: &str) -> Option<i64> {
 /// Store an access token together with whatever is known about when it dies.
 fn store_access_token(access: &str, expires_in: Option<i64>) {
 	defaults_set(ACCESS_TOKEN_KEY, DefaultValue::String(String::from(access)));
+	set_logged_in_flag(true);
 	// Prefer the server's own countdown; fall back to the token's `exp` claim, which is
 	// the only thing available for a session picked up out of the web view.
 	//
@@ -493,6 +504,7 @@ pub fn sync_from_web_view() -> bool {
 
 /// Forget the session on this device.
 pub fn clear() {
+	set_logged_in_flag(false);
 	defaults_set(ACCESS_TOKEN_KEY, DefaultValue::Null);
 	defaults_set(REFRESH_TOKEN_KEY, DefaultValue::Null);
 	defaults_set(EXPIRES_AT_KEY, DefaultValue::Null);
@@ -513,14 +525,29 @@ pub fn clear() {
 pub fn clear_web_session() {
 	match open_site() {
 		Some(webview) => {
-			for key in SESSION_STORAGE_KEYS {
-				// Keys are literals defined in this file, so the quoting is safe.
-				if webview
-					.eval(&format!("localStorage.removeItem('{key}')"))
-					.is_err()
-				{
-					println!("[ccc] ERROR could not clear {key} from the site's storage");
+			// `eval` hands back whatever the script evaluates to, and that has to be a
+			// string. `localStorage.removeItem(...)` evaluates to `undefined`, which
+			// comes back as an error even though the removal itself worked - reporting
+			// a failure that never happened. So the script ends by reading the keys
+			// back, which gives `eval` its string *and* makes the log honest: empty
+			// means the session really is gone.
+			let names = SESSION_STORAGE_KEYS
+				.iter()
+				.map(|key| format!("'{key}'"))
+				.collect::<Vec<String>>()
+				.join(",");
+			// Keys are literals defined in this file, so the quoting is safe.
+			let script = format!(
+				"var k=[{names}];\
+				 k.forEach(function(n){{try{{localStorage.removeItem(n)}}catch(e){{}}}});\
+				 k.filter(function(n){{return localStorage.getItem(n)}}).join(',')"
+			);
+			match webview.eval(&script) {
+				Ok(left) if left.trim().is_empty() => println!("[ccc] site session cleared"),
+				Ok(left) => {
+					println!("[ccc] ERROR the site's storage still holds {left}")
 				}
+				Err(_) => println!("[ccc] ERROR could not run the storage clearing script"),
 			}
 		}
 		None => println!("[ccc] ERROR could not open the web view to clear the site session"),
