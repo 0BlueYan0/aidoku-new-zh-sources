@@ -1,0 +1,19 @@
+{
+	"info": {
+		"id": "zh.bookwalker",
+		"name": "BOOK☆WALKER 台灣",
+		"version": 20,
+		"url": "https://www.bookwalker.com.tw",
+		"contentRating": 1,
+		"languages": [
+			"zh"
+		],
+		"minAppVersion": "0.9.0"
+	},
+	"listings": [
+		{
+			"id": "buy",
+			"name": "購書"
+		}
+	]
+}

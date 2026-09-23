@@ -9,6 +9,7 @@ Aidoku 新版中文圖源<br>
 
 ## 圖源列表
 
+- [BOOK☆WALKER 台灣](https://www.bookwalker.com.tw/)（只列已購買的書，需網頁登入）
 - [CCC追漫台](https://www.creative-comic.tw/)（登入可以顯示金幣、點數餘額）
 - [Line Webtoons 繁體中文](https://www.webtoons.com/zh-hant/)
 - [Komiic 漫畫](https://komiic.com/)（使用帳號密碼登入，非cookie，並且能夠維持登入狀態）
