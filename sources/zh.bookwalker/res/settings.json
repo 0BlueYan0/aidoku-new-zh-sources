@@ -1,0 +1,24 @@
+[
+	{
+		"type": "group",
+		"title": "帳號",
+		"footer": "按「登入」，登入完成後登入頁會自動關閉，下方「帳號資訊」出現書櫃數量就是成功了。\n登入狀態會保存在此裝置，不保存密碼。按「登出」即完全清除。\n需要 iOS 17 以上。\n購書只能在 BOOK☆WALKER 網站進行，App 內無法直接購買。",
+		"items": [
+			{
+				"type": "login",
+				"key": "login",
+				"title": "登入",
+				"method": "web",
+				"url": "https://www.bookwalker.com.tw/login?redirect=https%3A%2F%2Fwww.bookwalker.com.tw%2Fbookcase%2Favailable_book_list",
+				"logoutTitle": "登出",
+				"clearCookiesOnLogOut": true,
+				"notification": "login",
+				"refreshes": [
+					"settings",
+					"listings",
+					"content"
+				]
+			}
+		]
+	}
+]
