@@ -136,10 +136,19 @@ impl Source for BookwalkerSource {
 		}
 
 		if needs_chapters {
+			// Volumes the user archived on the site stay in the bookcase but the reader
+			// answers 991 for them, so mark them here instead of letting them look broken.
+			let archived = auth::archived_ids();
 			let chapters: Vec<Chapter> = cards
 				.iter()
 				.rev()
 				.filter_map(|card| card.to_chapter())
+				.map(|mut chapter| {
+					if archived.contains(&chapter.key) {
+						chapter.title = Some(String::from("已封存，請至網站還原"));
+					}
+					chapter
+				})
 				.collect();
 			manga.chapters = Some(chapters);
 		}

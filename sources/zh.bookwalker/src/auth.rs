@@ -41,6 +41,20 @@ const LAST_FAILED_KEY: &str = "auth_last_failed";
 /// into a no-op.
 const LOGIN_WINDOW: i64 = 60;
 
+/// The archive shelf lists the volumes the user hid on the site (`封存`). Archived
+/// volumes stay in the buy shelf, and neither the buy shelf nor the per-series view
+/// marks them, so this shelf is the only way to tell an archived volume from a
+/// readable one. The reader answers 991 for an archived volume until it is restored on
+/// the website, so this only labels them; it cannot make them open.
+const ARCHIVE_PATH: &str = "/bookcase/available_book_list/archive?sd=1&d=0&sort=0";
+/// Comma-joined archived product ids, and when they were last read.
+const ARCHIVED_IDS_KEY: &str = "auth_archived_ids";
+const ARCHIVED_AT_KEY: &str = "auth_archived_at";
+/// Refresh the archived set at most this often. Archiving is rare, and this rides on
+/// the chapter-list path, so it is gated like zh.komiic's session probe: every branch
+/// that would fetch advances the gate first, so parallel updates fetch it only once.
+const ARCHIVE_TTL: i64 = 300;
+
 /// Cookies worth sending back to the site. Tracking cookies are dropped so the
 /// header stays short and stable.
 const WANTED_COOKIE_PREFIXES: [&str; 3] = ["remember_web_", "new_se", "bweternity"];
@@ -129,7 +143,57 @@ pub fn clear_all() {
 	defaults_set(COUNT_KEY, DefaultValue::Null);
 	defaults_set(LOGGED_IN_AT_KEY, DefaultValue::Null);
 	defaults_set(LAST_FAILED_KEY, DefaultValue::Null);
+	defaults_set(ARCHIVED_IDS_KEY, DefaultValue::Null);
+	defaults_set(ARCHIVED_AT_KEY, DefaultValue::Null);
 	crate::reader::clear_sessions();
+}
+
+/// Product ids the user has archived on the site. The chapter list marks any volume in
+/// this set so the reader's 991 does not look like a broken book. The set is cached and
+/// refreshed from the archive shelf at most every `ARCHIVE_TTL` seconds. Empty when
+/// signed out or when the shelf has not been read yet.
+pub fn archived_ids() -> Vec<String> {
+	refresh_archived_if_stale();
+	defaults_get::<String>(ARCHIVED_IDS_KEY)
+		.unwrap_or_default()
+		.split(',')
+		.filter(|id| !id.is_empty())
+		.map(String::from)
+		.collect()
+}
+
+fn refresh_archived_if_stale() {
+	let Some(cookie) = cookie_header() else {
+		return;
+	};
+	let at = defaults_get::<String>(ARCHIVED_AT_KEY)
+		.and_then(|value| value.parse::<i64>().ok())
+		.unwrap_or(0);
+	if current_date() - at < ARCHIVE_TTL {
+		return;
+	}
+	// Advance the gate before the request, so several manga updating at once fetch the
+	// shelf only once (the zh.komiic rule).
+	defaults_set(ARCHIVED_AT_KEY, DefaultValue::String(current_date().to_string()));
+
+	let url = format!("{BASE_URL}{ARCHIVE_PATH}");
+	let Some(html) = bookcase_request(&url, &cookie)
+		.ok()
+		.and_then(|request| request.html().ok())
+	else {
+		println!("[bookwalker] archive shelf fetch failed, keeping the cached set");
+		return;
+	};
+	if !is_bookcase(&html) {
+		// An expired cookie redirects to the login page; leave the cache untouched.
+		return;
+	}
+	let ids: Vec<String> = parse_bookcase(&html)
+		.into_iter()
+		.flat_map(|card| card.product_ids)
+		.collect();
+	println!("[bookwalker] archive shelf has {} archived volumes", ids.len());
+	defaults_set(ARCHIVED_IDS_KEY, DefaultValue::String(ids.join(",")));
 }
 
 /// Reads the bookcase with `header`; `Some(count)` when the page really is the bookcase.
