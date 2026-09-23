@@ -15,6 +15,12 @@
 //! trip the site's 99x limit. `pb` needs the pcreader `SESSION` cookie (captured from
 //! the web view) and a `Referer` of the viewer page. Its `auth_info` has a null
 //! `uuid`, so the `uuid` from `c` is kept across refreshes.
+//!
+//! The reader session `c` opens on the site cannot be released from here (`/end` does
+//! nothing) and lingers for a while, so reopening the same book soon after closing it
+//! used to answer 991. Reopening therefore goes through `pb` first: with the stored
+//! session it yields a fresh `auth_info` without a second `c`, and the configuration is
+//! read with that. Only when that fails does the viewer get opened again.
 
 use aidoku::{
 	alloc::{string::ToString, String, Vec},
@@ -24,7 +30,7 @@ use aidoku::{
 		defaults::{defaults_get, defaults_set, DefaultValue},
 		js::{WebView, WebViewUserScript},
 		net::Request,
-		std::current_date,
+		std::{current_date, sleep},
 	},
 	prelude::*,
 	Page, PageContent, PageContext, Result,
@@ -59,16 +65,50 @@ const REFRESH_AFTER: i64 = 50;
 // ---------------------------------------------------------------------------
 
 pub fn get_pages(pid: &str) -> Result<Vec<Page>> {
+	if let Some(pages) = reuse_session(pid) {
+		return Ok(pages);
+	}
 	let cap = open_and_capture(pid)?;
 	let c = parse_c(&cap.req, &cap.res).ok_or_else(|| error!("could not read the reader authorisation"))?;
 	if c.status != "200" || c.auth_query.is_empty() {
-		// 991/998 = the book is open elsewhere or too many concurrent opens; the site
-		// clears it after a while.
+		// The reader refuses the book. Observed on device 2026-09-23:
+		//   991 = the book is archived on the site (封存), or a just-closed reading
+		//         session the site has not released yet (that one clears after a while);
+		//   998 = too many books open at once.
+		// An archived book stays 991 until it is restored (還原) on the website; the
+		// site's own reader blocks it too, so there is nothing to recover here.
 		bail!("reader returned status {}", c.status);
 	}
 	store_session(pid, &c, &cap.session);
+	println!("[bookwalker] reader opened through the viewer");
+	load_pages(pid, &c.url, &c.auth_query)
+}
 
-	let config_url = format!("{}configuration_pack.json?{}", c.url, c.auth_query);
+/// Reopening a book the source still has a session for: refresh its auth through
+/// `pb` and read the configuration with that, so no second `c` (and no second reader
+/// slot, which the site answers with 991) is needed. `None` on any failure hands over
+/// to the viewer path. A CloudFront refusal arrives as an XML body rather than an
+/// error, and shows up here as a missing `data` field.
+fn reuse_session(pid: &str) -> Option<Vec<Page>> {
+	let url = defaults_get::<String>(&key(pid, "url")).filter(|url| !url.is_empty())?;
+	let position = defaults_get::<String>(&key(pid, "pos"));
+	let auth = refresh_auth(pid, position.as_deref())?;
+	match load_pages(pid, &url, &auth) {
+		Ok(pages) => {
+			println!("[bookwalker] reader reused the stored session, pages={}", pages.len());
+			Some(pages)
+		}
+		Err(error) => {
+			println!("[bookwalker] reader reuse failed after pb, opening the viewer: {error:?}");
+			None
+		}
+	}
+}
+
+/// Fetches and decrypts the configuration under `base_url` with `auth`, and lists the
+/// pages in reading order.
+fn load_pages(pid: &str, base_url: &str, auth: &str) -> Result<Vec<Page>> {
+	let config_url = format!("{base_url}configuration_pack.json?{auth}");
 	let body = Request::get(&config_url)?
 		.header("User-Agent", USER_AGENT)
 		.string()?;
@@ -76,15 +116,22 @@ pub fn get_pages(pid: &str) -> Result<Vec<Page>> {
 	let (json, a, z, t) = decrypt_config(&data).ok_or_else(|| error!("could not decrypt the configuration"))?;
 
 	let order = page_order(&json);
-	// Diagnostic (temporary): confirms the open + decode chain on device.
-	println!("[bookwalker] reader open ok, pages={}", order.len());
+	println!("[bookwalker] reader configuration decoded, pages={}", order.len());
+	// A reopen refreshes through `pb`, which writes the site bookmark at the position it
+	// is given. Until an image request records a real one, the first page stands in, so
+	// that position is at least a page of this book.
+	if defaults_get::<String>(&key(pid, "pos")).is_none() {
+		if let Some(first) = order.first() {
+			defaults_set(&key(pid, "pos"), DefaultValue::String(first.clone()));
+		}
+	}
 	let mut pages: Vec<Page> = Vec::new();
 	for xhtml in order {
 		let Some(info) = parse_page_info(&json, &xhtml) else {
 			continue;
 		};
 		let file = page_file_name(&info, &xhtml, &a, &z, &t);
-		let image_url = format!("{}{}/{}.jpeg", c.url, xhtml, file);
+		let image_url = format!("{base_url}{xhtml}/{file}.jpeg");
 		let mut ctx = PageContext::new();
 		ctx.insert("pid".into(), pid.into());
 		ctx.insert("xhtml".into(), xhtml.clone());
@@ -124,6 +171,11 @@ pub fn image_request(url: String, ctx: Option<&PageContext>) -> Result<Request> 
 		return Ok(Request::get(&url)?.header("User-Agent", USER_AGENT));
 	};
 	let position = ctx.and_then(|c| c.get("xhtml")).map(|s| s.as_str());
+	// The most recently requested page is the position a reopen hands to `pb`, so the
+	// site bookmark stays where the reader was rather than jumping to page one.
+	if let Some(position) = position {
+		defaults_set(&key(pid, "pos"), DefaultValue::String(position.to_string()));
+	}
 	refresh_if_stale(pid, position);
 
 	let auth = defaults_get::<String>(&key(pid, "auth")).unwrap_or_default();
@@ -208,6 +260,9 @@ fn open_and_capture(pid: &str) -> Result<Capture> {
 		if current_date() - started >= OPEN_TIMEOUT {
 			bail!("the reader did not authorise in time");
 		}
+		// Each `eval` crosses into the host's main thread, which the viewer's own
+		// scripts also need, so give it the second between polls.
+		sleep(1);
 	}
 }
 
@@ -277,8 +332,7 @@ fn build_auth_query(json: &str, uuid_override: Option<&str>) -> String {
 // Auth refresh (pb)
 // ---------------------------------------------------------------------------
 
-/// Refreshes the auth via `pb` if it is older than `REFRESH_AFTER`. The timestamp is
-/// advanced before the request so parallel image requests do not all fire `pb`.
+/// Refreshes the auth via `pb` if it is older than `REFRESH_AFTER`.
 fn refresh_if_stale(pid: &str, position: Option<&str>) {
 	let at = defaults_get::<String>(&key(pid, "at"))
 		.and_then(|v| v.parse::<i64>().ok())
@@ -286,6 +340,14 @@ fn refresh_if_stale(pid: &str, position: Option<&str>) {
 	if current_date() - at < REFRESH_AFTER {
 		return;
 	}
+	refresh_auth(pid, position);
+}
+
+/// Asks `pb` for a fresh `auth_info`, stores it and returns it. `None` when the stored
+/// session is incomplete, the request fails, or the response carries no auth (the
+/// site's reader session is gone, say). The timestamp is advanced before the request
+/// so parallel image requests do not all fire `pb`.
+fn refresh_auth(pid: &str, position: Option<&str>) -> Option<String> {
 	set_at(pid, current_date());
 
 	let (Some(cid), Some(u1), Some(bid), Some(uuid), Some(session)) = (
@@ -295,7 +357,8 @@ fn refresh_if_stale(pid: &str, position: Option<&str>) {
 		defaults_get::<String>(&key(pid, "uuid")),
 		defaults_get::<String>(&key(pid, "ses")),
 	) else {
-		return;
+		println!("[bookwalker] reader auth refresh: no stored session");
+		return None;
 	};
 
 	let position = position.unwrap_or("item/xhtml/p-001.xhtml");
@@ -322,13 +385,21 @@ fn refresh_if_stale(pid: &str, position: Option<&str>) {
 	match response {
 		Ok(json) => {
 			let auth = build_auth_query(&json, Some(&uuid));
-			// Diagnostic (temporary): confirms auth refresh works on device.
-			println!("[bookwalker] reader auth refreshed, authlen={}", auth.len());
-			if !auth.is_empty() {
-				defaults_set(&key(pid, "auth"), DefaultValue::String(auth));
+			if auth.is_empty() {
+				println!(
+					"[bookwalker] reader auth refresh: pb returned no auth_info, status {}",
+					json_field(&json, "status").unwrap_or_default()
+				);
+				return None;
 			}
+			defaults_set(&key(pid, "auth"), DefaultValue::String(auth.clone()));
+			println!("[bookwalker] reader auth refreshed, authlen={}", auth.len());
+			Some(auth)
 		}
-		Err(_) => println!("[bookwalker] reader auth refresh failed"),
+		Err(_) => {
+			println!("[bookwalker] reader auth refresh: pb request failed");
+			None
+		}
 	}
 }
 
@@ -338,8 +409,9 @@ fn refresh_if_stale(pid: &str, position: Option<&str>) {
 
 /// Comma-separated list of every pid that has session keys, so logout can find them.
 const PIDS_KEY: &str = "rd_pids";
-/// Every per-book key name written by `store_session` / `set_at`.
-const SESSION_FIELDS: [&str; 7] = ["auth", "cid", "u1", "bid", "uuid", "ses", "at"];
+/// Every per-book key name written by `store_session`, `set_at`, `load_pages` and
+/// `image_request`.
+const SESSION_FIELDS: [&str; 9] = ["auth", "cid", "u1", "bid", "uuid", "ses", "at", "url", "pos"];
 
 fn key(pid: &str, name: &str) -> String {
 	format!("rd_{name}_{pid}")
@@ -356,6 +428,9 @@ fn store_session(pid: &str, c: &CInfo, session: &str) {
 	defaults_set(&key(pid, "bid"), DefaultValue::String(c.bid.clone()));
 	defaults_set(&key(pid, "uuid"), DefaultValue::String(c.uuid.clone()));
 	defaults_set(&key(pid, "ses"), DefaultValue::String(session.to_string()));
+	// The signed base URL of the book folder; `reuse_session` needs it to read the
+	// configuration without a second `c`.
+	defaults_set(&key(pid, "url"), DefaultValue::String(c.url.clone()));
 	set_at(pid, current_date());
 	remember_pid(pid);
 }
