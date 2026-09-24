@@ -1,0 +1,26 @@
+[
+	{
+		"type": "group",
+		"title": "圖片線路",
+		"footer": "兩條線路的圖片內容完全相同，只差連線路徑。站方預設為「線路1」；圖片載入不順時可改用「線路2」。",
+		"items": [
+			{
+				"type": "select",
+				"key": "image_line",
+				"title": "線路",
+				"values": [
+					"tx",
+					"cf"
+				],
+				"titles": [
+					"線路1",
+					"線路2"
+				],
+				"default": "tx",
+				"refreshes": [
+					"content"
+				]
+			}
+		]
+	}
+]

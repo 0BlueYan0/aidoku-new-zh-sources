@@ -1,0 +1,44 @@
+{
+	"info": {
+		"id": "zh.hipmh",
+		"name": "嬉皮漫畫",
+		"version": 1,
+		"url": "https://m.hipmh.com",
+		"contentRating": 1,
+		"languages": [
+			"zh"
+		],
+		"minAppVersion": "0.7.1"
+	},
+	"config": {
+		"hidesFiltersWhileSearching": true,
+		"supportsAuthorSearch": true,
+		"supportsTagSearch": true
+	},
+	"listings": [
+		{
+			"id": "update",
+			"name": "近期更新"
+		},
+		{
+			"id": "weekly",
+			"name": "本週熱門"
+		},
+		{
+			"id": "popular",
+			"name": "人氣排名"
+		},
+		{
+			"id": "korean",
+			"name": "高分韓漫"
+		},
+		{
+			"id": "latest",
+			"name": "最新上架"
+		},
+		{
+			"id": "completed",
+			"name": "完結"
+		}
+	]
+}
