@@ -20,3 +20,4 @@ templates/*/target
 
 docs/*
 CLAUDE.md
+__pycache__/

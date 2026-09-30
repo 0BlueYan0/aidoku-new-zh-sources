@@ -1,0 +1,82 @@
+[
+	{
+		"type": "select",
+		"id": "type",
+		"title": "類型",
+		"options": [
+			"小說",
+			"漫畫"
+		],
+		"ids": [
+			"novel",
+			"comic"
+		]
+	},
+	{
+		"type": "select",
+		"id": "mode",
+		"title": "搜尋方式",
+		"options": [
+			"模糊",
+			"精確",
+			"書名",
+			"作者",
+			"作品名",
+			"標籤"
+		],
+		"ids": [
+			"fuzzy",
+			"exact",
+			"title",
+			"author",
+			"name",
+			"tags"
+		]
+	},
+	{
+		"type": "select",
+		"id": "sort",
+		"title": "排序",
+		"options": [
+			"最近更新",
+			"上架時間",
+			"總點擊量"
+		],
+		"ids": [
+			"latest",
+			"new",
+			"view"
+		]
+	},
+	{
+		"type": "select",
+		"id": "category",
+		"title": "分類（小說）",
+		"options": [
+			"全部",
+			"錄入完成",
+			"錄入中",
+			"翻譯完成",
+			"翻譯中",
+			"轉載",
+			"原創",
+			"AI 翻譯"
+		],
+		"ids": [
+			"",
+			"1",
+			"4",
+			"2",
+			"3",
+			"5",
+			"7",
+			"8"
+		]
+	},
+	{
+		"type": "text",
+		"id": "author",
+		"title": "作者",
+		"placeholder": "輸入作者名稱"
+	}
+]

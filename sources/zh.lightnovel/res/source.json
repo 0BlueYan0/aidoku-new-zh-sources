@@ -1,0 +1,40 @@
+{
+	"info": {
+		"id": "zh.lightnovel",
+		"name": "輕書架",
+		"version": 1,
+		"url": "https://www.lightnovel.app",
+		"contentRating": 1,
+		"languages": [
+			"zh"
+		],
+		"minAppVersion": "0.8.3"
+	},
+	"config": {
+		"hidesFiltersWhileSearching": false,
+		"supportsAuthorSearch": true,
+		"supportsTagSearch": true
+	},
+	"listings": [
+		{
+			"id": "latest",
+			"name": "最近更新"
+		},
+		{
+			"id": "daily",
+			"name": "日榜"
+		},
+		{
+			"id": "weekly",
+			"name": "週榜"
+		},
+		{
+			"id": "monthly",
+			"name": "月榜"
+		},
+		{
+			"id": "comic",
+			"name": "漫畫"
+		}
+	]
+}
