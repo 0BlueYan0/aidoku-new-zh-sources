@@ -44,20 +44,20 @@ const JUST_LOGGED_IN_TTL: i64 = 60;
 // Stored state
 // ---------------------------------------------------------------------------
 
-fn get_string(key: &str) -> Option<String> {
+pub(crate) fn get_string(key: &str) -> Option<String> {
 	defaults_get::<String>(key).filter(|value: &String| !value.is_empty())
 }
 
-fn set_string(key: &str, value: &str) {
+pub(crate) fn set_string(key: &str, value: &str) {
 	defaults_set(key, DefaultValue::String(String::from(value)));
 }
 
 /// Unix seconds stored as a string, so the value cannot overflow an i32.
-fn timestamp(key: &str) -> i64 {
+pub(crate) fn timestamp(key: &str) -> i64 {
 	get_string(key).and_then(|value: String| value.parse::<i64>().ok()).unwrap_or(0)
 }
 
-fn set_timestamp(key: &str, value: i64) {
+pub(crate) fn set_timestamp(key: &str, value: i64) {
 	set_string(key, &format!("{value}"));
 }
 
@@ -231,6 +231,12 @@ pub fn access_token() -> Option<String> {
 		return None;
 	}
 
+	// No gate moves before this POST, unlike komiic and CCC. The refresh token does not
+	// rotate, so entry points that refresh at the same time each get a valid access
+	// token. Handing the stored token out meanwhile would be worse: past its 30 seconds
+	// the hub answers unauthorized, and the caller would refresh anyway after a wasted
+	// round trip. The cost is a few small POSTs when the login row's `refreshes` starts
+	// several entry points at once.
 	match post_json(&format!("{}/api/user/refresh_token", api_base()), &serde_json::json!({ "token": refresh })) {
 		ApiReply::Ok(envelope) => {
 			// A bare string in `Response`, or `Token` there or at the top level.

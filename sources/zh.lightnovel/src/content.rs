@@ -33,7 +33,15 @@ fn decode_entities(text: &str) -> String {
 	while let Some(pos) = rest.find('&') {
 		out.push_str(&rest[..pos]);
 		rest = &rest[pos..];
-		let Some(end) = rest[..rest.len().min(12)].find(';') else {
+		// Entity names are short ASCII; look for the `;` within the next 12 bytes by
+		// character, since a byte index could land inside a multibyte character and
+		// slicing there panics (which aborts the whole chapter).
+		let end = rest
+			.char_indices()
+			.take_while(|(i, _): &(usize, char)| *i < 12)
+			.find(|(_, c): &(usize, char)| *c == ';')
+			.map(|(i, _): (usize, char)| i);
+		let Some(end) = end else {
 			out.push('&');
 			rest = &rest[1..];
 			continue;
@@ -305,6 +313,16 @@ mod tests {
 				"![](<https://img.lightnovel.life/a.jpg?placeholder=J%23x&t=cd>)",
 			)
 		);
+	}
+
+	#[aidoku_test]
+	fn entities_next_to_multibyte_text() {
+		// A bare `&` followed by CJK text used to be sliced at byte 12, inside a character.
+		assert_eq!(decode_entities("第一&二三四五六七八九"), "第一&二三四五六七八九");
+		assert_eq!(decode_entities("A&B"), "A&B");
+		assert_eq!(decode_entities("&amp;二三&lt;四&#x4e00;&#20108;"), "&二三<四一二");
+		assert_eq!(decode_entities("尾巴&"), "尾巴&");
+		assert_eq!(decode_entities("&unknownentity;字"), "&unknownentity;字");
 	}
 
 	#[aidoku_test]

@@ -61,16 +61,25 @@ pub enum Reply {
 }
 
 impl Reply {
+	/// The app shows a generic message for an `Err`, so the site's answer is printed
+	/// here too; without it a refusal (402 quota, 403 level) leaves no trace in logcat.
 	pub fn into_result(self) -> Result<Value> {
 		match self {
 			Reply::Ok(value) => Ok(value),
-			Reply::Refused(status, msg) => bail!("[lightnovel] refused {status}: {msg}"),
-			Reply::Error(msg) => bail!("[lightnovel] hub error: {msg}"),
+			Reply::Refused(status, msg) => {
+				println!("[lightnovel] refused {status}: {msg}");
+				bail!("[lightnovel] refused {status}: {msg}")
+			}
+			Reply::Error(msg) => {
+				println!("[lightnovel] hub error: {msg}");
+				bail!("[lightnovel] hub error: {msg}")
+			}
 		}
 	}
 }
 
 /// One hub call: the method name and its first argument, as a JSON value.
+#[derive(Clone)]
 pub struct Call {
 	pub target: &'static str,
 	pub args: Value,
@@ -95,25 +104,38 @@ struct Connection {
 }
 
 static SEQUENCE: AtomicU32 = AtomicU32::new(0);
+static BASE: AtomicU32 = AtomicU32::new(0);
 const SEQUENCE_KEY: &str = "hub_sequence";
+/// Requests one connection may make after `persist_sequence` before a later instance,
+/// starting from the persisted number plus this, could repeat one of them.
+const SEQUENCE_GAP: u64 = 1000;
+
+/// Where this instance's numbers start: the persisted counter plus the gap, read once.
+fn base() -> u64 {
+	let base = BASE.load(Ordering::Relaxed);
+	if base != 0 {
+		return u64::from(base);
+	}
+	let stored = defaults_get::<String>(SEQUENCE_KEY)
+		.and_then(|v: String| v.parse::<u64>().ok())
+		.unwrap_or(0);
+	let base = (stored.wrapping_add(SEQUENCE_GAP) as u32).max(1);
+	BASE.store(base, Ordering::Relaxed);
+	u64::from(base)
+}
 
 /// A number no earlier request used. The in-memory counter restarts with every new
-/// instance of the source, so it is offset by a counter kept in defaults, which each
-/// connection advances.
+/// instance of the source, so it is offset by a counter kept in defaults, which
+/// `Connection::open` persists once per connection rather than once per request.
 fn next_sequence() -> String {
-	let local = SEQUENCE.fetch_add(1, Ordering::Relaxed);
-	if local == 0 {
-		let stored = defaults_get::<String>(SEQUENCE_KEY)
-			.and_then(|v: String| v.parse::<u64>().ok())
-			.unwrap_or(0);
-		BASE.store(stored.wrapping_add(1000) as u32, Ordering::Relaxed);
-	}
-	let n = u64::from(BASE.load(Ordering::Relaxed)) + u64::from(local);
-	defaults_set(SEQUENCE_KEY, DefaultValue::String(format!("{n}")));
+	let n = base() + u64::from(SEQUENCE.fetch_add(1, Ordering::Relaxed));
 	format!("{}-{n}", current_date())
 }
 
-static BASE: AtomicU32 = AtomicU32::new(0);
+fn persist_sequence() {
+	let n = base() + u64::from(SEQUENCE.load(Ordering::Relaxed));
+	defaults_set(SEQUENCE_KEY, DefaultValue::String(format!("{n}")));
+}
 
 fn request(method_post: bool, url: &str, body: Option<&str>, token: Option<&str>) -> core::result::Result<String, Failure> {
 	// Polls repeat the same URL, and a repeated URL can be answered from a cache (the
@@ -151,6 +173,7 @@ fn request(method_post: bool, url: &str, body: Option<&str>, token: Option<&str>
 
 impl Connection {
 	fn open(token: Option<&str>) -> core::result::Result<Self, Failure> {
+		persist_sequence();
 		let negotiated = request(true, &format!("{}/hub/api/negotiate?negotiateVersion=1", api_base()), None, token)?;
 		let id = serde_json::from_str::<Value>(&negotiated)
 			.ok()

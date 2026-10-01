@@ -5,7 +5,7 @@ use aidoku::{
 	imports::{
 		defaults::defaults_get,
 		net::Request,
-		std::{parse_date, send_partial_result},
+		std::{current_date, parse_date, send_partial_result},
 	},
 	prelude::*,
 	BasicLoginHandler, Chapter, DeepLinkHandler, DeepLinkResult, DynamicSettings,
@@ -20,6 +20,7 @@ mod content;
 mod font;
 mod glyph_table;
 mod hub;
+mod sign_in;
 mod vertical;
 
 use hub::{Call, Reply};
@@ -92,6 +93,9 @@ fn int_field(value: &Value, name: &str) -> Option<i64> {
 	field(value, name).and_then(Value::as_i64)
 }
 
+/// `2026-09-30T03:40:39.059488Z`, as the site sends `LastUpdatedAt` (probed 2026-09-30):
+/// UTC, which is the zone `parse_date` reads in, so the fraction and the `Z` can go.
+/// The test runner rejects a quoted `'T'` in the format, hence the space.
 fn parse_iso(date: &str) -> Option<i64> {
 	let head = date.get(..19)?;
 	parse_date(head.replace('T', " "), "yyyy-MM-dd HH:mm:ss")
@@ -138,13 +142,17 @@ fn parse_entry(value: &Value, comic: bool) -> Option<Manga> {
 	})
 }
 
-/// `{page, totalPages, data: [...]}` or a bare array (`GetRank`).
+/// `{page, size, total, totalPages, hasMore, data: [...]}` (what `GetLatestBookList`
+/// answered on 2026-09-30) or a bare array (`GetRank`). `hasMore` decides the next page;
+/// without it, `page < totalPages` does, which is all Novella's envelope carries.
 fn parse_page(value: &Value, comic: bool) -> MangaPageResult {
 	let (items, has_next) = match value {
 		Value::Array(items) => (items.as_slice(), false),
 		_ => (
 			field(value, "data").and_then(Value::as_array).map_or(&[][..], |a: &Vec<Value>| a.as_slice()),
-			value.get("hasMore").and_then(Value::as_bool).unwrap_or(false),
+			field(value, "hasMore").and_then(Value::as_bool).unwrap_or_else(|| {
+				matches!((int_field(value, "page"), int_field(value, "totalPages")), (Some(p), Some(t)) if p < t)
+			}),
 		),
 	};
 	let entries: Vec<Manga> = items.iter().filter_map(|v: &Value| parse_entry(v, comic)).collect();
@@ -206,17 +214,31 @@ fn is_unauthorized(reply: &Reply) -> bool {
 /// so an unauthorized reply renews the token and runs the batch once more, as Novella
 /// does. Renewal goes through auth's own gates, so a dead login costs one extra refresh
 /// and then trips the needs-relogin brake instead of retrying forever.
+///
+/// When the day's sign-in is due, `SignIn` goes first in the same batch (so a
+/// `GetMyInfo` behind it already sees the result) and its reply is taken back out.
 fn invoke_signed_in(calls: &[Call]) -> Result<Vec<Reply>> {
 	let token = require_token()?;
-	let replies = hub::invoke_all(Some(&token), calls)?;
-	if !replies.iter().any(is_unauthorized) {
-		return Ok(replies);
-	}
-	println!("[lightnovel] hub said unauthorized, renewing the token once");
-	let Some(token) = auth::renew() else {
-		return Ok(replies);
+	let now = current_date();
+	let with_sign_in = sign_in::claim_if_due(now);
+	let batch: Vec<Call>;
+	let calls: &[Call] = if with_sign_in {
+		batch = core::iter::once(sign_in::call()).chain(calls.iter().cloned()).collect();
+		&batch
+	} else {
+		calls
 	};
-	hub::invoke_all(Some(&token), calls)
+	let mut replies = hub::invoke_all(Some(&token), calls)?;
+	if replies.iter().any(is_unauthorized) {
+		println!("[lightnovel] hub said unauthorized, renewing the token once");
+		if let Some(token) = auth::renew() {
+			replies = hub::invoke_all(Some(&token), calls)?;
+		}
+	}
+	if with_sign_in && !replies.is_empty() {
+		sign_in::record(&replies.remove(0), now);
+	}
+	Ok(replies)
 }
 
 fn invoke_one(target: &'static str, args: Value) -> Result<Reply> {
@@ -249,23 +271,27 @@ fn comic_args(cid: i64, skip: i64) -> Value {
 	json!({ "Cid": cid, "Skip": skip, "Take": COMIC_TAKE })
 }
 
-/// (`Total`, image URLs) of a `GetComicContent` reply.
-fn comic_batch(value: &Value) -> (i64, Vec<String>) {
+/// (`Total`, first page index, image URLs) of a `GetComicContent` reply. The reply's own
+/// `Skip` says where the batch starts, and Novella indexes by it rather than by the
+/// value it asked for; `requested` stands in when the reply has none.
+fn comic_batch(value: &Value, requested: i64) -> (i64, i64, Vec<String>) {
 	let Some(ch) = field(value, "chapter") else {
-		return (0, Vec::new());
+		return (0, requested, Vec::new());
 	};
 	let urls = field(ch, "images")
 		.and_then(Value::as_array)
 		.map(|list: &Vec<Value>| list.iter().filter_map(Value::as_str).map(content::image_url).collect())
 		.unwrap_or_default();
-	(int_field(ch, "total").unwrap_or(0), urls)
+	(int_field(ch, "total").unwrap_or(0), int_field(ch, "skip").unwrap_or(requested), urls)
 }
 
 /// Batches of comic image URLs already paid for, so the other pages of a batch need no
-/// second call. Only the most recent few are kept.
+/// second call. Only the most recent few are kept, and a chapter's batches are dropped
+/// when it is opened again: the URLs carry a `t=` signature whose lifetime is unknown,
+/// and a page the site already charged today is not charged again when refetched.
 mod comic_cache {
 	use aidoku::{
-		alloc::{format, string::ToString, String, Vec},
+		alloc::{string::ToString, String, Vec},
 		imports::defaults::{defaults_get, defaults_set, DefaultValue},
 	};
 	use serde_json::{json, Value};
@@ -280,28 +306,42 @@ mod comic_cache {
 			.unwrap_or_default()
 	}
 
-	pub fn get(cid: i64, skip: i64) -> Option<Vec<String>> {
+	fn save(entries: Vec<Value>) {
+		defaults_set(KEY, DefaultValue::String(Value::Array(entries).to_string()));
+	}
+
+	fn urls_of(entry: &Value) -> Vec<String> {
+		entry["urls"]
+			.as_array()
+			.map(|a: &Vec<Value>| a.iter().filter_map(Value::as_str).map(String::from).collect())
+			.unwrap_or_default()
+	}
+
+	/// The cached batch holding page `index` of chapter `cid`: (its first index, URLs).
+	pub fn get(cid: i64, index: i64) -> Option<(i64, Vec<String>)> {
 		load().into_iter().find_map(|entry: Value| {
-			(entry["id"].as_str() == Some(format!("{cid}/{skip}").as_str())).then(|| {
-				entry["urls"]
-					.as_array()
-					.map(|a: &Vec<Value>| a.iter().filter_map(Value::as_str).map(String::from).collect())
-					.unwrap_or_default()
-			})
+			if entry["cid"].as_i64() != Some(cid) {
+				return None;
+			}
+			let skip = entry["skip"].as_i64()?;
+			let urls = urls_of(&entry);
+			(skip <= index && index < skip + urls.len() as i64).then_some((skip, urls))
 		})
 	}
 
-	pub fn store(cid: i64, skip: i64, urls: &[String]) {
-		if urls.is_empty() {
-			return;
+	/// Keep a batch. With `fresh`, every other batch of the chapter goes first.
+	pub fn store(cid: i64, skip: i64, urls: &[String], fresh: bool) {
+		let mut entries: Vec<Value> = load()
+			.into_iter()
+			.filter(|e: &Value| e["cid"].as_i64() != Some(cid) || (!fresh && e["skip"].as_i64() != Some(skip)))
+			.collect();
+		if !urls.is_empty() {
+			entries.push(json!({ "cid": cid, "skip": skip, "urls": urls }));
 		}
-		let id = format!("{cid}/{skip}");
-		let mut entries: Vec<Value> = load().into_iter().filter(|e: &Value| e["id"].as_str() != Some(id.as_str())).collect();
-		entries.push(json!({ "id": id, "urls": urls }));
 		while entries.len() > KEEP {
 			entries.remove(0);
 		}
-		defaults_set(KEY, DefaultValue::String(Value::Array(entries).to_string()));
+		save(entries);
 	}
 }
 
@@ -507,12 +547,17 @@ impl Source for LightnovelSource {
 			// the first batch is fetched here; later pages are placeholders that
 			// get_image_request resolves a batch at a time as the reader reaches them.
 			let first = call_one("GetComicContent", comic_args(cid, 0))?;
-			let (total, urls) = comic_batch(&first);
-			let total = total.max(listed).max(urls.len() as i64);
-			comic_cache::store(cid, 0, &urls);
+			let (total, skip, urls) = comic_batch(&first, 0);
+			println!("[lightnovel] comic {cid}: asked skip 0, reply skip {skip}, total {total}, {} images", urls.len());
+			let total = total.max(listed).max(skip + urls.len() as i64);
+			comic_cache::store(cid, skip, &urls, true);
 			let pages = (0..total)
 				.map(|i: i64| {
-					let url = urls.get(i as usize).cloned().unwrap_or_else(|| format!("{COMIC_SCHEME}{cid}/{i}"));
+					let url = usize::try_from(i - skip)
+						.ok()
+						.and_then(|at: usize| urls.get(at))
+						.cloned()
+						.unwrap_or_else(|| format!("{COMIC_SCHEME}{cid}/{i}"));
 					Page {
 						content: PageContent::url(url),
 						..Default::default()
@@ -596,7 +641,7 @@ impl Home for LightnovelSource {
 				})
 				.collect()
 		} else {
-			vec![Call::new("GetLatestBookList", json!({ "Page": 1, "Size": HOME_SIZE }))]
+			vec![Call::new("GetLatestBookList", with_ignore_flags(json!({ "Page": 1, "Size": HOME_SIZE })))]
 		};
 		let replies = if token.is_some() { invoke_signed_in(&calls)? } else { hub::invoke_all(None, &calls)? };
 
@@ -635,22 +680,36 @@ impl ImageRequestProvider for LightnovelSource {
 		let (cid, index) = rest.split_once('/').ok_or_else(|| error!("[lightnovel] bad page {url}"))?;
 		let cid: i64 = cid.parse().map_err(|_| error!("[lightnovel] bad page {url}"))?;
 		let index: i64 = index.parse().map_err(|_| error!("[lightnovel] bad page {url}"))?;
-		let skip = index / COMIC_TAKE * COMIC_TAKE;
-		let urls = match comic_cache::get(cid, skip) {
-			Some(urls) => urls,
+		let (skip, urls) = match comic_cache::get(cid, index) {
+			Some(batch) => {
+				println!("[lightnovel] comic {cid}: page {index} from cached batch {}", batch.0);
+				batch
+			}
 			None => {
-				// The app preloads several pages at once, so pages of one new batch may
-				// each fetch it; the site charges a page once a day, so the repeats cost
-				// no quota, only requests.
-				let value = call_one("GetComicContent", comic_args(cid, skip))?;
-				let (_, urls) = comic_batch(&value);
-				comic_cache::store(cid, skip, &urls);
-				urls
+				// Reached when the reader lands in a batch nobody fetched: resuming a
+				// chapter at a saved page, or jumping with the slider. The app then asks
+				// for its whole preload window, but it runs these calls one after another
+				// (device, 2026-09-30: jumping to page 12 fetched the batch once and pages
+				// 13-16 hit the cache within 10 ms of it), so a batch is fetched once. No
+				// gate is needed: a caller that misses has nothing else to return anyway.
+				let requested = index / COMIC_TAKE * COMIC_TAKE;
+				let value = call_one("GetComicContent", comic_args(cid, requested))?;
+				let (total, skip, urls) = comic_batch(&value, requested);
+				println!(
+					"[lightnovel] comic {cid}: page {index} asked skip {requested}, reply skip {skip}, total {total}, {} images",
+					urls.len()
+				);
+				comic_cache::store(cid, skip, &urls, false);
+				(skip, urls)
 			}
 		};
-		let real = urls
-			.get((index - skip) as usize)
-			.ok_or_else(|| error!("[lightnovel] no image {index} in batch {skip} of {cid}"))?;
+		let real = usize::try_from(index - skip)
+			.ok()
+			.and_then(|at: usize| urls.get(at))
+			.ok_or_else(|| {
+				println!("[lightnovel] comic {cid}: page {index} is not in batch {skip} of {} images", urls.len());
+				error!("[lightnovel] no image {index} in batch {skip} of {cid}")
+			})?;
 		Ok(Request::get(real)?)
 	}
 }
@@ -708,6 +767,7 @@ impl NotificationHandler for LightnovelSource {
 			} else {
 				println!("[lightnovel] login notification without a recent login: logging out");
 				auth::clear_auth();
+				sign_in::clear();
 			}
 		}
 	}
@@ -721,18 +781,31 @@ fn account_footer() -> String {
 		return String::from("無法取得帳號資訊，請檢查網路後重新開啟這一頁。");
 	};
 	let name = str_field(&info, "userName").unwrap_or("");
-	let level = int_field(&info, "level").unwrap_or(0);
+	let growth = field(&info, "growth");
+	// Novella reads these under `Growth`; the top level is kept as a fallback.
+	let stat = |key: &str| growth.and_then(|g: &Value| field(g, key)).or_else(|| field(&info, key));
+	let level = stat("level").and_then(Value::as_i64).unwrap_or(0);
 	let mut lines = vec![format!("已登入：{name}"), format!("閱讀等級：Lv.{level}")];
-	if let Some(growth) = field(&info, "growth") {
-		if let (Some(exp), Some(next)) = (int_field(growth, "exp"), int_field(growth, "nextLevelExp")) {
-			lines.push(format!("經驗值：{exp} / {next}"));
-		}
-		if let Some(quota) = int_field(growth, "comicQuotaToday") {
-			lines.push(format!("今日漫畫額度剩餘：{quota} 頁"));
-		}
-		if let Some(coin) = int_field(growth, "coin") {
-			lines.push(format!("金幣：{coin}"));
-		}
+	if let (Some(exp), Some(next)) = (
+		stat("exp").and_then(Value::as_i64),
+		stat("nextLevelExp").and_then(Value::as_i64),
+	) {
+		lines.push(format!("經驗值：{exp} / {next}"));
+	}
+	if let Some(quota) = stat("comicQuotaToday").and_then(Value::as_i64) {
+		lines.push(format!("今日漫畫額度剩餘：{quota} 頁"));
+	}
+	if let Some(coin) = stat("coin").and_then(Value::as_i64) {
+		lines.push(format!("金幣：{coin}"));
+	}
+	if let Some(signed) = stat("todaySigned").and_then(Value::as_bool) {
+		lines.push(String::from(if signed { "今日已簽到" } else { "今日尚未簽到" }));
+	}
+	if let Some(streak) = stat("signStreak").and_then(Value::as_i64) {
+		lines.push(format!("連續簽到：{streak} 天"));
+	}
+	if let Some(error) = sign_in::last_error() {
+		lines.push(format!("自動簽到失敗：{error}"));
 	}
 	lines.join("\n")
 }
@@ -802,6 +875,49 @@ mod tests {
 		assert!(result.entries.is_empty() && !result.has_next_page);
 		assert_eq!(novel_category_id("原创"), Some(7));
 		assert_eq!(novel_category_id("百合"), None);
+	}
+
+	#[aidoku_test]
+	fn next_page_from_envelope() {
+		let book = json!({ "id": 1, "title": "書" });
+		let page = |extra: Value| {
+			let mut v = json!({ "data": [book] });
+			for (k, val) in extra.as_object().expect("object") {
+				v[k] = val.clone();
+			}
+			parse_page(&v, false).has_next_page
+		};
+		assert!(page(json!({ "hasMore": true, "page": 3, "totalPages": 3 })));
+		assert!(!page(json!({ "hasMore": false, "page": 1, "totalPages": 3 })));
+		assert!(page(json!({ "page": 1, "totalPages": 3 })));
+		assert!(!page(json!({ "Page": 3, "TotalPages": 3 })));
+		assert!(!page(json!({})));
+		assert!(!parse_page(&json!({ "hasMore": true, "data": [] }), false).has_next_page);
+		assert!(!parse_page(&json!([book]), false).has_next_page);
+	}
+
+	#[aidoku_test]
+	fn iso_dates_are_utc() {
+		assert_eq!(parse_iso("2026-09-30T03:40:39.059488Z"), Some(1_790_739_639));
+		assert_eq!(parse_iso("2026-09-30T03:40:39Z"), Some(1_790_739_639));
+		assert_eq!(parse_iso("2026-09-30"), None);
+	}
+
+	#[aidoku_test]
+	fn comic_batches_by_reply_skip() {
+		let reply = json!({ "chapter": { "total": 30, "skip": 12, "images": ["a.jpg?t=1", "b.jpg?t=2"] } });
+		let (total, skip, urls) = comic_batch(&reply, 12);
+		assert_eq!((total, skip, urls.len()), (30, 12, 2));
+		let (_, skip, _) = comic_batch(&json!({ "Chapter": { "Images": [] } }), 24);
+		assert_eq!(skip, 24);
+		comic_cache::store(7, 12, &urls, true);
+		assert_eq!(comic_cache::get(7, 13).map(|(s, u): (i64, Vec<String>)| (s, u.len())), Some((12, 2)));
+		assert!(comic_cache::get(7, 14).is_none());
+		assert!(comic_cache::get(8, 12).is_none());
+		// Opening the chapter afresh drops what was cached for it.
+		comic_cache::store(7, 0, &urls, true);
+		assert!(comic_cache::get(7, 12).is_none());
+		assert!(comic_cache::get(7, 0).is_some());
 	}
 
 	#[aidoku_test]
