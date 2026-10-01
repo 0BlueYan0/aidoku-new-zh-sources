@@ -17,3 +17,4 @@ Aidoku 新版中文圖源<br>
 - [紳士漫畫](https://www.wnacg.com/)（可自訂網址避免無法連接）
 - [喜漫漫畫](https://www.favcomic.com/)（可用帳號密碼登入並顯示金幣餘額，支援四個鏡像網域與圖片線路切換）
 - [嬉皮漫畫](https://m.hipmh.com/)
+- [輕書架](https://www.lightnovel.app/)（小說與漫畫，需帳密登入）
