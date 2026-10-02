@@ -18,3 +18,4 @@ Aidoku 新版中文圖源<br>
 - [喜漫漫畫](https://www.favcomic.com/)（可用帳號密碼登入並顯示金幣餘額，支援四個鏡像網域與圖片線路切換）
 - [嬉皮漫畫](https://m.hipmh.com/)
 - [輕書架](https://www.lightnovel.app/)（小說與漫畫，需帳密登入）
+- [18漫畫](https://18mh.org/)（站方有 Cloudflare 驗證，載入不出內容時可在設定頁手動通過驗證）

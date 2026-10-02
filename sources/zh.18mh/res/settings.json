@@ -1,0 +1,18 @@
+[
+	{
+		"type": "group",
+		"title": "Cloudflare 驗證",
+		"footer": "來源一直載入不出內容時，按「通過驗證」開啟網站，通過驗證後網頁會自動關閉。\n按鈕變成「清除驗證」後，之後再遇到同樣情況，先按它清除，再按一次「通過驗證」。",
+		"items": [
+			{
+				"type": "login",
+				"key": "cloudflare",
+				"title": "通過驗證",
+				"method": "web",
+				"url": "https://18mh.org",
+				"logoutTitle": "清除驗證",
+				"clearCookiesOnLogOut": true
+			}
+		]
+	}
+]
