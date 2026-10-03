@@ -22,3 +22,4 @@ Aidoku 新版中文圖源<br>
 - [漫畫狗](https://dogemanga.com/)
 - [HO5HO](https://www.ho5ho.com/)
 - [漫小肆韓漫](https://www.jjmhw9.top/)（支援七個鏡像網域，也可自訂網址）
+- [vomic漫](https://www.vomicmh.com/)（閱讀需帳密登入，可切換原圖畫質）
