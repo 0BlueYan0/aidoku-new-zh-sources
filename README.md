@@ -19,3 +19,4 @@ Aidoku 新版中文圖源<br>
 - [嬉皮漫畫](https://m.hipmh.com/)
 - [輕書架](https://www.lightnovel.app/)（小說與漫畫，需帳密登入）
 - [18漫畫](https://18mh.org/)（站方有 Cloudflare 驗證，載入不出內容時可在設定頁手動通過驗證）
+- [漫畫狗](https://dogemanga.com/)

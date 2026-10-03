@@ -1,0 +1,26 @@
+{
+	"info": {
+		"id": "zh.dogemanga",
+		"name": "漫畫狗",
+		"version": 1,
+		"url": "https://dogemanga.com",
+		"contentRating": 1,
+		"languages": [
+			"zh"
+		],
+		"minAppVersion": "0.7.1"
+	},
+	"config": {
+		"supportsAuthorSearch": true
+	},
+	"listings": [
+		{
+			"id": "hot",
+			"name": "熱門排行"
+		},
+		{
+			"id": "latest",
+			"name": "最新連載"
+		}
+	]
+}
