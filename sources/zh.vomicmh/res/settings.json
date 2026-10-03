@@ -1,0 +1,44 @@
+[
+	{
+		"type": "group",
+		"title": "閱讀",
+		"footer": "原圖畫質較好，但流量約是站方畫質的三倍。切換後，重新打開章節才會套用。",
+		"items": [
+			{
+				"type": "select",
+				"key": "image_quality",
+				"title": "圖片畫質",
+				"values": [
+					"site",
+					"original"
+				],
+				"titles": [
+					"站方畫質",
+					"原圖"
+				],
+				"default": "site"
+			}
+		]
+	},
+	{
+		"type": "group",
+		"title": "帳號",
+		"footer": "登入後才能閱讀。登入狀態保存在此裝置，登出即清除。\n部分作品只在 vomic 自家 App 提供，這裡看不到章節。\n登入失敗時，錯誤視窗只會顯示通用訊息；實際原因請看下方「帳號資訊」，關掉這一頁再重新打開才會更新。",
+		"items": [
+			{
+				"type": "login",
+				"key": "login",
+				"title": "登入",
+				"method": "basic",
+				"useEmail": true,
+				"logoutTitle": "登出",
+				"notification": "login",
+				"refreshes": [
+					"settings",
+					"listings",
+					"content"
+				]
+			}
+		]
+	}
+]
