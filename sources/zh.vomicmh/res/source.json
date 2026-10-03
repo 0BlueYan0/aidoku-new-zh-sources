@@ -1,0 +1,28 @@
+{
+	"info": {
+		"id": "zh.vomicmh",
+		"name": "vomic漫",
+		"version": 2,
+		"url": "https://www.vomicmh.com",
+		"contentRating": 0,
+		"languages": [
+			"zh"
+		],
+		"minAppVersion": "0.7.1"
+	},
+	"config": {
+		"hidesFiltersWhileSearching": true,
+		"supportsAuthorSearch": true,
+		"supportsTagSearch": true
+	},
+	"listings": [
+		{
+			"id": "latest",
+			"name": "最近更新"
+		},
+		{
+			"id": "hot",
+			"name": "熱門推薦"
+		}
+	]
+}
