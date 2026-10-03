@@ -1,0 +1,682 @@
+                                <!DOCTYPE html>
+<html>
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    
+<title>漫小肆韓漫-92韩漫-桃桃漫画-Toptoon破解-顶通免费阅读-不收费玩漫-韩国无删减漫画-免费无修韩漫大全-歪歪最新地址</title>
+<meta name="keywords" content="漫小肆韓漫-92韩漫-桃桃漫画-Toptoon破解-顶通免费阅读-不收费玩漫-免费看顶通-秘密教学在线看-最新韩漫">
+<meta name="description" content="漫小肆韓漫为大家带来最新最全韩国漫画,这里有超多韩漫资源,主打韩国都市系列漫画，立志于做韩漫免费韩国漫画第一站,韩漫免费全集就来漫小肆韓漫">
+
+    <link rel="shortcut icon" href="/static/images/favicon.ico">
+    <link href="/static/css/style.css" rel="stylesheet" type="text/css">
+    <link href="/static/css/userinfo-vendor.css" rel="stylesheet" type="text/css">
+    <link href="/static/css/dm5_style.css" rel="stylesheet" type="text/css">
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/1.12.4/jquery.min.js"></script>
+    <script src="/static/js/index.js"></script>
+</head>
+
+<body class="white">
+<!-- 页面头部 -->
+<header class="header container-fluid " style="left: 0px;">
+    <div class="container">
+        <!-- 左侧logo -->
+        <a href="/">
+            <img class="header-logo" src="/static/images/header-logo.png">
+        </a>
+        <!-- 左侧菜单标题 -->
+        <ul class="header-title">
+            <li><a href="/">首页</a></li>
+            <li><a href="/booklist?end=0">连载</a></li>
+            <li><a href="/booklist?end=1">完结</a></li>
+            <li><a href="/update">更新</a></li>
+            <li><a href="/rank">排行</a></li>
+            <li><a href="/booklist"><i class="icon icon-cat" style="font-size:19px;vertical-align: sub;"></i></a></li>
+        </ul>
+        <script>
+            var url = location.href;
+            if (url.indexOf('booklist') > -1) {
+                if (url.indexOf('end=0') > -1) {
+                    $('.header-title li a').eq(1).addClass('active');
+                } else if (url.indexOf('end=1') > -1) {
+                    $('.header-title li a').eq(2).addClass('active');
+                } else {
+                    $('.header-title li a').eq(5).addClass('active');
+                }
+            }  else if (url.indexOf('rank') > -1) {
+                $('.header-title li a').eq(4).addClass('active');
+            } else if (url.indexOf('update') > -1) {
+                $('.header-title li a').eq(3).addClass('active');
+            } else {
+                $('.header-title li a').eq(0).addClass('active');
+            }
+        </script>
+        <!-- 搜索栏 -->
+        <div class="header-search">
+            <input id="txtKeywords" type="text" value="">
+            <a id="btnSearch">搜索</a>
+            <script>
+                $('#btnSearch').click(function () {
+                    var keyword = $('#txtKeywords').val();
+                    window.location.href = '/search?keyword=' + keyword;
+                })
+            </script>
+        </div>
+        <ul class="header-bar">
+
+            <li class="hover">
+                <a href="/history" target="_blank">
+                    <i class="icon icon-clock"></i>
+                    <p>历史</p>
+                </a>
+            </li>
+            <li class="hover">
+                <a href="/bookshelf" data-isload="0" target="_blank">
+                    <i class="icon icon-fav"></i>
+                    <p>收藏</p>
+                    <span class="red-sign"></span>
+                </a>
+            </li>
+        </ul>
+        <div class="header_login hover">
+                        <a href="/login" class="js_header_login_btn">
+                            <img data-isload="0" class="header-avatar" src="/static/images/mrtx.gif">
+            </a>
+        </div>
+    </div>
+</header>
+
+<section class="dateProgressBar container-fluid">
+    <div class="bar-wrap container-fluid">
+        <ul class="data-list container">
+                        <li class="lidaykey ">
+                <a class="bt_daykey" data-val="0">
+                    <span class="day"></span>
+                    <span class="date"></span>
+                </a>
+            </li>
+                        <li class="lidaykey ">
+                <a class="bt_daykey" data-val="1">
+                    <span class="day"></span>
+                    <span class="date"></span>
+                </a>
+            </li>
+                        <li class="lidaykey ">
+                <a class="bt_daykey" data-val="2">
+                    <span class="day"></span>
+                    <span class="date"></span>
+                </a>
+            </li>
+                        <li class="lidaykey ">
+                <a class="bt_daykey" data-val="3">
+                    <span class="day"></span>
+                    <span class="date"></span>
+                </a>
+            </li>
+                        <li class="lidaykey ">
+                <a class="bt_daykey" data-val="4">
+                    <span class="day"></span>
+                    <span class="date"></span>
+                </a>
+            </li>
+                        <li class="lidaykey ">
+                <a class="bt_daykey" data-val="5">
+                    <span class="day"></span>
+                    <span class="date"></span>
+                </a>
+            </li>
+                        <li class="lidaykey ">
+                <a class="bt_daykey" data-val="6">
+                    <span class="day"></span>
+                    <span class="date"></span>
+                </a>
+            </li>
+                    </ul>
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.24.0/moment.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.24.0/locale/zh-cn.js"></script>
+    <script>
+        $('.bt_daykey').each(function () {
+            var day = $(this).attr('data-val');
+            $(this).children('.day').html(moment().subtract(day,'days').format('dddd').replace('星期','周'));
+            $(this).children('.date').html(moment().subtract(day,'days').format('MMMDo').replace('星期','周'));
+            $(this).click(function () {
+                var date = moment().subtract(day,'days').format('YYYY-MM-DD');
+                location.href = 'update?date=' + date + '&day=' + day;
+            })
+        })
+    </script>
+</section>
+<section class="box container pb40 overflow-Show js_update_mh_list" style="min-height:800px;margin-top: 20px;">
+    <header class="box-header"> <i class="icon icon-date" style="width:30px;"> <span class="number">30</span> </i>
+        <h1>最近更新</h1>
+        <small>
+            更新了
+            <span class="color-main" id="daykeyupdatecount">1237</span><span id="daykeycontent">本，持续更新中</span>
+        </small>
+    </header>
+    <div class="box-body">
+        <ul class="mh-list col7" id="update_30">
+                        <li>
+                <div class="mh-item">
+                    <a href="/book/1224" title="衣冠禽獸">
+                        <p class="mh-cover" style="background-image: url(https://www.jjmhw9.top/static/upload/book/1224/cover.jpg)"></p>
+                    </a>
+                    <div class="mh-item-detali">
+                        <h2 class="title">
+                            <a href="/book/1224" title="衣冠禽獸" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                                衣冠禽獸                            </a>
+                        </h2>
+                        <p class="zl">
+                            <span>评分:</span>
+                            <span class="mh-star-line star-5"></span>
+                        </p>
+                        <p class="chapter" style="width: 181px;">
+                            在女人面前總是笨手笨腳的鈺祥，一直渴望能像朋友俊碩那樣自然又得心應手。然而，這份遲來的慾望卻開始動搖他原本平淡的生活。「我沒想到你是這樣的人，簡直就像個變態&hellip;&hellip;」                        </p>
+                    </div>
+                </div>
+            </li>
+                        <li>
+                <div class="mh-item">
+                    <a href="/book/1217" title="我的in援團">
+                        <p class="mh-cover" style="background-image: url(https://www.jjmhw9.top/static/upload/book/1217/cover.jpg)"></p>
+                    </a>
+                    <div class="mh-item-detali">
+                        <h2 class="title">
+                            <a href="/book/1217" title="我的in援團" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                                我的in援團                            </a>
+                        </h2>
+                        <p class="zl">
+                            <span>评分:</span>
+                            <span class="mh-star-line star-5"></span>
+                        </p>
+                        <p class="chapter" style="width: 181px;">
+                            「我用身體為你加油~!」前棒球選手淪為布偶裝工讀生，吉祥物和啦啦隊員們的私生活大公開!                        </p>
+                    </div>
+                </div>
+            </li>
+                        <li>
+                <div class="mh-item">
+                    <a href="/book/1187" title="戀愛版本更新中">
+                        <p class="mh-cover" style="background-image: url(https://www.jjmhw9.top/static/upload/book/1187/cover.jpg)"></p>
+                    </a>
+                    <div class="mh-item-detali">
+                        <h2 class="title">
+                            <a href="/book/1187" title="戀愛版本更新中" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                                戀愛版本更新中                            </a>
+                        </h2>
+                        <p class="zl">
+                            <span>评分:</span>
+                            <span class="mh-star-line star-5"></span>
+                        </p>
+                        <p class="chapter" style="width: 181px;">
+                            即使身處加班即日常的遊戲公司，也無法壓抑我的心意，工作和戀愛我兩個都要!年輕氣盛職員們的秘密辦公室生活現在展開!「真奇怪&hellip;她怎麼一直出現在我的視野裡?」                        </p>
+                    </div>
+                </div>
+            </li>
+                        <li>
+                <div class="mh-item">
+                    <a href="/book/1171" title="不純吸血鬼">
+                        <p class="mh-cover" style="background-image: url(https://www.jjmhw9.top/static/upload/book/1171/cover.jpg)"></p>
+                    </a>
+                    <div class="mh-item-detali">
+                        <h2 class="title">
+                            <a href="/book/1171" title="不純吸血鬼" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                                不純吸血鬼                            </a>
+                        </h2>
+                        <p class="zl">
+                            <span>评分:</span>
+                            <span class="mh-star-line star-5"></span>
+                        </p>
+                        <p class="chapter" style="width: 181px;">
+                            「很簡單&hellip;幹她們!」
+一夕之間變成吸血鬼了!?
+為了生存&hellip;成為掠食者，吸取女人的精氣吧!                        </p>
+                    </div>
+                </div>
+            </li>
+                        <li>
+                <div class="mh-item">
+                    <a href="/book/1146" title="與生巨來">
+                        <p class="mh-cover" style="background-image: url(https://www.jjmhw9.top/static/upload/book/1146/cover.jpg)"></p>
+                    </a>
+                    <div class="mh-item-detali">
+                        <h2 class="title">
+                            <a href="/book/1146" title="與生巨來" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                                與生巨來                            </a>
+                        </h2>
+                        <p class="zl">
+                            <span>评分:</span>
+                            <span class="mh-star-line star-5"></span>
+                        </p>
+                        <p class="chapter" style="width: 181px;">
+                            「你也像你爸一樣GG很大吧?」吳彬是韓國最大根男人的兒子，因為「有其父必有其子」的謠言，讓女人們對他非常好奇，爭相想脫下他的褲子!                        </p>
+                    </div>
+                </div>
+            </li>
+                        <li>
+                <div class="mh-item">
+                    <a href="/book/1107" title="不要戀愛要打砲">
+                        <p class="mh-cover" style="background-image: url(https://www.jjmhw9.top/static/upload/book/1107/cover.jpg)"></p>
+                    </a>
+                    <div class="mh-item-detali">
+                        <h2 class="title">
+                            <a href="/book/1107" title="不要戀愛要打砲" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                                不要戀愛要打砲                            </a>
+                        </h2>
+                        <p class="zl">
+                            <span>评分:</span>
+                            <span class="mh-star-line star-5"></span>
+                        </p>
+                        <p class="chapter" style="width: 181px;">
+                            「在我事業有成以前，並沒有談戀愛的打算」立志進入頂尖漫畫家底下磨練的根南，憑著在面試時的一番魄力言論成功進入公司成為實習生，明明外表普通、打扮邋遢，他的一舉一動卻都令女人們在意不已，到底為什麼?!                        </p>
+                    </div>
+                </div>
+            </li>
+                        <li>
+                <div class="mh-item">
+                    <a href="/book/1005" title="Beautiful Days">
+                        <p class="mh-cover" style="background-image: url(https://www.jjmhw9.top/static/upload/book/1005/cover.jpg)"></p>
+                    </a>
+                    <div class="mh-item-detali">
+                        <h2 class="title">
+                            <a href="/book/1005" title="Beautiful Days" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                                Beautiful Days                            </a>
+                        </h2>
+                        <p class="zl">
+                            <span>评分:</span>
+                            <span class="mh-star-line star-5"></span>
+                        </p>
+                        <p class="chapter" style="width: 181px;">
+                            沉默的皮囊底下，是迫切期待綻放的慾望。「妳壓抑至今的香氣和呻吟&hellip;就由我來一一揭開」                        </p>
+                    </div>
+                </div>
+            </li>
+                        <li>
+                <div class="mh-item">
+                    <a href="/book/744" title="人妻獵人">
+                        <p class="mh-cover" style="background-image: url(https://www.jjmhw9.top/static/upload/book/744/cover.jpg)"></p>
+                    </a>
+                    <div class="mh-item-detali">
+                        <h2 class="title">
+                            <a href="/book/744" title="人妻獵人" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                                人妻獵人                            </a>
+                        </h2>
+                        <p class="zl">
+                            <span>评分:</span>
+                            <span class="mh-star-line star-5"></span>
+                        </p>
+                        <p class="chapter" style="width: 181px;">
+                            人妻收割機-齊仁棲，在綠光罩頂的人夫追殺下，被迫踏進了一扇奇異的門來到了未知的異世界。而老天竟讓他遇上了一位極品貴族夫人，仁棲在本能驅使下肆意品嘗了貴族夫人的滋味，卻也被城堡主人逮個正著，沒料到城堡主人竟向天賦異稟的仁棲提出一項特殊要求&hellip;「你繼續上我老婆，我就免你一死!」                        </p>
+                    </div>
+                </div>
+            </li>
+                        <li>
+                <div class="mh-item">
+                    <a href="/book/418" title="秘密教學">
+                        <p class="mh-cover" style="background-image: url(https://www.jjmhw9.top/static/upload/book/418/cover.jpg)"></p>
+                    </a>
+                    <div class="mh-item-detali">
+                        <h2 class="title">
+                            <a href="/book/418" title="秘密教學" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                                秘密教學                            </a>
+                        </h2>
+                        <p class="zl">
+                            <span>评分:</span>
+                            <span class="mh-star-line star-5"></span>
+                        </p>
+                        <p class="chapter" style="width: 181px;">
+                            13歲那年成為孤兒的子豪，被爸爸的朋友收養。然而成年後的子豪卻對男女交往一無所知，阿姨與姊姊們決定給純潔的子豪，來場教學&hellip;                        </p>
+                    </div>
+                </div>
+            </li>
+                        <li>
+                <div class="mh-item">
+                    <a href="/book/886" title="可以愛你嗎/似曾相識的她">
+                        <p class="mh-cover" style="background-image: url(https://www.jjmhw9.top/static/upload/book/886/cover.jpg)"></p>
+                    </a>
+                    <div class="mh-item-detali">
+                        <h2 class="title">
+                            <a href="/book/886" title="可以愛你嗎/似曾相識的她" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                                可以愛你嗎/似曾相識的她                            </a>
+                        </h2>
+                        <p class="zl">
+                            <span>评分:</span>
+                            <span class="mh-star-line star-5"></span>
+                        </p>
+                        <p class="chapter" style="width: 181px;">
+                            拜访岳父母的我着实吓了一跳,准岳母跟我的&quot;白月光&quot;太像了,心怀忐忑的我决定问个清楚                        </p>
+                    </div>
+                </div>
+            </li>
+                        <li>
+                <div class="mh-item">
+                    <a href="/book/996" title="缺德鄰居難相處">
+                        <p class="mh-cover" style="background-image: url(https://www.jjmhw9.top/static/upload/book/996/cover.jpg)"></p>
+                    </a>
+                    <div class="mh-item-detali">
+                        <h2 class="title">
+                            <a href="/book/996" title="缺德鄰居難相處" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                                缺德鄰居難相處                            </a>
+                        </h2>
+                        <p class="zl">
+                            <span>评分:</span>
+                            <span class="mh-star-line star-5"></span>
+                        </p>
+                        <p class="chapter" style="width: 181px;">
+                            女煙鬼鄰居強悍又霸道好話好說無異於對牛彈琴看來我只能在床上馴服她了！                        </p>
+                    </div>
+                </div>
+            </li>
+                        <li>
+                <div class="mh-item">
+                    <a href="/book/1102" title="她們的夜晚屬於我/與人妻有個祕密">
+                        <p class="mh-cover" style="background-image: url(https://www.jjmhw9.top/static/upload/book/1102/cover.jpg)"></p>
+                    </a>
+                    <div class="mh-item-detali">
+                        <h2 class="title">
+                            <a href="/book/1102" title="她們的夜晚屬於我/與人妻有個祕密" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                                她們的夜晚屬於我/與人妻有個祕密                            </a>
+                        </h2>
+                        <p class="zl">
+                            <span>评分:</span>
+                            <span class="mh-star-line star-5"></span>
+                        </p>
+                        <p class="chapter" style="width: 181px;">
+                            他不满足于让仇人失去一切,更要在最幸福的时刻,撕碎那份新婚的甜美！                        </p>
+                    </div>
+                </div>
+            </li>
+                        <li>
+                <div class="mh-item">
+                    <a href="/book/1094" title="神聖陷阱/中了傳教士的美人計">
+                        <p class="mh-cover" style="background-image: url(https://www.jjmhw9.top/static/upload/book/1094/cover.jpg)"></p>
+                    </a>
+                    <div class="mh-item-detali">
+                        <h2 class="title">
+                            <a href="/book/1094" title="神聖陷阱/中了傳教士的美人計" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                                神聖陷阱/中了傳教士的美人計                            </a>
+                        </h2>
+                        <p class="zl">
+                            <span>评分:</span>
+                            <span class="mh-star-line star-5"></span>
+                        </p>
+                        <p class="chapter" style="width: 181px;">
+                            常言道天下沒有白撿的便宜,路邊邂逅的美女未必是福星,反而可能是引你墮落的深淵之鑰...                        </p>
+                    </div>
+                </div>
+            </li>
+                        <li>
+                <div class="mh-item">
+                    <a href="/book/1173" title="特別課程">
+                        <p class="mh-cover" style="background-image: url(https://www.jjmhw9.top/static/upload/book/1173/cover.jpg)"></p>
+                    </a>
+                    <div class="mh-item-detali">
+                        <h2 class="title">
+                            <a href="/book/1173" title="特別課程" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                                特別課程                            </a>
+                        </h2>
+                        <p class="zl">
+                            <span>评分:</span>
+                            <span class="mh-star-line star-5"></span>
+                        </p>
+                        <p class="chapter" style="width: 181px;">
+                            前家教老師成了美女人妻,昔日學生反幫自己女兒補習?!,這段特別的關係逐漸失控                        </p>
+                    </div>
+                </div>
+            </li>
+                        <li>
+                <div class="mh-item">
+                    <a href="/book/1220" title="美女咨商師的夜間診療室">
+                        <p class="mh-cover" style="background-image: url(https://www.jjmhw9.top/static/upload/book/1220/cover.jpg)"></p>
+                    </a>
+                    <div class="mh-item-detali">
+                        <h2 class="title">
+                            <a href="/book/1220" title="美女咨商師的夜間診療室" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                                美女咨商師的夜間診療室                            </a>
+                        </h2>
+                        <p class="zl">
+                            <span>评分:</span>
+                            <span class="mh-star-line star-5"></span>
+                        </p>
+                        <p class="chapter" style="width: 181px;">
+                            為了治好心病導致的身體障礙,我找上了一位特別的心理咨商師,沒想到她選擇的療法居然是...                        </p>
+                    </div>
+                </div>
+            </li>
+                        <li>
+                <div class="mh-item">
+                    <a href="/book/1240" title="慾望入門課">
+                        <p class="mh-cover" style="background-image: url(https://www.jjmhw9.top/static/upload/book/1240/cover.jpg)"></p>
+                    </a>
+                    <div class="mh-item-detali">
+                        <h2 class="title">
+                            <a href="/book/1240" title="慾望入門課" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                                慾望入門課                            </a>
+                        </h2>
+                        <p class="zl">
+                            <span>评分:</span>
+                            <span class="mh-star-line star-5"></span>
+                        </p>
+                        <p class="chapter" style="width: 181px;">
+                            愛文對性充滿了好奇，時常自己躲起來看A片，而她長年壓抑的慾望，終於在上大學後獲得解放。自從愛文透過網聊認識了一名陌生男子，並與他初嘗性愛滋味之後，她的性生活越來越精彩&hellip;                        </p>
+                    </div>
+                </div>
+            </li>
+                        <li>
+                <div class="mh-item">
+                    <a href="/book/1205" title="砲友滿屋">
+                        <p class="mh-cover" style="background-image: url(https://www.jjmhw9.top/static/upload/book/1205/cover.jpg)"></p>
+                    </a>
+                    <div class="mh-item-detali">
+                        <h2 class="title">
+                            <a href="/book/1205" title="砲友滿屋" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                                砲友滿屋                            </a>
+                        </h2>
+                        <p class="zl">
+                            <span>评分:</span>
+                            <span class="mh-star-line star-5"></span>
+                        </p>
+                        <p class="chapter" style="width: 181px;">
+                            「因為我們現在是一家人了」為了破處而下載交友軟體，和砲友度過甜蜜夜晚的俊修，因為爸爸的再婚得以與一夜情的砲友再續前緣，只是這次是以繼母繼子的身分&hellip;                        </p>
+                    </div>
+                </div>
+            </li>
+                        <li>
+                <div class="mh-item">
+                    <a href="/book/1200" title="人妻回春館">
+                        <p class="mh-cover" style="background-image: url(https://www.jjmhw9.top/static/upload/book/1200/cover.jpg)"></p>
+                    </a>
+                    <div class="mh-item-detali">
+                        <h2 class="title">
+                            <a href="/book/1200" title="人妻回春館" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                                人妻回春館                            </a>
+                        </h2>
+                        <p class="zl">
+                            <span>评分:</span>
+                            <span class="mh-star-line star-5"></span>
+                        </p>
+                        <p class="chapter" style="width: 181px;">
+                            陳民輝忘不了第一次撫摸女人胸部時的柔軟觸感，他為了名正言順摸到女性的胴體，成為了一名按摩師傅。而民輝將在西灘新都市裡，用他那雙巧手撫慰寂寞人妻們的心靈                        </p>
+                    </div>
+                </div>
+            </li>
+                        <li>
+                <div class="mh-item">
+                    <a href="/book/1188" title="慾債">
+                        <p class="mh-cover" style="background-image: url(https://www.jjmhw9.top/static/upload/book/1188/cover.jpg)"></p>
+                    </a>
+                    <div class="mh-item-detali">
+                        <h2 class="title">
+                            <a href="/book/1188" title="慾債" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                                慾債                            </a>
+                        </h2>
+                        <p class="zl">
+                            <span>评分:</span>
+                            <span class="mh-star-line star-5"></span>
+                        </p>
+                        <p class="chapter" style="width: 181px;">
+                            「若是不想被我告性騷擾，就向我鞠躬道歉」
+萬載在性別比失衡的公司裡比誰都還努力工作，卻被當作食物鏈最底層，因女職員們而受盡凌辱的某天，有個隱密的投資計畫找上門來&hellip;這個機會將改變他的一生                        </p>
+                    </div>
+                </div>
+            </li>
+                        <li>
+                <div class="mh-item">
+                    <a href="/book/1067" title="里長孫子開麥啦">
+                        <p class="mh-cover" style="background-image: url(https://www.jjmhw9.top/static/upload/book/1067/cover.jpg)"></p>
+                    </a>
+                    <div class="mh-item-detali">
+                        <h2 class="title">
+                            <a href="/book/1067" title="里長孫子開麥啦" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                                里長孫子開麥啦                            </a>
+                        </h2>
+                        <p class="zl">
+                            <span>评分:</span>
+                            <span class="mh-star-line star-5"></span>
+                        </p>
+                        <p class="chapter" style="width: 181px;">
+                            出生在一個閒到只能打炮的鄉下地方，並且處處被別人看不起的「下屆里長」勇華，偶然得知村裡揚聲器具有神奇的力量&hellip;看來只要手握揚聲器，就能吃遍村中美鮑&hellip;!?                        </p>
+                    </div>
+                </div>
+            </li>
+                        <li>
+                <div class="mh-item">
+                    <a href="/book/1054" title="飛機杯女神連線中">
+                        <p class="mh-cover" style="background-image: url(https://www.jjmhw9.top/static/upload/book/1054/cover.jpg)"></p>
+                    </a>
+                    <div class="mh-item-detali">
+                        <h2 class="title">
+                            <a href="/book/1054" title="飛機杯女神連線中" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                                飛機杯女神連線中                            </a>
+                        </h2>
+                        <p class="zl">
+                            <span>评分:</span>
+                            <span class="mh-star-line star-5"></span>
+                        </p>
+                        <p class="chapter" style="width: 181px;">
+                            這個偶然購入的飛機杯有夠神奇，它似乎可以跟我腦中所想的女人連動!既然如此，就先用校園女神來測試看看&hellip;                        </p>
+                    </div>
+                </div>
+            </li>
+                        <li>
+                <div class="mh-item">
+                    <a href="/book/1045" title="獄火重生">
+                        <p class="mh-cover" style="background-image: url(https://www.jjmhw9.top/static/upload/book/1045/cover.jpg)"></p>
+                    </a>
+                    <div class="mh-item-detali">
+                        <h2 class="title">
+                            <a href="/book/1045" title="獄火重生" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                                獄火重生                            </a>
+                        </h2>
+                        <p class="zl">
+                            <span>评分:</span>
+                            <span class="mh-star-line star-5"></span>
+                        </p>
+                        <p class="chapter" style="width: 181px;">
+                            材賢在學期間飽受欺凌，不僅失去雙親和朋友，最終還含冤入獄。身陷囹圄的他認真籌劃復仇大計，等待出獄那天的到來。「現在輪到你們了，我絕對會讓你們求生不得，求死不能。」                        </p>
+                    </div>
+                </div>
+            </li>
+                    </ul>
+    </div>
+    <footer>
+        <div class="page-pagination mt20">
+            <ul>
+                <div class="pagination">
+                                        <li><a>&lt;</a></li>
+                                        <li><a href="/update?page=1" class="active">1</a></li>
+                                        <li><a href="/update?page=2" title="第2页">2</a></li>
+                                        <li><a href="/update?page=3" title="第3页">3</a></li>
+                                        <li><a href="/update?page=4" title="第4页">4</a></li>
+                                        <li><a href="/update?page=5" title="第5页">5</a></li>
+                                        <li><a href="/update?page=6" title="第6页">6</a></li>
+                                        <li><a href="/update?page=7" title="第7页">7</a></li>
+                                        <li><a href="/update?page=8" title="第8页">8</a></li>
+                                        <li><a href="/update?page=9" title="第9页">9</a></li>
+                                        <li><a href="/update?page=10" title="第10页">10</a></li>
+                                        <li><a href="/update?page=11" title="第11页">11</a></li>
+                                        <li><a href="/update?page=12" title="第12页">12</a></li>
+                                        <li><a href="/update?page=13" title="第13页">13</a></li>
+                                        <li><a href="/update?page=14" title="第14页">14</a></li>
+                                        <li><a href="/update?page=15" title="第15页">15</a></li>
+                                        <li><a href="/update?page=16" title="第16页">16</a></li>
+                                        <li><a href="/update?page=17" title="第17页">17</a></li>
+                                        <li><a href="/update?page=18" title="第18页">18</a></li>
+                                        <li><a href="/update?page=19" title="第19页">19</a></li>
+                                        <li><a href="/update?page=20" title="第20页">20</a></li>
+                                        <li><a href="/update?page=21" title="第21页">21</a></li>
+                                        <li><a href="/update?page=22" title="第22页">22</a></li>
+                                        <li><a href="/update?page=23" title="第23页">23</a></li>
+                                        <li><a href="/update?page=24" title="第24页">24</a></li>
+                                        <li><a href="/update?page=25" title="第25页">25</a></li>
+                                        <li><a href="/update?page=26" title="第26页">26</a></li>
+                                        <li><a href="/update?page=27" title="第27页">27</a></li>
+                                        <li><a href="/update?page=28" title="第28页">28</a></li>
+                                        <li><a href="/update?page=29" title="第29页">29</a></li>
+                                        <li><a href="/update?page=30" title="第30页">30</a></li>
+                                        <li><a href="/update?page=31" title="第31页">31</a></li>
+                                        <li><a href="/update?page=32" title="第32页">32</a></li>
+                                        <li><a href="/update?page=33" title="第33页">33</a></li>
+                                        <li><a href="/update?page=34" title="第34页">34</a></li>
+                                        <li><a href="/update?page=35" title="第35页">35</a></li>
+                                        <li><a href="/update?page=36" title="第36页">36</a></li>
+                                        <li><a href="/update?page=37" title="第37页">37</a></li>
+                                        <li><a href="/update?page=38" title="第38页">38</a></li>
+                                        <li><a href="/update?page=39" title="第39页">39</a></li>
+                                        <li><a href="/update?page=40" title="第40页">40</a></li>
+                                        <li><a href="/update?page=41" title="第41页">41</a></li>
+                                        <li><a href="/update?page=42" title="第42页">42</a></li>
+                                        <li><a href="/update?page=43" title="第43页">43</a></li>
+                                        <li><a href="/update?page=44" title="第44页">44</a></li>
+                                        <li><a href="/update?page=45" title="第45页">45</a></li>
+                                        <li><a href="/update?page=46" title="第46页">46</a></li>
+                                        <li><a href="/update?page=47" title="第47页">47</a></li>
+                                        <li><a href="/update?page=48" title="第48页">48</a></li>
+                                        <li><a href="/update?page=49" title="第49页">49</a></li>
+                                        <li><a href="/update?page=50" title="第50页">50</a></li>
+                                        <li><a href="/update?page=51" title="第51页">51</a></li>
+                                        <li><a href="/update?page=52" title="第52页">52</a></li>
+                                        <li><a href="/update?page=53" title="第53页">53</a></li>
+                                        <li><a href="/update?page=54" title="第54页">54</a></li>
+                                        <li><a href="/update?page=55" title="第55页">55</a></li>
+                                        <li><a href="/update?page=56" title="第56页">56</a></li>
+                                        <li><a href="/update?page=57" title="第57页">57</a></li>
+                                        <li><a id="nextPage" href="/update?page=2" title="下一页">&gt;</a></li>
+                                                        </div>
+            </ul>
+        </div>
+    </footer>
+</section>
+
+<div class="footer mt16 cf">
+    <div class="footer-wrap">
+        <div class="footer-cont container">
+            <p>所有漫画均来自网友分享，以便漫画爱好者研究漫画技巧和构图方式。若喜欢，请购买正版书籍以支持作者！</p>
+            <p>漫画版权归原作者所有。如有侵犯到您的权益，请联系我们，确认之后立即删除。本站不负任何相关责任！ 
+            </p>
+            <p>Copyright © 2019 <em>/</em> All Rights Reserved
+            </p>
+        </div>
+    </div>
+</div>
+<div class="alertTop_1" style="display: none;">
+    <p id="alertTop_1"></p>
+</div>
+<script src="/static/js/user-booklist.js"></script>
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-JL364C26TK"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-JL364C26TK');
+</script>
+
+<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-1324666998469160"
+     crossorigin="anonymous"></script>
+<script type="module" src="https://static.cloudflareinsights.com/beacon.min.js/v31edd6df95cf4e85bb4c19e7a9bdbcba1788362987495" integrity="sha512-iIg7k2xntmwu6/uSb5tpc/hySgZc4eoL31yB29W6tJFo2akwjPWcEqnCEdJvGexCL0KEQwVYv5BlowfhVz26hg==" data-cf-beacon='{"version":"2024.11.0","token":"82c6e1816b11441980a67934d4b4da93","r":1,"spa":2}' crossorigin="anonymous"></script>
+</body>
+
+</html>
