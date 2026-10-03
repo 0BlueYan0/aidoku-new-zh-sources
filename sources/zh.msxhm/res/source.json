@@ -1,0 +1,61 @@
+{
+	"info": {
+		"id": "zh.msxhm",
+		"name": "漫小肆韓漫",
+		"version": 7,
+		"urls": [
+			"https://www.jjmhw9.top",
+			"https://www.jjmhw8.top",
+			"https://www.jjmhw6.top",
+			"https://www.jjmhw5.top",
+			"https://www.jjmhw4.top",
+			"https://www.jjmhw3.top",
+			"https://www.mxs13.cc"
+		],
+		"contentRating": 2,
+		"languages": [
+			"zh"
+		],
+		"minAppVersion": "0.7.1"
+	},
+	"config": {
+		"allowsBaseUrlSelect": true,
+		"hidesFiltersWhileSearching": true,
+		"supportsAuthorSearch": true,
+		"supportsTagSearch": true
+	},
+	"listings": [
+		{
+			"id": "update",
+			"name": "最近更新"
+		},
+		{
+			"id": "latest",
+			"name": "最新上架"
+		},
+		{
+			"id": "ongoing",
+			"name": "連載中"
+		},
+		{
+			"id": "completed",
+			"name": "已完結"
+		},
+		{
+			"id": "rank_new",
+			"name": "新書榜"
+		},
+		{
+			"id": "rank_hot",
+			"name": "人氣榜"
+		},
+		{
+			"id": "rank_end",
+			"name": "完結榜"
+		},
+		{
+			"id": "rank_rec",
+			"name": "推薦榜"
+		}
+	]
+}

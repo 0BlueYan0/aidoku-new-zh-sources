@@ -21,3 +21,4 @@ Aidoku 新版中文圖源<br>
 - [18漫畫](https://18mh.org/)（站方有 Cloudflare 驗證，載入不出內容時可在設定頁手動通過驗證）
 - [漫畫狗](https://dogemanga.com/)
 - [HO5HO](https://www.ho5ho.com/)
+- [漫小肆韓漫](https://www.jjmhw9.top/)（支援七個鏡像網域，也可自訂網址）
