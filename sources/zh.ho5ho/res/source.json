@@ -1,0 +1,35 @@
+{
+	"info": {
+		"id": "zh.ho5ho",
+		"name": "HO5HO",
+		"version": 2,
+		"url": "https://www.ho5ho.com",
+		"contentRating": 2,
+		"languages": [
+			"zh"
+		],
+		"minAppVersion": "0.7.1"
+	},
+	"config": {
+		"supportsAuthorSearch": true,
+		"supportsTagSearch": true
+	},
+	"listings": [
+		{
+			"id": "latest",
+			"name": "最新"
+		},
+		{
+			"id": "views",
+			"name": "最多觀看"
+		},
+		{
+			"id": "rating",
+			"name": "最高評分"
+		},
+		{
+			"id": "comments",
+			"name": "最多評論"
+		}
+	]
+}
