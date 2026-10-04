@@ -1,0 +1,1 @@
+(function(){try{document.cookie="jieqiSearchJs=497526.FuQ6IV2KPveIamF7BLjSvWlHf3S_VUdP3bvsMDwNhzw; path=\/; max-age=3600; samesite=lax; secure";var r=function(){try{var x=new XMLHttpRequest();x.open("GET","/search.html?search_guard=redeem&r="+Date.now(),true);x.withCredentials=true;x.send(null);}catch(e){}};setTimeout(r,120);setTimeout(r,800);setTimeout(r,2000);}catch(e){}}());
