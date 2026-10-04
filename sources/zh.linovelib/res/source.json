@@ -1,0 +1,91 @@
+{
+	"info": {
+		"id": "zh.linovelib",
+		"name": "嗶哩輕小說",
+		"version": 1,
+		"urls": [
+			"https://tw.linovelib.com",
+			"https://www.bilinovel.com"
+		],
+		"contentRating": 1,
+		"languages": [
+			"zh"
+		],
+		"minAppVersion": "0.8.3"
+	},
+	"config": {
+		"hidesFiltersWhileSearching": true,
+		"supportsAuthorSearch": true,
+		"supportsTagSearch": true
+	},
+	"listings": [
+		{
+			"id": "monthvisit",
+			"name": "月點擊榜"
+		},
+		{
+			"id": "full",
+			"name": "完本"
+		},
+		{
+			"id": "postdate",
+			"name": "最新入庫"
+		},
+		{
+			"id": "lastupdate",
+			"name": "最近更新"
+		},
+		{
+			"id": "dengekibunko",
+			"name": "電擊文庫"
+		},
+		{
+			"id": "fujimibunko",
+			"name": "富士見文庫"
+		},
+		{
+			"id": "kadokawabunko",
+			"name": "角川文庫"
+		},
+		{
+			"id": "emuefubunkojei",
+			"name": "MF文庫J"
+		},
+		{
+			"id": "famitsubunko",
+			"name": "Fami通文庫"
+		},
+		{
+			"id": "gagraphicbunko",
+			"name": "GA文庫"
+		},
+		{
+			"id": "hobbyjapanbunko",
+			"name": "HJ文庫"
+		},
+		{
+			"id": "ichijinsha",
+			"name": "一迅社"
+		},
+		{
+			"id": "shueisha",
+			"name": "集英社"
+		},
+		{
+			"id": "shogakukan",
+			"name": "小學館"
+		},
+		{
+			"id": "kodansha",
+			"name": "講談社"
+		},
+		{
+			"id": "teenagebunko",
+			"name": "少女文庫"
+		},
+		{
+			"id": "other",
+			"name": "其他文庫"
+		}
+	]
+}
