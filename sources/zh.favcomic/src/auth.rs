@@ -26,6 +26,9 @@ const PASSWORD_KEY: &str = "auth_password";
 const EXPIRES_AT_KEY: &str = "auth_expires_at";
 const LOGGED_IN_AT_KEY: &str = "auth_logged_in_at";
 const FAILED_AT_KEY: &str = "auth_failed_at";
+/// When the source last tried to renew on its own, whatever the outcome. Renewals closer
+/// together than `RETRY_BACKOFF` are skipped, successful ones included.
+const RENEWED_AT_KEY: &str = "auth_renewed_at";
 const NEEDS_RELOGIN_KEY: &str = "auth_needs_relogin";
 /// Set when the site refused the login because too many devices are already signed in.
 /// Kept apart from `NEEDS_RELOGIN_KEY`: there the password is wrong, here it is right.
@@ -69,6 +72,7 @@ pub fn clear_auth() {
 		EXPIRES_AT_KEY,
 		LOGGED_IN_AT_KEY,
 		FAILED_AT_KEY,
+		RENEWED_AT_KEY,
 		NEEDS_RELOGIN_KEY,
 		DEVICE_LIMIT_KEY,
 	] {
@@ -221,9 +225,19 @@ fn renew_with_stored_credentials() -> bool {
 		return false;
 	};
 	let now = current_date();
-	if now < timestamp(FAILED_AT_KEY) + RETRY_BACKOFF {
+	if now < timestamp(FAILED_AT_KEY) + RETRY_BACKOFF
+		|| now < timestamp(RENEWED_AT_KEY) + RETRY_BACKOFF
+	{
 		return false;
 	}
+	// Advance the gate before any request: several entry points can find the token near
+	// expiry at once, and a chapter that keeps asking for a login would otherwise renew on
+	// every open. Each login may count as one more device on the site.
+	set_timestamp(RENEWED_AT_KEY, now);
+	// End the old session first so the renewal replaces it rather than sitting next to it.
+	// On 2026-10-09 the account was at its three-device limit although the reader had not
+	// signed in anywhere new; renewals were the only logins in between.
+	end_site_session();
 
 	match login(&email, &password) {
 		LoginOutcome::Success => true,
@@ -265,9 +279,8 @@ pub fn retry_after_lock() -> bool {
 	renew_with_stored_credentials()
 }
 
-/// Ends the session on the site so it clears the token cookie from the shared jar, then forgets
-/// the credentials.
-pub fn logout() {
+/// Ends the session on the site, which clears the token cookie from the shared jar.
+fn end_site_session() {
 	// HEAD rather than GET: the site answers `/logout` with a 302 to its home page, and
 	// letting that be followed as a GET pulls 156 KB down while this notification handler -
 	// and the app with it - waits. HEAD ends the session just the same (the reply still
@@ -283,6 +296,10 @@ pub fn logout() {
 			.timeout(10.0)
 			.send();
 	}
+}
+
+pub fn logout() {
+	end_site_session();
 	clear_auth();
 }
 
