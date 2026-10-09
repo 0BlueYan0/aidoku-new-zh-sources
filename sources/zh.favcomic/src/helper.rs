@@ -10,6 +10,32 @@ use aidoku::{
 };
 
 pub const DEFAULT_BASE_URL: &str = "https://www.favcomic.com";
+
+/// Tag ids (shared by every section) that mark a title outside `/r18` as adult: 节操 (41),
+/// TL (33), NTR (129), 被NTR (132), 扶他 (131). Chosen by the user on 2026-10-09 after
+/// 搭伙变现 (节操) and 新刊太过××× (TL) turned out explicit.
+const ADULT_TAG_IDS: [u32; 5] = [41, 33, 129, 132, 131];
+/// Tag ids that mark a title as suggestive: BL (19), ABO (125), 百合 (118, 21), 后宫 (40),
+/// 后宫·宫廷 (28), 性转换 (45, 25), 伪娘 (83, 82).
+const SUGGESTIVE_TAG_IDS: [u32; 10] = [19, 125, 118, 21, 40, 28, 45, 25, 83, 82];
+
+/// `/girl?tag=33` → 33.
+fn tag_id_from_href(href: &str) -> Option<u32> {
+	let (_, rest) = href.split_once("tag=")?;
+	let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+	digits.parse().ok()
+}
+
+/// A title is rated by the evidence the site gives; one without any is Safe.
+fn content_rating(in_r18: bool, tag_ids: &[u32]) -> ContentRating {
+	if in_r18 || tag_ids.iter().any(|id| ADULT_TAG_IDS.contains(id)) {
+		ContentRating::NSFW
+	} else if tag_ids.iter().any(|id| SUGGESTIVE_TAG_IDS.contains(id)) {
+		ContentRating::Suggestive
+	} else {
+		ContentRating::Safe
+	}
+}
 pub const USER_AGENT: &str = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1";
 
 /// Image CDN hosts the site itself hands out. All three serve byte-identical content, so the
@@ -246,16 +272,23 @@ pub fn parse_detail(document: &Document, manga: &mut Manga) {
 		manga.status = status_from_text(&state);
 	}
 
-	// Tag links point back at the section they belong to, which is also how the site separates
-	// adult titles from everything else -- use that for the per-manga rating.
+	// Tag links point back at the section they belong to (`/r18?tag=116`), which is how the
+	// site separates adult titles. The boy and girl sections hold explicit titles too, under
+	// tags such as 节操 and TL, so the tag ids are checked as well.
 	let mut is_adult = false;
+	let mut tag_ids: Vec<u32> = Vec::new();
 	let tags = document
 		.select(".tag_box a")
 		.map(|list| {
 			list.into_iter()
 				.filter_map(|el| {
-					if el.attr("href").is_some_and(|href| href.contains("/r18")) {
-						is_adult = true;
+					if let Some(href) = el.attr("href") {
+						if href.contains("/r18") {
+							is_adult = true;
+						}
+						if let Some(id) = tag_id_from_href(&href) {
+							tag_ids.push(id);
+						}
 					}
 					el.text().filter(|t| !t.is_empty())
 				})
@@ -266,11 +299,7 @@ pub fn parse_detail(document: &Document, manga: &mut Manga) {
 		manga.tags = Some(tags);
 	}
 
-	manga.content_rating = if is_adult {
-		ContentRating::NSFW
-	} else {
-		ContentRating::Suggestive
-	};
+	manga.content_rating = content_rating(is_adult, &tag_ids);
 
 	// The reading direction only exists on the chapter page (its `direction` attribute), and the
 	// site mixes paged manga with vertical strips inside every section, so nothing here can tell
@@ -414,6 +443,27 @@ pub fn parse_pages(document: &Document) -> Result<Vec<Page>> {
 mod test {
 	use super::*;
 	use aidoku_test::aidoku_test;
+
+	#[aidoku_test]
+	fn rates_by_section_and_tags() {
+		assert_eq!(tag_id_from_href("/girl?tag=33"), Some(33));
+		assert_eq!(tag_id_from_href("/boy?tag=41&page=2"), Some(41));
+		assert_eq!(tag_id_from_href("/boy"), None);
+		assert_eq!(content_rating(true, &[]), ContentRating::NSFW);
+		assert_eq!(content_rating(false, &[36, 41]), ContentRating::NSFW);
+		assert_eq!(content_rating(false, &[33, 46]), ContentRating::NSFW);
+		assert_eq!(content_rating(false, &[19]), ContentRating::Suggestive);
+		assert_eq!(content_rating(false, &[36]), ContentRating::Safe);
+		assert_eq!(content_rating(false, &[]), ContentRating::Safe);
+	}
+
+	#[aidoku_test]
+	fn tag_ids_match_filters_json() {
+		let json = include_str!("../res/filters.json");
+		for id in ADULT_TAG_IDS.iter().chain(SUGGESTIVE_TAG_IDS.iter()) {
+			assert!(json.contains(&format!("\"{id}\"")), "{id}");
+		}
+	}
 
 	#[aidoku_test]
 	fn reads_keys_out_of_hrefs() {
