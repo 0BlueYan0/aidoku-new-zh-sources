@@ -1,0 +1,39 @@
+{
+	"info": {
+		"id": "zh.manwang",
+		"name": "漫網",
+		"version": 1,
+		"url": "https://www.manwang.net",
+		"contentRating": 1,
+		"languages": [
+			"zh"
+		],
+		"minAppVersion": "0.8.3"
+	},
+	"config": {
+		"hidesFiltersWhileSearching": true,
+		"supportsTagSearch": true
+	},
+	"listings": [
+		{
+			"id": "update",
+			"name": "最近更新"
+		},
+		{
+			"id": "hot",
+			"name": "總點擊"
+		},
+		{
+			"id": "month",
+			"name": "月點擊"
+		},
+		{
+			"id": "week",
+			"name": "週點擊"
+		},
+		{
+			"id": "day",
+			"name": "日點擊"
+		}
+	]
+}
