@@ -26,3 +26,4 @@ Aidoku 新版中文圖源<br>
 - [嗶哩輕小說](https://tw.linovelib.com/)
 - [漫網](https://www.manwang.net/)
 - [巴卡漫畫](https://bakamh.com/)（可用帳號密碼登入閱讀需登入的章節，換網址會自動重新登入，支援五個鏡像網域，也可自訂網址，站方有 Cloudflare 驗證，載入不出內容時可在設定頁手動通過驗證）
+- [漫畫1234](https://m.wmh1234.com/)

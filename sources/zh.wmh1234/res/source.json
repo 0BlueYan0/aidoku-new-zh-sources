@@ -1,0 +1,32 @@
+{
+	"info": {
+		"id": "zh.wmh1234",
+		"name": "漫畫1234",
+		"version": 1,
+		"url": "https://m.wmh1234.com",
+		"contentRating": 1,
+		"languages": [
+			"zh"
+		],
+		"minAppVersion": "0.8.3"
+	},
+	"config": {
+		"hidesFiltersWhileSearching": true,
+		"supportsAuthorSearch": true,
+		"supportsTagSearch": true
+	},
+	"listings": [
+		{
+			"id": "update",
+			"name": "最近更新"
+		},
+		{
+			"id": "hits",
+			"name": "人氣排行"
+		},
+		{
+			"id": "new",
+			"name": "最新上架"
+		}
+	]
+}
