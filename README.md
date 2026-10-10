@@ -25,3 +25,4 @@ Aidoku 新版中文圖源<br>
 - [vomic漫](https://www.vomicmh.com/)（閱讀需帳密登入，可切換原圖畫質）
 - [嗶哩輕小說](https://tw.linovelib.com/)
 - [漫網](https://www.manwang.net/)
+- [巴卡漫畫](https://bakamh.com/)（可用帳號密碼登入閱讀需登入的章節，換網址會自動重新登入，支援五個鏡像網域，也可自訂網址，站方有 Cloudflare 驗證，載入不出內容時可在設定頁手動通過驗證）

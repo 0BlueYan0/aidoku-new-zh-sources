@@ -1,0 +1,110 @@
+[
+	{
+		"type": "group",
+		"footer": "站方換域名時可自行填入完整網址，留空則使用上方選擇的網址。\n換網址後，讀到需要登入的章節時會自動重新登入。",
+		"items": [
+			{
+				"type": "text",
+				"key": "customBaseUrl",
+				"title": "自訂網址",
+				"placeholder": "https://bakamh.com",
+				"refreshes": [
+					"content",
+					"listings"
+				]
+			}
+		]
+	},
+	{
+		"type": "group",
+		"title": "Cloudflare 驗證",
+		"footer": "一直被驗證擋住、載入不出內容時，按目前網址的「通過驗證」開啟網站，通過驗證後網頁會自動關閉。自訂網址沒有按鈕。\n已經通過驗證時網頁不會自動關閉，按左上角關閉即可。按鈕變成「清除驗證」後，再遇到同樣情況先按它清除，再按一次「通過驗證」。",
+		"items": [
+			{
+				"type": "login",
+				"key": "cloudflare",
+				"title": "通過驗證（bakamh.com）",
+				"method": "web",
+				"url": "https://bakamh.com",
+				"logoutTitle": "清除驗證（bakamh.com）",
+				"clearCookiesOnLogOut": true,
+				"refreshes": [
+					"content",
+					"listings"
+				]
+			},
+			{
+				"type": "login",
+				"key": "cloudflare_ru",
+				"title": "通過驗證（bakamh.ru）",
+				"method": "web",
+				"url": "https://bakamh.ru",
+				"logoutTitle": "清除驗證（bakamh.ru）",
+				"clearCookiesOnLogOut": true,
+				"refreshes": [
+					"content",
+					"listings"
+				]
+			},
+			{
+				"type": "login",
+				"key": "cloudflare_baka3",
+				"title": "通過驗證（baka3.cfd）",
+				"method": "web",
+				"url": "https://baka3.cfd",
+				"logoutTitle": "清除驗證（baka3.cfd）",
+				"clearCookiesOnLogOut": true,
+				"refreshes": [
+					"content",
+					"listings"
+				]
+			},
+			{
+				"type": "login",
+				"key": "cloudflare_baka1",
+				"title": "通過驗證（baka1.cfd）",
+				"method": "web",
+				"url": "https://baka1.cfd",
+				"logoutTitle": "清除驗證（baka1.cfd）",
+				"clearCookiesOnLogOut": true,
+				"refreshes": [
+					"content",
+					"listings"
+				]
+			},
+			{
+				"type": "login",
+				"key": "cloudflare_baka2",
+				"title": "通過驗證（baka2.cfd）",
+				"method": "web",
+				"url": "https://baka2.cfd",
+				"logoutTitle": "清除驗證（baka2.cfd）",
+				"clearCookiesOnLogOut": true,
+				"refreshes": [
+					"content",
+					"listings"
+				]
+			}
+		]
+	},
+	{
+		"type": "group",
+		"title": "帳號",
+		"footer": "登入後可閱讀標示「需登入」的章節。帳號密碼會保存在此裝置，登入過期時自動續期；登出即清除。\n標示「解鎖」日期的章節要有邀請碼才能提前閱讀，App 內無法使用，到日期後就能讀。\n登入失敗時，錯誤視窗只會顯示通用訊息；實際原因請看下方「帳號資訊」，關掉這一頁再重新打開才會更新。\n登出會登出所有登入過的網址。移除巴卡漫畫前請先登出，否則網站上仍是登入狀態。",
+		"items": [
+			{
+				"type": "login",
+				"key": "login",
+				"title": "登入",
+				"method": "basic",
+				"logoutTitle": "登出",
+				"notification": "login",
+				"refreshes": [
+					"settings",
+					"listings",
+					"content"
+				]
+			}
+		]
+	}
+]

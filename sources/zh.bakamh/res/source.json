@@ -1,0 +1,46 @@
+{
+	"info": {
+		"id": "zh.bakamh",
+		"name": "巴卡漫畫",
+		"version": 3,
+		"urls": [
+			"https://bakamh.com",
+			"https://bakamh.ru",
+			"https://baka3.cfd",
+			"https://baka1.cfd",
+			"https://baka2.cfd"
+		],
+		"contentRating": 2,
+		"languages": [
+			"zh"
+		],
+		"minAppVersion": "0.8.4"
+	},
+	"config": {
+		"allowsBaseUrlSelect": true,
+		"supportsAuthorSearch": true,
+		"supportsTagSearch": true
+	},
+	"listings": [
+		{
+			"id": "latest",
+			"name": "最近更新"
+		},
+		{
+			"id": "trending",
+			"name": "熱門"
+		},
+		{
+			"id": "views",
+			"name": "最多觀看"
+		},
+		{
+			"id": "rating",
+			"name": "最高評分"
+		},
+		{
+			"id": "new-manga",
+			"name": "最新上架"
+		}
+	]
+}
