@@ -1,0 +1,74 @@
+[
+	{
+		"type": "select",
+		"id": "sort",
+		"title": "排序",
+		"options": [
+			"最新上架",
+			"最近更新",
+			"熱門",
+			"最多觀看",
+			"最高評分",
+			"名稱"
+		],
+		"ids": [
+			"new-manga",
+			"latest",
+			"trending",
+			"views",
+			"rating",
+			"alphabet"
+		]
+	},
+	{
+		"type": "multi-select",
+		"id": "category",
+		"title": "分類",
+		"options": [
+			"韓漫",
+			"BL",
+			"全年齡",
+			"動畫",
+			"漢化同人誌",
+			"漢化日漫",
+			"英文漫畫"
+		],
+		"ids": [
+			"韩漫",
+			"bl",
+			"全年龄",
+			"动画",
+			"汉化同人志",
+			"汉化日漫",
+			"en-manga"
+		]
+	},
+	{
+		"type": "select",
+		"id": "match",
+		"title": "分類條件",
+		"options": [
+			"符合任一",
+			"全部符合"
+		],
+		"ids": [
+			"any",
+			"all"
+		]
+	},
+	{
+		"type": "multi-select",
+		"id": "status",
+		"title": "狀態",
+		"options": [
+			"連載中",
+			"完結",
+			"已取消"
+		],
+		"ids": [
+			"on-going",
+			"end",
+			"canceled"
+		]
+	}
+]
