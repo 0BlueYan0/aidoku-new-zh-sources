@@ -1,0 +1,43 @@
+{
+	"info": {
+		"id": "zh.yumanhua",
+		"name": "漫畫客",
+		"version": 1,
+		"url": "http://yumanhua.com",
+		"contentRating": 1,
+		"languages": [
+			"zh"
+		],
+		"minAppVersion": "0.7.1"
+	},
+	"config": {
+		"hidesFiltersWhileSearching": true,
+		"supportsTagSearch": true
+	},
+	"listings": [
+		{
+			"id": "rank1",
+			"name": "精品榜"
+		},
+		{
+			"id": "rank2",
+			"name": "人氣榜"
+		},
+		{
+			"id": "rank3",
+			"name": "推薦榜"
+		},
+		{
+			"id": "rank4",
+			"name": "黑馬榜"
+		},
+		{
+			"id": "rank5",
+			"name": "最近更新"
+		},
+		{
+			"id": "rank6",
+			"name": "新漫畫"
+		}
+	]
+}
