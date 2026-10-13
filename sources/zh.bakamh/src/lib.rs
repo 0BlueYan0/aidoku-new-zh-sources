@@ -58,7 +58,8 @@ impl Source for BakamhSource {
 							}
 						}
 						None => {
-							return Ok(parse_manga_list(&fetch_html(&tag_url(&value, page))?));
+							let html = fetch_html_retrying(&tag_url(&value, page))?;
+							return Ok(parse_manga_list(&html));
 						}
 					},
 					_ => {}
@@ -77,7 +78,7 @@ impl Source for BakamhSource {
 				_ => {}
 			}
 		}
-		Ok(parse_manga_list(&fetch_html(&search_url(&search, page))?))
+		Ok(parse_manga_list(&fetch_html_retrying(&search_url(&search, page))?))
 	}
 
 	fn get_manga_update(
@@ -130,13 +131,13 @@ impl Source for BakamhSource {
 
 	fn get_page_list(&self, manga: Manga, chapter: Chapter) -> Result<Vec<Page>> {
 		let url = chapter_url(&manga.key, &chapter.key);
-		let mut html = fetch_html(&url)?;
+		let mut html = fetch_html_retrying(&url)?;
 		let mut pages = parse_pages(&html);
 		// Only a sign-in lock is worth signing in again for; early access needs an invite
 		// code, which no login provides.
 		if pages.is_empty() && chapter_lock(&html) == Some(Lock::SignIn) && auth::retry_after_lock()
 		{
-			html = fetch_html(&url)?;
+			html = fetch_html_retrying(&url)?;
 			pages = parse_pages(&html);
 		}
 		if pages.is_empty() {
@@ -156,7 +157,7 @@ impl ListingProvider for BakamhSource {
 		let Some(url) = listing_url(&listing.id, page) else {
 			bail!("Unknown listing: {}", listing.id);
 		};
-		Ok(parse_manga_list(&fetch_html(&url)?))
+		Ok(parse_manga_list(&fetch_html_retrying(&url)?))
 	}
 }
 

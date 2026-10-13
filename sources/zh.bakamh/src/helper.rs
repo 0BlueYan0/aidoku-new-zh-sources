@@ -8,7 +8,7 @@ use aidoku::{
 		defaults::{defaults_get, defaults_get_map},
 		html::{Document, Element, Html},
 		net::{Request, Response},
-		std::{current_date, parse_date},
+		std::{current_date, parse_date, sleep},
 	},
 	prelude::*,
 	Chapter, ContentRating, Manga, MangaPageResult, MangaStatus, Page, PageContent, Result, Viewer,
@@ -138,15 +138,68 @@ pub fn same_domain(url: &str, domain: &str) -> bool {
 ///
 /// A Cloudflare challenge page that still comes back after the app's own handling is an
 /// error, as zh.vomicmh's `fetch_checked` does (the reader chose an error they can retry
-/// over an empty list). Resending it here was tried on 2026-10-09 and removed: on device the
-/// resend never got through, and each one set off another challenge that the app cancelled
-/// 0.4 seconds later.
+/// over an empty list). The home page, `get_manga_update` and the account requests stop
+/// there; the reader, search and listings ask again through `fetch_html_retrying`.
 pub fn fetch_html(url: &str) -> Result<Document> {
 	fetch_html_with(url, None)
 }
 
 /// `fetch_html` with a time limit on the request.
 pub fn fetch_html_with(url: &str, timeout: Option<f64>) -> Result<Document> {
+	match fetch_page(url, timeout)? {
+		Some(html) => Ok(html),
+		None => bail!("[bakamh] Cloudflare still blocks {url}"),
+	}
+}
+
+/// Tries per request in `fetch_html_retrying`. Aidoku issue #1107, logged on 2026-10-09 by
+/// the reporter of issue #21 with a source that tried up to 4 times, got through on the 3rd
+/// or 4th try in all three sessions: the app's silent solves were refused, and the try that
+/// showed the reader an interactive check was let through.
+const CHALLENGE_TRIES: u32 = 4;
+
+/// Seconds before trying again, the gap that source used. The app's verification sheet
+/// closes a moment after a solve, and its `viewDidDisappear` cancels whichever challenge is
+/// running at that point, so a try sent at once was cancelled 0.4 seconds in (2026-10-09).
+const CHALLENGE_PAUSE: i32 = 3;
+
+/// `fetch_html` for the reader, search and listings, which send one request and have nothing
+/// to show when it fails. A library work opens from the app's database, so once the clearance
+/// has expired the chapter's request is the first one to meet the challenge (issue #21).
+///
+/// One resend with no pause was tried on 2026-10-09 and removed: the app cancelled it each
+/// time (see `CHALLENGE_PAUSE`), and one more try is fewer than the site takes. The home page
+/// is left out, its five rows being five tries already, and so is `get_manga_update`, which
+/// a library refresh calls for every work.
+pub fn fetch_html_retrying(url: &str) -> Result<Document> {
+	until_not_challenged(url, || fetch_page(url, None), sleep)
+}
+
+/// Runs `fetch` until it gives something other than a challenge page (`None`), pausing
+/// before each new try. Any other failure ends it at once: being offline is not helped by
+/// waiting.
+fn until_not_challenged<T>(
+	url: &str,
+	mut fetch: impl FnMut() -> Result<Option<T>>,
+	mut pause: impl FnMut(i32),
+) -> Result<T> {
+	for tries in 1..=CHALLENGE_TRIES {
+		if let Some(page) = fetch()? {
+			return Ok(page);
+		}
+		if tries < CHALLENGE_TRIES {
+			println!(
+				"[bakamh] Cloudflare still blocks {url} after try {tries} of {CHALLENGE_TRIES}, trying again in {CHALLENGE_PAUSE} s"
+			);
+			pause(CHALLENGE_PAUSE);
+		}
+	}
+	bail!("[bakamh] Cloudflare still blocks {url} after {CHALLENGE_TRIES} tries")
+}
+
+/// One request to the site. `None` when the app's Cloudflare handling still hands back the
+/// challenge page.
+fn fetch_page(url: &str, timeout: Option<f64>) -> Result<Option<Document>> {
 	let mut request = site_get(url)?;
 	if let Some(seconds) = timeout {
 		request = request.timeout(seconds);
@@ -155,12 +208,12 @@ pub fn fetch_html_with(url: &str, timeout: Option<f64>) -> Result<Document> {
 	let html = response.get_html()?;
 	if is_challenge(&html) {
 		log_challenge(url, &response);
-		bail!("[bakamh] Cloudflare still blocks {url}");
+		return Ok(None);
 	}
 	if is_site_page(&html) {
 		crate::auth::note_site_session(is_signed_in(&html));
 	}
-	Ok(html)
+	Ok(Some(html))
 }
 
 /// The selector half of the app's challenge check. The app also requires `Server: cloudflare`
@@ -650,6 +703,51 @@ mod test {
 	const LOCKED: &str = "%e9%ad%94%e6%b3%95%e5%b0%91%e5%a5%b3%e9%80%80%e5%bd%b9%e5%be%8c-2";
 	/// `解禁:初始的快感`, a finished work with nothing locked.
 	const FREE: &str = "%e8%a7%a3%e7%a6%81%e5%88%9d%e5%a7%8b%e7%9a%84%e5%bf%ab%e6%84%9f";
+
+	#[aidoku_test]
+	fn retries_only_while_challenged() {
+		// Challenged three times, then the page: four tries, a pause before each retry.
+		let mut tries: u32 = 0;
+		let mut pauses: Vec<i32> = Vec::new();
+		let page = until_not_challenged(
+			"https://bakamh.com/manga/x/c-1/",
+			|| {
+				tries += 1;
+				Ok((tries == 4).then_some(tries))
+			},
+			|seconds| pauses.push(seconds),
+		);
+		assert_eq!(page.ok(), Some(4));
+		assert_eq!(pauses, [CHALLENGE_PAUSE; 3]);
+
+		// Challenged every time: it gives up after the last try, with no pause after it.
+		let mut tries: u32 = 0;
+		let mut pauses: u32 = 0;
+		let page = until_not_challenged(
+			"https://bakamh.com/",
+			|| {
+				tries += 1;
+				Ok(None::<u32>)
+			},
+			|_| pauses += 1,
+		);
+		assert!(page.is_err());
+		assert_eq!(tries, CHALLENGE_TRIES);
+		assert_eq!(pauses, CHALLENGE_TRIES - 1);
+
+		// Any other failure, such as being offline, is not retried.
+		let mut tries: u32 = 0;
+		let page = until_not_challenged(
+			"https://bakamh.com/",
+			|| -> Result<Option<u32>> {
+				tries += 1;
+				bail!("offline")
+			},
+			|_| {},
+		);
+		assert!(page.is_err());
+		assert_eq!(tries, 1);
+	}
 
 	#[aidoku_test]
 	fn matches_the_clearance_domain() {
