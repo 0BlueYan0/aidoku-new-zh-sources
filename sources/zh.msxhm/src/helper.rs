@@ -57,8 +57,13 @@ pub fn normalize_base_url(value: &str) -> Option<String> {
 	}
 }
 
+/// Kept apart from `fetch_html` so the home can send its rows together.
+pub fn request(url: &str) -> Result<Request> {
+	Ok(Request::get(url)?.header("User-Agent", USER_AGENT))
+}
+
 pub fn fetch_html(url: &str) -> Result<Document> {
-	Ok(Request::get(url)?.header("User-Agent", USER_AGENT).html()?)
+	Ok(request(url)?.html()?)
 }
 
 /// An image address moved onto `base`, so a reader who picked a mirror because the

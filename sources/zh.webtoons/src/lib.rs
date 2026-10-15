@@ -3,6 +3,7 @@
 use aidoku::{
 	alloc::{String, Vec},
 	imports::{
+		html::Document,
 		net::Request,
 		std::{current_date, send_partial_result},
 	},
@@ -23,6 +24,9 @@ const USER_AGENT: &str = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)
 /// Webtoons mobile API base URL for fetching all episodes in one request.
 const MOBILE_API: &str = "https://m.webtoons.com/api/v1/webtoon";
 
+/// Requests per `send_all`: the app runs at most 5 at once, and more in one call can hang (docs/aidoku-rs-api.md).
+const HOME_BATCH: usize = 5;
+
 struct WebtoonSource;
 
 fn with_cache_bust(url: &str) -> String {
@@ -34,16 +38,17 @@ fn with_cache_bust(url: &str) -> String {
 	}
 }
 
-/// Helper: fetch a page and parse manga items.
-fn fetch_manga_list(url: &str) -> Result<(Vec<Manga>, bool)> {
+/// Build-only half of `fetch_manga_list`, so `get_home` can batch rows with `send_all`.
+fn manga_list_request(url: &str) -> Result<Request> {
 	let request_url = with_cache_bust(url);
-	let html = Request::get(&request_url)?
+	Ok(Request::get(&request_url)?
 		.header("Referer", BASE_URL)
 		.header("User-Agent", USER_AGENT)
 		.header("Cache-Control", "no-cache, no-store, must-revalidate")
-		.header("Pragma", "no-cache")
-		.html()?;
+		.header("Pragma", "no-cache"))
+}
 
+fn parse_manga_list(html: &Document) -> (Vec<Manga>, bool) {
 	let mut entries: Vec<Manga> = Vec::new();
 
 	if let Some(list) = html.select("ul.webtoon_list li a.link") {
@@ -55,7 +60,27 @@ fn fetch_manga_list(url: &str) -> Result<(Vec<Manga>, bool)> {
 	}
 
 	let has_next_page = html.select_first(".pg_next").is_some();
-	Ok((entries, has_next_page))
+	(entries, has_next_page)
+}
+
+/// Helper: fetch a page and parse manga items.
+fn fetch_manga_list(url: &str) -> Result<(Vec<Manga>, bool)> {
+	let html = manga_list_request(url)?.html()?;
+	Ok(parse_manga_list(&html))
+}
+
+/// Shared by `get_manga_list` and `get_home` so the home rows hit the same pages as the listings.
+fn listing_url(id: &str, page: i32) -> Option<String> {
+	match id {
+		"popular" => Some(format!(
+			"{BASE_URL}{LANG_PATH}/ranking?sortOrder=MANA&page={page}"
+		)),
+		"monday" | "tuesday" | "wednesday" | "thursday"
+		| "friday" | "saturday" | "sunday" | "complete" => Some(format!(
+			"{BASE_URL}{LANG_PATH}/originals/{id}?sortOrder=MANA"
+		)),
+		_ => None,
+	}
 }
 
 impl Source for WebtoonSource {
@@ -306,25 +331,16 @@ impl Source for WebtoonSource {
 
 impl ListingProvider for WebtoonSource {
 	fn get_manga_list(&self, listing: Listing, page: i32) -> Result<MangaPageResult> {
-		let url = match listing.id.as_str() {
-			"popular" => format!(
-				"{BASE_URL}{LANG_PATH}/ranking?sortOrder=MANA&page={page}"
-			),
-			day @ ("monday" | "tuesday" | "wednesday" | "thursday"
-				| "friday" | "saturday" | "sunday" | "complete") =>
-			{
-				if page > 1 {
-					return Ok(MangaPageResult {
-						entries: Vec::new(),
-						has_next_page: false,
-					});
-				}
-				format!(
-					"{BASE_URL}{LANG_PATH}/originals/{day}?sortOrder=MANA"
-				)
-			}
-			_ => bail!("Unknown listing: {}", listing.id),
+		let Some(url) = listing_url(&listing.id, page) else {
+			bail!("Unknown listing: {}", listing.id);
 		};
+		// Weekday and completed pages are not paginated.
+		if page > 1 && listing.id != "popular" {
+			return Ok(MangaPageResult {
+				entries: Vec::new(),
+				has_next_page: false,
+			});
+		}
 
 		let (entries, has_next_page) = fetch_manga_list(&url)?;
 
@@ -399,30 +415,52 @@ impl Home for WebtoonSource {
 			("complete", "完結作品"),
 		];
 
+		// Rows go out together so the covers, which queue behind this call, start sooner.
+		let mut rows = Vec::new();
+		let mut requests: Vec<Request> = Vec::new();
 		for (id, name) in sections {
-			if let Ok(result) = self.get_manga_list(
-				Listing {
-					id: String::from(id),
-					name: String::from(name),
-					..Default::default()
-				},
-				1,
-			) {
-				if !result.entries.is_empty() {
-					let links: Vec<Link> = result.entries.into_iter().map(Link::from).collect();
-					send_partial_result(&HomePartialResult::Component(HomeComponent {
-						title: Some(String::from(name)),
-						subtitle: None,
-						value: HomeComponentValue::Scroller {
-							entries: links,
-							listing: Some(Listing {
-								id: String::from(id),
-								name: String::from(name),
-								..Default::default()
-							}),
-						},
-					}));
+			match listing_url(id, 1).map(|url| manga_list_request(&url)) {
+				Some(Ok(request)) => {
+					rows.push((id, name));
+					requests.push(request);
 				}
+				_ => println!("[webtoons] home row {} could not build its request", id),
+			}
+		}
+		let mut responses = Vec::new();
+		let mut requests = requests.into_iter().peekable();
+		while requests.peek().is_some() {
+			let batch: Vec<Request> = requests.by_ref().take(HOME_BATCH).collect();
+			responses.extend(Request::send_all(batch));
+		}
+
+		let mut responses = responses.into_iter();
+		for (id, name) in rows {
+			let entries = match responses.next().map(|r| r.and_then(|res| res.get_html())) {
+				Some(Ok(html)) => parse_manga_list(&html).0,
+				Some(Err(err)) => {
+					println!("[webtoons] home row {} failed: {:?}", id, err);
+					continue;
+				}
+				None => {
+					println!("[webtoons] home row {} got no response", id);
+					continue;
+				}
+			};
+			if !entries.is_empty() {
+				let links: Vec<Link> = entries.into_iter().map(Link::from).collect();
+				send_partial_result(&HomePartialResult::Component(HomeComponent {
+					title: Some(String::from(name)),
+					subtitle: None,
+					value: HomeComponentValue::Scroller {
+						entries: links,
+						listing: Some(Listing {
+							id: String::from(id),
+							name: String::from(name),
+							..Default::default()
+						}),
+					},
+				}));
 			}
 		}
 

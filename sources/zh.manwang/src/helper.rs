@@ -23,8 +23,13 @@ pub const BOARDS: [(&str, &str); 5] = [
 	("day", "/custom/day"),
 ];
 
+/// Kept apart from `fetch_html` so the home can send its rows together.
+pub fn request(url: &str) -> Result<Request> {
+	Ok(Request::get(url)?)
+}
+
 pub fn fetch_html(url: &str) -> Result<Document> {
-	Ok(Request::get(url)?.html()?)
+	Ok(request(url)?.html()?)
 }
 
 /// Where the site sends a removed work: `/book/<id>` answers 302 to this page, which

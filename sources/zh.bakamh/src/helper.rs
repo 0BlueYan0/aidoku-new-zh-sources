@@ -137,6 +137,11 @@ pub fn relay_target(base: &str, url: &str) -> String {
 	format!("{base}/r/{}{slash}{path}", host.to_lowercase())
 }
 
+/// Whether requests go through the relay.
+pub fn uses_relay() -> bool {
+	relay_base().is_some()
+}
+
 /// `url` through the relay, when one is set.
 pub fn relay_url(url: &str) -> Option<String> {
 	relay_base().map(|base| relay_target(&base, url))
@@ -258,7 +263,7 @@ const CHALLENGE_TRIES: u32 = 4;
 /// Seconds before trying again, the gap that source used. The app's verification sheet
 /// closes a moment after a solve, and its `viewDidDisappear` cancels whichever challenge is
 /// running at that point, so a try sent at once was cancelled 0.4 seconds in (2026-10-09).
-const CHALLENGE_PAUSE: i32 = 3;
+pub const CHALLENGE_PAUSE: i32 = 3;
 
 /// `fetch_html` for the reader, search and listings, which send one request and have nothing
 /// to show when it fails. A library work opens from the app's database, so once the clearance
@@ -266,8 +271,9 @@ const CHALLENGE_PAUSE: i32 = 3;
 ///
 /// One resend with no pause was tried on 2026-10-09 and removed: the app cancelled it each
 /// time (see `CHALLENGE_PAUSE`), and one more try is fewer than the site takes. The home page
-/// is left out, its five rows being five tries already, and so is `get_manga_update`, which
-/// a library refresh calls for every work.
+/// is left out, its five rows being five tries already (it asks blocked rows once more after
+/// the others instead), and so is `get_manga_update`, which a library refresh calls for every
+/// work.
 pub fn fetch_html_retrying(url: &str) -> Result<Document> {
 	until_not_challenged(url, || fetch_page(url, None), sleep)
 }
@@ -296,12 +302,18 @@ fn until_not_challenged<T>(
 
 /// One request to the site. `None` when the app's Cloudflare handling still hands back the
 /// challenge page.
-fn fetch_page(url: &str, timeout: Option<f64>) -> Result<Option<Document>> {
+pub fn fetch_page(url: &str, timeout: Option<f64>) -> Result<Option<Document>> {
 	let mut request = site_get(url)?;
 	if let Some(seconds) = timeout {
 		request = request.timeout(seconds);
 	}
 	let response = request.send()?;
+	read_page(url, response)
+}
+
+/// What `fetch_page` does with the response, split out so the home page can send its rows in
+/// one batch and read them afterwards. `None` is a challenge page.
+pub fn read_page(url: &str, response: Response) -> Result<Option<Document>> {
 	// Through the relay the response's own address is the relay's, so the page is parsed
 	// against the site's address for links to resolve to the site.
 	let html = if relay_url(url).is_some() {

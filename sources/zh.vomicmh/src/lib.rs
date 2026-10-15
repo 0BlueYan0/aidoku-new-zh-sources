@@ -2,7 +2,7 @@
 
 use aidoku::{
 	alloc::{vec, String, Vec},
-	imports::std::send_partial_result,
+	imports::{net::Request, std::send_partial_result},
 	prelude::*,
 	BasicLoginHandler, Chapter, DeepLinkHandler, DeepLinkResult, DynamicSettings, FilterValue,
 	GroupSetting, Home, HomeComponent, HomeComponentValue, HomeLayout, HomePartialResult, Link,
@@ -21,6 +21,9 @@ const HOME_ROWS: [(&str, &str); 2] = [("熱門推薦", "hot"), ("最近更新", 
 
 /// Category `0` is the whole site, newest update first.
 const ALL: &str = "0";
+
+/// Requests per `send_all`: the app runs at most 5 at once, and more in one call can hang (docs/aidoku-rs-api.md).
+const HOME_BATCH: usize = 5;
 
 fn empty_page() -> MangaPageResult {
 	MangaPageResult {
@@ -54,6 +57,64 @@ fn hot_page() -> Result<MangaPageResult> {
 		entries: parse_manga_list(&fetch_checked(BASE_URL, fetch_flight)?),
 		has_next_page: false,
 	})
+}
+
+/// The page behind a home row, the same one its listing's first page reads.
+fn home_row_url(id: &str) -> String {
+	match id {
+		"hot" => String::from(BASE_URL),
+		_ => category_url(ALL, 1),
+	}
+}
+
+/// The flight payloads of `urls` in order, fetched together. `None` for one that could
+/// not be sent or read, which `fetch_checked` would also have given up on without asking
+/// again.
+fn send_flights(urls: &[String]) -> Vec<Option<String>> {
+	let mut built = Vec::new();
+	let mut requests: Vec<Request> = Vec::new();
+	for url in urls {
+		match flight_request(url) {
+			Ok(request) => {
+				built.push(true);
+				requests.push(request);
+			}
+			Err(error) => {
+				println!("[vomicmh] ERROR building the request for {url}: {error:?}");
+				built.push(false);
+			}
+		}
+	}
+	let mut responses = Vec::new();
+	let mut requests = requests.into_iter().peekable();
+	while requests.peek().is_some() {
+		let batch: Vec<Request> = requests.by_ref().take(HOME_BATCH).collect();
+		responses.extend(Request::send_all(batch));
+	}
+
+	let mut responses = responses.into_iter();
+	urls.iter()
+		.zip(built)
+		.map(|(url, built)| {
+			if !built {
+				return None;
+			}
+			match responses.next() {
+				Some(Ok(response)) => match response.get_string() {
+					Ok(payload) => Some(payload),
+					Err(error) => {
+						println!("[vomicmh] ERROR reading {url}: {error:?}");
+						None
+					}
+				},
+				Some(Err(error)) => {
+					println!("[vomicmh] ERROR fetching {url}: {error:?}");
+					None
+				}
+				None => None,
+			}
+		})
+		.collect()
 }
 
 struct VomicSource;
@@ -172,19 +233,38 @@ impl Home for VomicSource {
 			.collect();
 		send_partial_result(&HomePartialResult::Layout(HomeLayout { components }));
 
-		for (title, id) in HOME_ROWS {
-			let result = match id {
-				"hot" => hot_page(),
-				_ => category_page(ALL, 1),
-			};
+		// Rows go out together so the covers, which queue behind this call, start sooner.
+		let urls: Vec<String> = HOME_ROWS.iter().map(|(_, id)| home_row_url(id)).collect();
+		let mut payloads = send_flights(&urls);
+
+		// Same allowance as `fetch_checked`: a page the site failed to build is asked for
+		// once more, and a second failure leaves the row empty.
+		let retry: Vec<usize> = payloads
+			.iter()
+			.enumerate()
+			.filter(|(_, payload)| payload.as_deref().is_some_and(site_failed))
+			.map(|(index, _)| index)
+			.collect();
+		if !retry.is_empty() {
+			let again: Vec<String> = retry.iter().map(|&index| urls[index].clone()).collect();
+			for url in &again {
+				println!("[vomicmh] the site failed to build {url}, asking again");
+			}
+			for (index, payload) in retry.into_iter().zip(send_flights(&again)) {
+				payloads[index] = payload;
+			}
+		}
+
+		for ((title, id), payload) in HOME_ROWS.into_iter().zip(payloads) {
 			// A row that fails stays empty; the other still loads.
-			let entries = match result {
-				Ok(result) if !result.entries.is_empty() => result.entries,
-				_ => {
-					println!("[vomicmh] ERROR loading the {id} row");
-					continue;
-				}
+			let entries = match payload {
+				Some(payload) if !site_failed(&payload) => parse_manga_list(&payload),
+				_ => Vec::new(),
 			};
+			if entries.is_empty() {
+				println!("[vomicmh] ERROR loading the {id} row");
+				continue;
+			}
 			send_partial_result(&HomePartialResult::Component(HomeComponent {
 				title: Some(String::from(title)),
 				subtitle: None,
