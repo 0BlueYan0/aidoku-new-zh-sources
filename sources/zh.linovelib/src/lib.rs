@@ -2,11 +2,11 @@
 
 use aidoku::{
 	alloc::{format, String, Vec},
-	imports::{html::Html, std::send_partial_result},
+	imports::{html::Html, net::Request, std::send_partial_result},
 	prelude::*,
 	Chapter, DeepLinkHandler, DeepLinkResult, FilterValue, Home, HomeComponent, HomeComponentValue,
-	HomeLayout, HomePartialResult, Link, Listing, ListingProvider, Manga,
-	MangaPageResult, Page, PageContent, Result, Source,
+	HomeLayout, HomePartialResult, ImageRequestProvider, Link, Listing, ListingProvider, Manga,
+	MangaPageResult, Page, PageContent, PageContext, Result, Source,
 };
 
 mod content;
@@ -234,7 +234,14 @@ impl DeepLinkHandler for LinovelibSource {
 	}
 }
 
-register_source!(LinovelibSource, ListingProvider, Home, DeepLinkHandler);
+impl ImageRequestProvider for LinovelibSource {
+	/// A cover saved under the other site loads from the one in use. Images need no headers.
+	fn get_image_request(&self, url: String, _context: Option<PageContext>) -> Result<Request> {
+		Ok(Request::get(onto_site(&url, base_url()))?)
+	}
+}
+
+register_source!(LinovelibSource, ListingProvider, Home, DeepLinkHandler, ImageRequestProvider);
 
 #[cfg(test)]
 mod test {

@@ -2,11 +2,11 @@
 
 use aidoku::{
 	alloc::{String, Vec},
-	imports::std::send_partial_result,
+	imports::{net::Request, std::send_partial_result},
 	prelude::*,
 	Chapter, DeepLinkHandler, DeepLinkResult, FilterValue, Home, HomeComponent, HomeComponentValue,
-	HomeLayout, HomePartialResult, Link, Listing, ListingProvider, Manga, MangaPageResult, Page,
-	Result, Source,
+	HomeLayout, HomePartialResult, ImageRequestProvider, Link, Listing, ListingProvider, Manga,
+	MangaPageResult, Page, PageContext, Result, Source,
 };
 
 mod helper;
@@ -209,7 +209,15 @@ impl DeepLinkHandler for MsxhmSource {
 	}
 }
 
-register_source!(MsxhmSource, ListingProvider, Home, DeepLinkHandler);
+impl ImageRequestProvider for MsxhmSource {
+	/// The library keeps the cover address from the day a work was added, rehosted onto the
+	/// mirror in use then, so it is moved onto the current one here. Images need no headers.
+	fn get_image_request(&self, url: String, _context: Option<PageContext>) -> Result<Request> {
+		Ok(Request::get(rehost(&url, &base_url()))?)
+	}
+}
+
+register_source!(MsxhmSource, ListingProvider, Home, DeepLinkHandler, ImageRequestProvider);
 
 #[cfg(test)]
 mod test {

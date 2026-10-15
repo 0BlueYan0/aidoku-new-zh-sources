@@ -196,6 +196,23 @@ pub fn is_site_image(url: &str) -> bool {
 		|| same_domain(url, &base_url())
 }
 
+/// `url` moved onto `base` when it is on one of the site's own domains. The library keeps the
+/// cover address from the day a work was added, so after the reader switches mirrors it would
+/// still load from the old one: broken once that domain dies, and with a challenge of its own
+/// meanwhile (2026-10-15 the relay solved both `baka1.cfd` and `bakamh.com` in one session).
+/// Every mirror serves the same paths.
+pub fn onto_base(url: &str, base: &str) -> String {
+	let domain = CLOUDFLARE_BUTTONS
+		.iter()
+		.map(|(_, domain)| *domain)
+		.chain(core::iter::once(base))
+		.find(|domain| same_domain(url, domain));
+	match domain {
+		Some(domain) => format!("{base}{}", &url[domain.len()..]),
+		None => String::from(url),
+	}
+}
+
 /// `cf_clearance=…` from the button of `url`'s domain. Decided by the request rather than
 /// `base_url()`: logging out visits every signed-in mirror.
 pub fn clearance_cookie(url: &str) -> Option<String> {
@@ -845,6 +862,36 @@ mod test {
 		assert!(same_domain("https://bakamh.com/manga/x/", "https://bakamh.com"));
 		assert!(!same_domain("https://bakamh.ru/", "https://bakamh.com"));
 		assert!(!same_domain("https://bakamh.com.evil/", "https://bakamh.com"));
+	}
+
+	#[aidoku_test]
+	fn moves_site_images_onto_the_domain_in_use() {
+		let cover = "https://bakamh.com/wp-content/uploads/2026/10/a.jpg?x=1";
+		assert_eq!(
+			onto_base(cover, "https://baka1.cfd"),
+			"https://baka1.cfd/wp-content/uploads/2026/10/a.jpg?x=1"
+		);
+		assert_eq!(
+			onto_base("https://bakamh.ru/wp-content/a.jpg", "https://bakamh.com"),
+			"https://bakamh.com/wp-content/a.jpg"
+		);
+		assert_eq!(
+			onto_base("https://my.mirror/wp-content/a.jpg", "https://my.mirror"),
+			"https://my.mirror/wp-content/a.jpg"
+		);
+		assert_eq!(onto_base(cover, "https://my.mirror"), "https://my.mirror/wp-content/uploads/2026/10/a.jpg?x=1");
+		assert_eq!(
+			onto_base(&onto_base(cover, "https://bakamh.ru"), "https://baka1.cfd"),
+			onto_base(cover, "https://baka1.cfd")
+		);
+		assert_eq!(
+			onto_base("https://t1.bakamh.de/x/1.jpg", "https://baka1.cfd"),
+			"https://t1.bakamh.de/x/1.jpg"
+		);
+		assert_eq!(
+			onto_base("https://bakamh.com.evil/a.jpg", "https://baka1.cfd"),
+			"https://bakamh.com.evil/a.jpg"
+		);
 	}
 
 	#[aidoku_test]

@@ -384,6 +384,9 @@ mod test {
 			"https://www.mxs13.cc/static/upload/book/1224/cover.jpg"
 		);
 		assert_eq!(rehost("/static/images/logo.png", MIRROR), "/static/images/logo.png");
+		// A library cover saved under one mirror ends up on the mirror in use.
+		let cover = "https://www.jjmhw9.top/static/upload/book/1224/cover.jpg";
+		assert_eq!(rehost(&rehost(cover, "https://www.jjmhw8.top"), MIRROR), rehost(cover, MIRROR));
 	}
 
 	#[aidoku_test]

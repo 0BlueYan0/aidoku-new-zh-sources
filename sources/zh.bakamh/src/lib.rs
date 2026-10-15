@@ -281,6 +281,8 @@ impl ImageRequestProvider for BakamhSource {
 	/// itself, so with a relay they go through it too. Otherwise this is the plain request the
 	/// app would have sent. Sends nothing.
 	fn get_image_request(&self, url: String, _context: Option<PageContext>) -> Result<Request> {
+		// A cover saved under another mirror loads from the domain in use.
+		let url = onto_base(&url, &base_url());
 		if is_site_image(&url) && relay_url(&url).is_some() {
 			return site_get(&url);
 		}
