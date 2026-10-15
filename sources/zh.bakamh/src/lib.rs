@@ -82,7 +82,17 @@ impl Source for BakamhSource {
 				_ => {}
 			}
 		}
-		Ok(parse_manga_list(&fetch_html_retrying(&search_url(&search, page))?))
+		let url = search_url(&search, page);
+		// The app runs this blank search by itself whenever content reloads (switching domains,
+		// clearing the cache), before the home page. On device (2026-10-16) its four challenged
+		// tries held the source for over a minute, so the home page never reloaded and a work
+		// opened meanwhile hung. Only a search the reader asked for is worth waiting on.
+		let html = if page == 1 && url == search_url(&Search::default(), 1) {
+			fetch_html(&url)?
+		} else {
+			fetch_html_retrying(&url)?
+		};
+		Ok(parse_manga_list(&html))
 	}
 
 	fn get_manga_update(
