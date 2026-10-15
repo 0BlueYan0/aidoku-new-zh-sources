@@ -137,6 +137,11 @@ pub fn relay_target(base: &str, url: &str) -> String {
 	format!("{base}/r/{}{slash}{path}", host.to_lowercase())
 }
 
+/// Whether requests go through the relay.
+pub fn uses_relay() -> bool {
+	relay_base().is_some()
+}
+
 /// `url` through the relay, when one is set.
 pub fn relay_url(url: &str) -> Option<String> {
 	relay_base().map(|base| relay_target(&base, url))
@@ -196,6 +201,23 @@ pub fn is_site_image(url: &str) -> bool {
 		|| same_domain(url, &base_url())
 }
 
+/// `url` moved onto `base` when it is on one of the site's own domains. The library keeps the
+/// cover address from the day a work was added, so after the reader switches mirrors it would
+/// still load from the old one: broken once that domain dies, and with a challenge of its own
+/// meanwhile (2026-10-15 the relay solved both `baka1.cfd` and `bakamh.com` in one session).
+/// Every mirror serves the same paths.
+pub fn onto_base(url: &str, base: &str) -> String {
+	let domain = CLOUDFLARE_BUTTONS
+		.iter()
+		.map(|(_, domain)| *domain)
+		.chain(core::iter::once(base))
+		.find(|domain| same_domain(url, domain));
+	match domain {
+		Some(domain) => format!("{base}{}", &url[domain.len()..]),
+		None => String::from(url),
+	}
+}
+
 /// `cf_clearance=…` from the button of `url`'s domain. Decided by the request rather than
 /// `base_url()`: logging out visits every signed-in mirror.
 pub fn clearance_cookie(url: &str) -> Option<String> {
@@ -241,7 +263,7 @@ const CHALLENGE_TRIES: u32 = 4;
 /// Seconds before trying again, the gap that source used. The app's verification sheet
 /// closes a moment after a solve, and its `viewDidDisappear` cancels whichever challenge is
 /// running at that point, so a try sent at once was cancelled 0.4 seconds in (2026-10-09).
-const CHALLENGE_PAUSE: i32 = 3;
+pub const CHALLENGE_PAUSE: i32 = 3;
 
 /// `fetch_html` for the reader, search and listings, which send one request and have nothing
 /// to show when it fails. A library work opens from the app's database, so once the clearance
@@ -249,8 +271,9 @@ const CHALLENGE_PAUSE: i32 = 3;
 ///
 /// One resend with no pause was tried on 2026-10-09 and removed: the app cancelled it each
 /// time (see `CHALLENGE_PAUSE`), and one more try is fewer than the site takes. The home page
-/// is left out, its five rows being five tries already, and so is `get_manga_update`, which
-/// a library refresh calls for every work.
+/// is left out, its five rows being five tries already (it asks blocked rows once more after
+/// the others instead), and so is `get_manga_update`, which a library refresh calls for every
+/// work.
 pub fn fetch_html_retrying(url: &str) -> Result<Document> {
 	until_not_challenged(url, || fetch_page(url, None), sleep)
 }
@@ -279,12 +302,18 @@ fn until_not_challenged<T>(
 
 /// One request to the site. `None` when the app's Cloudflare handling still hands back the
 /// challenge page.
-fn fetch_page(url: &str, timeout: Option<f64>) -> Result<Option<Document>> {
+pub fn fetch_page(url: &str, timeout: Option<f64>) -> Result<Option<Document>> {
 	let mut request = site_get(url)?;
 	if let Some(seconds) = timeout {
 		request = request.timeout(seconds);
 	}
 	let response = request.send()?;
+	read_page(url, response)
+}
+
+/// What `fetch_page` does with the response, split out so the home page can send its rows in
+/// one batch and read them afterwards. `None` is a challenge page.
+pub fn read_page(url: &str, response: Response) -> Result<Option<Document>> {
 	// Through the relay the response's own address is the relay's, so the page is parsed
 	// against the site's address for links to resolve to the site.
 	let html = if relay_url(url).is_some() {
@@ -845,6 +874,36 @@ mod test {
 		assert!(same_domain("https://bakamh.com/manga/x/", "https://bakamh.com"));
 		assert!(!same_domain("https://bakamh.ru/", "https://bakamh.com"));
 		assert!(!same_domain("https://bakamh.com.evil/", "https://bakamh.com"));
+	}
+
+	#[aidoku_test]
+	fn moves_site_images_onto_the_domain_in_use() {
+		let cover = "https://bakamh.com/wp-content/uploads/2026/10/a.jpg?x=1";
+		assert_eq!(
+			onto_base(cover, "https://baka1.cfd"),
+			"https://baka1.cfd/wp-content/uploads/2026/10/a.jpg?x=1"
+		);
+		assert_eq!(
+			onto_base("https://bakamh.ru/wp-content/a.jpg", "https://bakamh.com"),
+			"https://bakamh.com/wp-content/a.jpg"
+		);
+		assert_eq!(
+			onto_base("https://my.mirror/wp-content/a.jpg", "https://my.mirror"),
+			"https://my.mirror/wp-content/a.jpg"
+		);
+		assert_eq!(onto_base(cover, "https://my.mirror"), "https://my.mirror/wp-content/uploads/2026/10/a.jpg?x=1");
+		assert_eq!(
+			onto_base(&onto_base(cover, "https://bakamh.ru"), "https://baka1.cfd"),
+			onto_base(cover, "https://baka1.cfd")
+		);
+		assert_eq!(
+			onto_base("https://t1.bakamh.de/x/1.jpg", "https://baka1.cfd"),
+			"https://t1.bakamh.de/x/1.jpg"
+		);
+		assert_eq!(
+			onto_base("https://bakamh.com.evil/a.jpg", "https://baka1.cfd"),
+			"https://bakamh.com.evil/a.jpg"
+		);
 	}
 
 	#[aidoku_test]

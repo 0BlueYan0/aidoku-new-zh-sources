@@ -3,7 +3,7 @@ use aidoku::{
 	helpers::uri::encode_uri_component,
 	imports::{
 		html::{Document, Element},
-		net::Request,
+		net::{Request, Response},
 	},
 	prelude::*,
 	Chapter, ContentRating, Manga, MangaPageResult, MangaStatus, Result, Viewer,
@@ -30,7 +30,16 @@ pub const DELISTED_PATH: &str = "/err/comic";
 /// Any page but a details page. A non-2xx answer is an error, so an error page is never
 /// read as an empty list.
 pub fn fetch_html(url: &str) -> Result<Document> {
-	let response = Request::get(url)?.send()?;
+	read_html(request(url)?.send()?, url)
+}
+
+/// Kept apart from `fetch_html` so the home can send its rows together.
+pub fn request(url: &str) -> Result<Request> {
+	Ok(Request::get(url)?)
+}
+
+/// `fetch_html`'s status check, shared with the home's batched rows.
+pub fn read_html(response: Response, url: &str) -> Result<Document> {
 	let status = response.status_code();
 	if !(200..300).contains(&status) {
 		bail!("[wmh1234] HTTP {status} for {url}");

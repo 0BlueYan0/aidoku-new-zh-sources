@@ -77,7 +77,8 @@ pub fn normalize_base_url(value: &str) -> Option<String> {
 	}
 }
 
-fn request(url: &str) -> Result<Request> {
+/// Public so the home can build its rows here and send them together.
+pub fn request(url: &str) -> Result<Request> {
 	Ok(Request::get(url)?
 		.header("User-Agent", USER_AGENT)
 		.header("Referer", &base_url())

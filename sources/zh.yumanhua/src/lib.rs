@@ -23,10 +23,14 @@ fn empty_page() -> MangaPageResult {
 
 /// A page of `/data/sort` or `/data/rank`. The site answers -1 past page 5.
 fn api_page(path: &str, number: &str, page: i32) -> Result<MangaPageResult> {
+	api_page_with(path, number, page, true)
+}
+
+fn api_page_with(path: &str, number: &str, page: i32, retry: bool) -> Result<MangaPageResult> {
 	if page > MAX_PAGES {
 		return Ok(empty_page());
 	}
-	Ok(match post_list(path, &sort_form(number, page))? {
+	Ok(match post_list_with(path, &sort_form(number, page), retry)? {
 		Some(data) => page_result(&data, page),
 		None => empty_page(),
 	})
@@ -82,8 +86,9 @@ impl Source for YumanhuaSource {
 		}
 		match category {
 			Some(category) => api_page("/data/sort", &category, page),
-			// No category: the first ranking, which pages like a category.
-			None => api_page("/data/rank", "1", page),
+			// No category: the first ranking, which pages like a category. Its first page is the
+			// blank search the app runs by itself, so it is not retried (see `post_list_with`).
+			None => api_page_with("/data/rank", "1", page, page > 1),
 		}
 	}
 

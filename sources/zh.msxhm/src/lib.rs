@@ -2,11 +2,11 @@
 
 use aidoku::{
 	alloc::{String, Vec},
-	imports::std::send_partial_result,
+	imports::{net::Request, std::send_partial_result},
 	prelude::*,
 	Chapter, DeepLinkHandler, DeepLinkResult, FilterValue, Home, HomeComponent, HomeComponentValue,
-	HomeLayout, HomePartialResult, Link, Listing, ListingProvider, Manga, MangaPageResult, Page,
-	Result, Source,
+	HomeLayout, HomePartialResult, ImageRequestProvider, Link, Listing, ListingProvider, Manga,
+	MangaPageResult, Page, PageContext, Result, Source,
 };
 
 mod helper;
@@ -22,6 +22,9 @@ const HOME_ROWS: [(&str, &str); 5] = [
 	("完結榜", "rank_end"),
 	("推薦榜", "rank_rec"),
 ];
+
+/// Requests per `send_all`: the app runs at most 5 at once, and more in one call can hang (docs/aidoku-rs-api.md).
+const HOME_BATCH: usize = 5;
 
 fn empty_page() -> MangaPageResult {
 	MangaPageResult {
@@ -155,8 +158,48 @@ impl Home for MsxhmSource {
 		send_partial_result(&HomePartialResult::Layout(HomeLayout { components }));
 
 		let base = base_url();
-		// The four boards share one page, so it is fetched once.
-		let rank = listing_url(&base, "rank_hot", 1).and_then(|url: String| fetch_html(&url).ok());
+		// The four boards share one page, so it is fetched once; every other row needs its own.
+		let fetches = core::iter::once("rank_hot").chain(
+			HOME_ROWS
+				.iter()
+				.map(|(_, id)| *id)
+				.filter(|id| rank_heading(id).is_none()),
+		);
+
+		// Rows go out in parallel so the home screen, and the covers queued behind this call,
+		// are not held up by one request after another. A row whose request cannot be built is
+		// left out and stays empty; the others still load.
+		let mut fetched = Vec::new();
+		let mut requests: Vec<Request> = Vec::new();
+		for id in fetches {
+			let Some(Ok(request)) = listing_url(&base, id, 1).map(|url: String| request(&url))
+			else {
+				println!("[msxhm] ERROR building the {id} row");
+				continue;
+			};
+			fetched.push(id);
+			requests.push(request);
+		}
+		let mut responses = Vec::new();
+		let mut requests = requests.into_iter().peekable();
+		while requests.peek().is_some() {
+			let batch: Vec<Request> = requests.by_ref().take(HOME_BATCH).collect();
+			responses.extend(Request::send_all(batch));
+		}
+
+		// Drawn one at a time, in the order of `fetched`, so a short response list leaves the
+		// trailing rows empty instead of shifting results onto the wrong titles.
+		let mut responses = responses.into_iter();
+		let mut rank = None;
+		let mut pages = Vec::new();
+		for id in fetched {
+			let html = responses.next().map(|response| response?.get_html());
+			if id == "rank_hot" {
+				rank = html.and_then(|html| html.ok());
+			} else {
+				pages.push((id, html));
+			}
+		}
 		for (title, id) in HOME_ROWS {
 			// A row that fails stays empty; the others still load.
 			let entries = match rank_heading(id) {
@@ -164,8 +207,14 @@ impl Home for MsxhmSource {
 					Some(html) => parse_rank(html, heading, &base).entries,
 					None => continue,
 				},
-				None => match listing_url(&base, id, 1).map(|url: String| fetch_html(&url)) {
-					Some(Ok(html)) => parse_manga_list(&html, &base).entries,
+				None => match pages
+					.iter_mut()
+					.find(|(page_id, _)| *page_id == id)
+					.map(|(_, html)| html.take())
+				{
+					Some(Some(Ok(html))) => parse_manga_list(&html, &base).entries,
+					// Its request could not be built, which is already logged above.
+					None => continue,
 					_ => {
 						println!("[msxhm] ERROR loading the {id} row");
 						continue;
@@ -209,7 +258,15 @@ impl DeepLinkHandler for MsxhmSource {
 	}
 }
 
-register_source!(MsxhmSource, ListingProvider, Home, DeepLinkHandler);
+impl ImageRequestProvider for MsxhmSource {
+	/// The library keeps the cover address from the day a work was added, rehosted onto the
+	/// mirror in use then, so it is moved onto the current one here. Images need no headers.
+	fn get_image_request(&self, url: String, _context: Option<PageContext>) -> Result<Request> {
+		Ok(Request::get(rehost(&url, &base_url()))?)
+	}
+}
+
+register_source!(MsxhmSource, ListingProvider, Home, DeepLinkHandler, ImageRequestProvider);
 
 #[cfg(test)]
 mod test {

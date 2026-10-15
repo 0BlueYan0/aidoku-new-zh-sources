@@ -313,41 +313,67 @@ impl Home for KomiicSource {
 
 		let recent_vars =
 			r#"{"pagination":{"limit":20,"offset":0,"orderBy":"DATE_UPDATED","status":"","asc":true}}"#;
-		if let Ok(body) = gql(RECENT_UPDATE_QUERY, recent_vars) {
-			let entries = parse_comic_list(&body, "recentUpdate");
-			let links: Vec<Link> = entries.into_iter().map(Link::from).collect();
-
-			if !links.is_empty() {
-				send_partial_result(&HomePartialResult::Component(HomeComponent {
-					title: Some(String::from("最近更新")),
-					subtitle: None,
-					value: HomeComponentValue::Scroller {
-						entries: links,
-						listing: Some(Listing {
-							id: String::from("recent"),
-							name: String::from("最近更新"),
-							..Default::default()
-						}),
-					},
-				}));
-			}
-		}
-
 		let hot_vars =
 			r#"{"pagination":{"limit":20,"offset":0,"orderBy":"MONTH_VIEWS","status":"","asc":true}}"#;
-		if let Ok(body) = gql(HOT_COMICS_QUERY, hot_vars) {
-			let entries = parse_comic_list(&body, "hotComics");
+		let rows = [
+			(RECENT_UPDATE_QUERY, recent_vars, "recentUpdate", "recent", "最近更新"),
+			(HOT_COMICS_QUERY, hot_vars, "hotComics", "hot", "本月最夯"),
+		];
+
+		// The session probe may send its own request, so it runs once up front and never
+		// while the batch below is being built. It is time-gated, so this is the same single
+		// probe the first row used to trigger.
+		auth::ensure_session();
+
+		// Both rows go out together so the home screen, and the covers queued behind this
+		// call, are not held up by two requests in a row.
+		let token = auth::token();
+		let mut requests: Vec<Request> = Vec::new();
+		for (query, vars, ..) in rows {
+			// A request that cannot be built fails for every row alike; the old per-row path
+			// left the rows empty rather than failing the home.
+			let Ok(request) = graphql_build(query, vars, token.as_deref()) else {
+				println!("[komiic] could not build the home requests");
+				return Ok(HomeLayout::default());
+			};
+			requests.push(request);
+		}
+		let mut responses = Request::send_all(requests).into_iter();
+
+		// Settled one row at a time, so a row's auth recovery and resend run after the batch
+		// has finished rather than alongside it. A recovery made for one row is reused by the
+		// next, so a dead token costs one login however many rows report it.
+		let mut recovered = None;
+		for (query, vars, data_key, listing_id, name) in rows {
+			let body = responses
+				.next()
+				.ok_or_else(|| String::from("no response"))
+				.and_then(|response| response.map_err(|error| format!("{error:?}")))
+				.and_then(|response| read_response(response).map_err(|error| format!("{error:?}")))
+				.and_then(|(status, body)| {
+					graphql_settle(query, vars, status, body, &mut recovered)
+						.map_err(|error| format!("{error:?}"))
+				});
+			let body = match body {
+				Ok(body) => body,
+				Err(error) => {
+					println!("[komiic] home row {listing_id} failed: {error}");
+					continue;
+				}
+			};
+
+			let entries = parse_comic_list(&body, data_key);
 			let links: Vec<Link> = entries.into_iter().map(Link::from).collect();
 
 			if !links.is_empty() {
 				send_partial_result(&HomePartialResult::Component(HomeComponent {
-					title: Some(String::from("本月最夯")),
+					title: Some(String::from(name)),
 					subtitle: None,
 					value: HomeComponentValue::Scroller {
 						entries: links,
 						listing: Some(Listing {
-							id: String::from("hot"),
-							name: String::from("本月最夯"),
+							id: String::from(listing_id),
+							name: String::from(name),
 							..Default::default()
 						}),
 					},

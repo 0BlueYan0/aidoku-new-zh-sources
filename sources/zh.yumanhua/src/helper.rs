@@ -111,15 +111,24 @@ pub fn fetch_html(url: &str) -> Result<Document> {
 /// The `data` array of a form POST to one of the site's JSON endpoints, or `None` when the
 /// site says there is nothing (`-1`: past the last page, `201`: no search result).
 pub fn post_list(path: &str, form: &str) -> Result<Option<String>> {
+	post_list_with(path, form, true)
+}
+
+/// `post_list` with the retry for an unanswered request optional. The app runs the blank
+/// search by itself whenever content reloads; two unanswered sends would hold the source for
+/// about two minutes (zh.bakamh hit the same on device, 2026-10-16), so that one is sent once.
+pub fn post_list_with(path: &str, form: &str, retry: bool) -> Result<Option<String>> {
 	let url = format!("{BASE_URL}{path}");
-	let response = send_once_more(
-		|| {
-			Ok(Request::post(&url)?
-				.header("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
-				.body(form.as_bytes()))
-		},
-		&url,
-	)?;
+	let build = || {
+		Ok(Request::post(&url)?
+			.header("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+			.body(form.as_bytes()))
+	};
+	let response = if retry {
+		send_once_more(build, &url)?
+	} else {
+		build()?.send()?
+	};
 	let status = response.status_code();
 	if !(200..300).contains(&status) {
 		bail!("[yumanhua] HTTP {status} for {path} {form}");

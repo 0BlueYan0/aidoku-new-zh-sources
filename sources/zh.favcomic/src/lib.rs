@@ -52,15 +52,24 @@ impl FavComicSource {
 		if page > 1 {
 			return Ok(MangaPageResult::default());
 		}
-		let url = format!("{}/rank?range=1&comicType=0&vip=0", base_url());
-		Ok(parse_rank(&fetch_html(&url)?))
+		Ok(parse_rank(&fetch_html(&ranking_url())?))
 	}
 
 	fn section(&self, path: &str, page: i32, query: &str) -> Result<MangaPageResult> {
-		let url = format!("{}{path}?page={page}{query}", base_url());
-		Ok(parse_listing(&fetch_html(&url)?))
+		Ok(parse_listing(&fetch_html(&section_url(path, page, query))?))
 	}
 }
+
+fn ranking_url() -> String {
+	format!("{}/rank?range=1&comicType=0&vip=0", base_url())
+}
+
+fn section_url(path: &str, page: i32, query: &str) -> String {
+	format!("{}{path}?page={page}{query}", base_url())
+}
+
+/// Requests per `send_all`: the app runs at most 5 at once, and more in one call can hang (docs/aidoku-rs-api.md).
+const HOME_BATCH: usize = 5;
 
 impl Source for FavComicSource {
 	fn new() -> Self {
@@ -184,7 +193,40 @@ impl Home for FavComicSource {
 			.collect::<Vec<HomeComponent>>();
 		send_partial_result(&HomePartialResult::Layout(HomeLayout { components }));
 
-		for (id, name, _) in SECTIONS {
+		// Renewal may itself log in, so it runs once here rather than inside the batch below;
+		// `fetch_html` would have called it before every row, and it is time-gated, so only
+		// the first of those calls ever did anything.
+		auth::ensure_session();
+
+		// Rows go out in parallel so the home screen, and the covers queued behind this call,
+		// are not held up by eight requests in a row.
+		// A row whose request cannot be built is left out and stays empty; the others still load.
+		let mut rows = Vec::new();
+		let mut requests: Vec<Request> = Vec::new();
+		for (id, name, path) in SECTIONS {
+			let url = if id == "rank" {
+				ranking_url()
+			} else {
+				section_url(path, 1, "")
+			};
+			let Ok(request) = request(&url) else {
+				println!("[favcomic] home row {id} has a bad url: {url}");
+				continue;
+			};
+			rows.push((id, name));
+			requests.push(request);
+		}
+		let mut responses = Vec::new();
+		let mut requests = requests.into_iter().peekable();
+		while requests.peek().is_some() {
+			let batch: Vec<Request> = requests.by_ref().take(HOME_BATCH).collect();
+			responses.extend(Request::send_all(batch));
+		}
+
+		// Drawn one at a time so a short response list leaves the trailing rows empty instead of
+		// shifting results onto the wrong titles.
+		let mut responses = responses.into_iter();
+		for (id, name) in rows {
 			let listing = Listing {
 				id: String::from(id),
 				name: String::from(name),
@@ -192,8 +234,24 @@ impl Home for FavComicSource {
 			};
 
 			// One dead section must not blank the whole home screen.
-			let Ok(result) = self.get_manga_list(listing.clone(), 1) else {
-				continue;
+			let document = match responses.next() {
+				Some(Ok(response)) => match response.get_html() {
+					Ok(document) => document,
+					Err(error) => {
+						println!("[favcomic] home row {id} failed to parse: {error:?}");
+						continue;
+					}
+				},
+				Some(Err(error)) => {
+					println!("[favcomic] home row {id} failed: {error:?}");
+					continue;
+				}
+				None => continue,
+			};
+			let result = if id == "rank" {
+				parse_rank(&document)
+			} else {
+				parse_listing(&document)
 			};
 			if result.entries.is_empty() {
 				continue;

@@ -1,7 +1,7 @@
 use aidoku::{
 	alloc::{String, Vec},
 	imports::{
-		net::Request,
+		net::{Request, Response},
 		std::current_date,
 	},
 	prelude::*,
@@ -45,13 +45,12 @@ pub const IMAGE_LIMIT_QUERY: &str = r#"query getImageLimit { getImageLimit { lim
 // GraphQL request helper
 // ---------------------------------------------------------------------------
 
-/// Send a single GraphQL POST to the Komiic API. No retry, no defaults access.
-/// Returns the HTTP status code and the raw response body.
-pub fn graphql_once(
+/// Build a single GraphQL POST to the Komiic API without sending it.
+pub fn graphql_build(
 	query: &str,
 	variables: &str,
 	token: Option<&str>,
-) -> aidoku::Result<(i32, String)> {
+) -> aidoku::Result<Request> {
 	let ts = current_date();
 	let api_url = format!("{API_URL}?_={ts}");
 
@@ -79,7 +78,21 @@ pub fn graphql_once(
 		}
 	}
 
-	let response = req.body(body.as_bytes()).send()?;
+	Ok(req.body(body.as_bytes()))
+}
+
+/// Send a single GraphQL POST to the Komiic API. No retry, no defaults access.
+/// Returns the HTTP status code and the raw response body.
+pub fn graphql_once(
+	query: &str,
+	variables: &str,
+	token: Option<&str>,
+) -> aidoku::Result<(i32, String)> {
+	read_response(graphql_build(query, variables, token)?.send()?)
+}
+
+/// Status code and body of a sent GraphQL request.
+pub fn read_response(response: Response) -> aidoku::Result<(i32, String)> {
 	let status = response.status_code();
 	let text = response.get_string()?;
 	Ok((status, text))
@@ -91,11 +104,30 @@ pub fn graphql_request(query: &str, variables: &str) -> aidoku::Result<String> {
 	auth::ensure_session();
 
 	let (status, body) = graphql_once(query, variables, auth::token().as_deref())?;
+	graphql_settle(query, variables, status, body, &mut None)
+}
 
+/// Turns a first reply into the final body: one recovery and resend on an auth
+/// error, then the status check. Shared with the home screen, which sends its
+/// first replies in a batch and settles them one at a time afterwards, so the
+/// resend never goes out while another request is still being built.
+///
+/// `recovered` carries the outcome of a recovery already attempted for the same
+/// batch. The batched rows all went out with the same dead token, whereas the
+/// old sequential rows picked up the renewed one; reusing the outcome keeps it
+/// to a single login, as before, instead of one per row.
+pub fn graphql_settle(
+	query: &str,
+	variables: &str,
+	status: i32,
+	body: String,
+	recovered: &mut Option<Option<String>>,
+) -> aidoku::Result<String> {
 	// Komiic answers most queries anonymously instead of rejecting a dead token,
 	// so this path only fires for the queries that do report the error.
 	if is_auth_error(status, &body) && auth::token().is_some() {
-		if let Some(token) = auth::recover_session() {
+		let token = recovered.get_or_insert_with(auth::recover_session).clone();
+		if let Some(token) = token {
 			let (retry_status, retry_body) = graphql_once(query, variables, Some(&token))?;
 			if retry_status != 200 {
 				bail!("Komiic HTTP {retry_status}");

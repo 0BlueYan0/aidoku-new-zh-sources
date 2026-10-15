@@ -25,6 +25,9 @@ const HOME_ROWS: [(&str, &str); 5] = [
 	("日點擊", "day"),
 ];
 
+/// Requests per `send_all`: the app runs at most 5 at once, and more in one call can hang (docs/aidoku-rs-api.md).
+const HOME_BATCH: usize = 5;
+
 /// The only image list this source reads. The site's script fetches `source_id` 12
 /// lists from another host and decrypts each image; none turned up in 18 sampled works.
 const PLAIN_SOURCE_ID: &str = "15";
@@ -182,9 +185,32 @@ impl Home for ManwangSource {
 			.collect();
 		send_partial_result(&HomePartialResult::Layout(HomeLayout { components }));
 
+		// Rows go out in parallel so the home screen, and the covers queued behind this call,
+		// are not held up by five requests in a row.
+		// A row whose request cannot be built is left out and stays empty; the others still load.
+		let mut rows = Vec::new();
+		let mut requests: Vec<Request> = Vec::new();
 		for (title, id) in HOME_ROWS {
+			let Some(Ok(request)) = board_url(id).map(|url: String| request(&url)) else {
+				println!("[manwang] ERROR building the {id} row");
+				continue;
+			};
+			rows.push((title, id));
+			requests.push(request);
+		}
+		let mut responses = Vec::new();
+		let mut requests = requests.into_iter().peekable();
+		while requests.peek().is_some() {
+			let batch: Vec<Request> = requests.by_ref().take(HOME_BATCH).collect();
+			responses.extend(Request::send_all(batch));
+		}
+
+		// Drawn one at a time so a short response list leaves the trailing rows empty instead
+		// of shifting results onto the wrong titles.
+		let mut responses = responses.into_iter();
+		for (title, id) in rows {
 			// A row that fails stays empty; the others still load.
-			let entries = match board_url(id).map(|url: String| fetch_html(&url)) {
+			let entries = match responses.next().map(|response| response?.get_html()) {
 				Some(Ok(html)) => parse_manga_list(&html, 1).entries,
 				_ => {
 					println!("[manwang] ERROR loading the {id} row");

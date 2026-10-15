@@ -2,7 +2,7 @@
 
 use aidoku::{
 	alloc::{String, Vec},
-	imports::std::send_partial_result,
+	imports::{net::Request, std::send_partial_result},
 	prelude::*,
 	Chapter, DeepLinkHandler, DeepLinkResult, FilterValue, Home, HomeComponent, HomeComponentValue,
 	HomeLayout, HomePartialResult, Link, Listing, ListingProvider, Manga, MangaPageResult,
@@ -17,6 +17,9 @@ use helper::*;
 /// The home page's rows: heading and the listing behind it. The names must match
 /// `res/source.json`; the streamed components are matched to the skeleton by title.
 const HOME_ROWS: [(&str, &str); 3] = [("最近更新", "update"), ("人氣排行", "hits"), ("最新上架", "new")];
+
+/// Requests per `send_all`: the app runs at most 5 at once, and more in one call can hang (docs/aidoku-rs-api.md).
+const HOME_BATCH: usize = 5;
 
 /// Shown as the description of a work the site has removed.
 const DELISTED_NOTE: &str = "站方已下架這部作品。";
@@ -169,9 +172,36 @@ impl Home for Wmh1234Source {
 			.collect();
 		send_partial_result(&HomePartialResult::Layout(HomeLayout { components }));
 
+		// Rows go out in parallel so the home screen, and the covers queued behind this call,
+		// are not held up by three requests in a row.
+		// A row whose request cannot be built is left out and stays empty; the others still load.
+		let mut rows = Vec::new();
+		let mut requests: Vec<Request> = Vec::new();
 		for (title, id) in HOME_ROWS {
-			// A row that fails stays empty; the others still load.
-			let entries = match listing_url(id, 1).map(|url: String| fetch_html(&url)) {
+			let Some((url, Ok(request))) = listing_url(id, 1).map(|url: String| {
+				let request = request(&url);
+				(url, request)
+			}) else {
+				println!("[wmh1234] ERROR building the {id} row");
+				continue;
+			};
+			rows.push((title, id, url));
+			requests.push(request);
+		}
+		let mut responses = Vec::new();
+		let mut requests = requests.into_iter().peekable();
+		while requests.peek().is_some() {
+			let batch: Vec<Request> = requests.by_ref().take(HOME_BATCH).collect();
+			responses.extend(Request::send_all(batch));
+		}
+
+		// Drawn one at a time so a short response list leaves the trailing rows empty instead
+		// of shifting results onto the wrong titles.
+		let mut responses = responses.into_iter();
+		for (title, id, url) in rows {
+			// A row that fails stays empty; the others still load. `read_html` keeps
+			// `fetch_html`'s non-2xx check, so an error page is not read as an empty row.
+			let entries = match responses.next().map(|response| read_html(response?, &url)) {
 				Some(Ok(html)) => parse_manga_list(&html).entries,
 				_ => {
 					println!("[wmh1234] ERROR loading the {id} row");

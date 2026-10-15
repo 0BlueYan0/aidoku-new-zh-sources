@@ -100,7 +100,12 @@ pub fn fetch_html(url: &str) -> Result<String> {
 /// The React Server Components payload of a page: the same data the HTML is rendered
 /// from, as plain JSON rows instead of strings escaped inside `<script>` tags.
 pub fn fetch_flight(url: &str) -> Result<String> {
-	Request::get(url)?.header("RSC", "1").string()
+	flight_request(url)?.string()
+}
+
+/// Build-only half of `fetch_flight`, so `get_home` can batch rows with `send_all`.
+pub fn flight_request(url: &str) -> Result<Request> {
+	Ok(Request::get(url)?.header("RSC", "1"))
 }
 
 /// Whether the site's server failed to load the data behind a page. It does so in bursts

@@ -25,6 +25,19 @@ pub fn base_url() -> &'static str {
 	}
 }
 
+/// `url` moved onto `base` when it is on either site. The library keeps the cover address
+/// from the day a book was added (search results are always on the Simplified site), so after
+/// the reader switches sites it would still load from the other one. Both sites serve the same
+/// files under the same paths, and covers need no headers (checked 2026-10-15).
+pub fn onto_site(url: &str, base: &str) -> String {
+	for site in [TW_URL, CN_URL] {
+		if let Some(path) = url.strip_prefix(site).filter(|path| path.starts_with('/')) {
+			return format!("{base}{path}");
+		}
+	}
+	String::from(url)
+}
+
 /// The Simplified site answers an iPhone agent without `Safari` (the app's own, and
 /// in-app browsers) with a page asking for Chrome or Safari instead of the book.
 const USER_AGENT: &str = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1";
@@ -476,6 +489,22 @@ mod test {
 			"https://www.bilinovel.com/files/article/attachment/5/5340/333607/321969.jpeg"
 		);
 		assert_eq!(attachment_url(TW_URL, "https://example.com/a.jpg"), "https://example.com/a.jpg");
+	}
+
+	#[aidoku_test]
+	fn moves_covers_onto_the_site_in_use() {
+		let cover = "https://www.bilinovel.com/files/article/image/5/5407/5407s.jpg?1790926054";
+		assert_eq!(
+			onto_site(cover, TW_URL),
+			"https://tw.linovelib.com/files/article/image/5/5407/5407s.jpg?1790926054"
+		);
+		assert_eq!(onto_site(cover, CN_URL), cover);
+		assert_eq!(onto_site(&onto_site(cover, TW_URL), CN_URL), cover);
+		assert_eq!(onto_site("https://img3.readpai.com/0/2/1.jpg", TW_URL), "https://img3.readpai.com/0/2/1.jpg");
+		assert_eq!(
+			onto_site("https://tw.linovelib.com.evil/a.jpg", CN_URL),
+			"https://tw.linovelib.com.evil/a.jpg"
+		);
 	}
 
 	#[aidoku_test]

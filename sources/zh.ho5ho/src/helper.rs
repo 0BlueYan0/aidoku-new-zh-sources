@@ -32,8 +32,13 @@ pub const CATEGORIES: [&str; 30] = [
 /// The listings' `m_orderby` values; also the sort filter's ids.
 pub const ORDERS: [&str; 4] = ["latest", "views", "rating", "comments"];
 
+/// Kept apart from `fetch_html` so the home can send its rows together.
+pub fn request(url: &str) -> Result<Request> {
+	Ok(Request::get(url)?)
+}
+
 pub fn fetch_html(url: &str) -> Result<Document> {
-	Ok(Request::get(url)?.html()?)
+	Ok(request(url)?.html()?)
 }
 
 /// A term's slug: the name percent-encoded with lowercase hex and letters (`M女` →

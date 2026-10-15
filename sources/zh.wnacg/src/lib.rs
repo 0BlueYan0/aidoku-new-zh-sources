@@ -36,6 +36,9 @@ const HOME_SKELETON: [&str; 7] = [
 const HOME_RANK_TITLE: &str = "週榜";
 const HOME_RANK_LISTING: &str = "rank_week";
 
+/// Requests per `send_all`: the app runs at most 5 at once, and more in one call can hang (docs/aidoku-rs-api.md).
+const HOME_BATCH: usize = 5;
+
 struct WnacgSource;
 
 fn listing(id: &str) -> Listing {
@@ -198,25 +201,53 @@ impl Home for WnacgSource {
 		}
 		send_partial_result(&HomePartialResult::Layout(HomeLayout { components }));
 
-		// One request covers six of the seven rows.
-		match fetch_html(&home_url()) {
-			Ok(html) => {
-				for section in parse_home_sections(&html) {
-					send_scroller(section.title, section.listing_id, section.entries);
-				}
-			}
-			// A failing row should not take the whole home screen down.
-			Err(_) => println!("[wnacg] ERROR fetching home page"),
+		// One request covers six of the seven rows; the ranking board is not on the landing
+		// page, so it costs a second. Both go out together so the home screen, and the covers
+		// queued behind this call, wait for one round trip instead of two.
+		// A request that cannot be built is left out and its rows stay empty; the other still loads.
+		let mut rows = Vec::new();
+		let mut requests: Vec<Request> = Vec::new();
+		for (is_rank, url) in [(false, home_url()), (true, rank_list_url("week", 1))] {
+			let Ok(request) = request(&url) else {
+				println!("[wnacg] ERROR building the request for {url}");
+				continue;
+			};
+			rows.push(is_rank);
+			requests.push(request);
+		}
+		let mut responses = Vec::new();
+		let mut requests = requests.into_iter().peekable();
+		while requests.peek().is_some() {
+			let batch: Vec<Request> = requests.by_ref().take(HOME_BATCH).collect();
+			responses.extend(Request::send_all(batch));
 		}
 
-		// The ranking board is not on the landing page, so it costs a second request.
-		match self.get_manga_list(listing(HOME_RANK_LISTING), 1) {
-			Ok(result) => send_scroller(
-				String::from(HOME_RANK_TITLE),
-				Some(String::from(HOME_RANK_LISTING)),
-				result.entries,
-			),
-			Err(_) => println!("[wnacg] ERROR fetching weekly ranking"),
+		// Drawn one at a time so a short response list leaves the trailing rows empty instead
+		// of shifting results onto the wrong rows.
+		let mut responses = responses.into_iter();
+		for is_rank in rows {
+			let html = responses.next().map(|response| response?.get_html());
+			if is_rank {
+				// Parsed as the `rank_week` listing's first page is.
+				match html {
+					Some(Ok(html)) => send_scroller(
+						String::from(HOME_RANK_TITLE),
+						Some(String::from(HOME_RANK_LISTING)),
+						parse_list_page(&html, 1, false).entries,
+					),
+					_ => println!("[wnacg] ERROR fetching weekly ranking"),
+				}
+			} else {
+				match html {
+					Some(Ok(html)) => {
+						for section in parse_home_sections(&html) {
+							send_scroller(section.title, section.listing_id, section.entries);
+						}
+					}
+					// A failing row should not take the whole home screen down.
+					_ => println!("[wnacg] ERROR fetching home page"),
+				}
+			}
 		}
 
 		// The skeleton and every row have already been sent.

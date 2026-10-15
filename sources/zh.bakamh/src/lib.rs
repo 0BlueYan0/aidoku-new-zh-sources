@@ -2,7 +2,10 @@
 
 use aidoku::{
 	alloc::{vec, String, Vec},
-	imports::{net::Request, std::send_partial_result},
+	imports::{
+		net::Request,
+		std::{send_partial_result, sleep},
+	},
 	prelude::*,
 	BasicLoginHandler, Chapter, DeepLinkHandler, DeepLinkResult, DynamicSettings, FilterValue,
 	GroupSetting, Home, HomeComponent, HomeComponentValue, HomeLayout, HomePartialResult, Link,
@@ -79,7 +82,17 @@ impl Source for BakamhSource {
 				_ => {}
 			}
 		}
-		Ok(parse_manga_list(&fetch_html_retrying(&search_url(&search, page))?))
+		let url = search_url(&search, page);
+		// The app runs this blank search by itself whenever content reloads (switching domains,
+		// clearing the cache), before the home page. On device (2026-10-16) its four challenged
+		// tries held the source for over a minute, so the home page never reloaded and a work
+		// opened meanwhile hung. Only a search the reader asked for is worth waiting on.
+		let html = if page == 1 && url == search_url(&Search::default(), 1) {
+			fetch_html(&url)?
+		} else {
+			fetch_html_retrying(&url)?
+		};
+		Ok(parse_manga_list(&html))
 	}
 
 	fn get_manga_update(
@@ -175,37 +188,115 @@ impl Home for BakamhSource {
 			.collect();
 		send_partial_result(&HomePartialResult::Layout(HomeLayout { components }));
 
+		if uses_relay() {
+			send_home_rows_together();
+			return Ok(HomeLayout::default());
+		}
+
+		// Without a relay the rows go one after another: the app's Cloudflare handling gets a
+		// round per request, so five rows are five chances, and challenges met at the same time
+		// cancel each other (`canceled`).
+		let mut blocked = Vec::new();
 		for (title, id) in HOME_ROWS {
 			let Some(url) = listing_url(id, 1) else {
 				continue;
 			};
 			// A row that fails stays empty; the others still load.
-			let entries = match fetch_html(&url) {
-				Ok(html) => parse_manga_list(&html).entries,
-				Err(_) => {
-					println!("[bakamh] ERROR loading the {id} row");
-					continue;
-				}
-			};
-			if entries.is_empty() {
-				continue;
+			match fetch_page(&url, None) {
+				Ok(Some(html)) => send_home_row(title, id, parse_manga_list(&html).entries),
+				Ok(None) => blocked.push((title, id, url)),
+				Err(_) => println!("[bakamh] ERROR loading the {id} row"),
 			}
-			send_partial_result(&HomePartialResult::Component(HomeComponent {
-				title: Some(String::from(title)),
-				subtitle: None,
-				value: HomeComponentValue::Scroller {
-					entries: entries.into_iter().map(Link::from).collect(),
-					listing: Some(Listing {
-						id: String::from(id),
-						name: String::from(title),
-						..Default::default()
-					}),
-				},
-			}));
+		}
+
+		// The rows met while the app was still solving come back empty, and on device
+		// (2026-10-16) the first three stayed empty until a pull to refresh. By the end of the
+		// loop the challenge is usually passed, so each of them is asked once more, after the
+		// same pause `fetch_html_retrying` uses so the closing challenge sheet does not cancel it.
+		// Being offline is not retried.
+		if !blocked.is_empty() {
+			sleep(CHALLENGE_PAUSE);
+			for (title, id, url) in blocked {
+				match fetch_page(&url, None) {
+					Ok(Some(html)) => send_home_row(title, id, parse_manga_list(&html).entries),
+					Ok(None) => println!("[bakamh] ERROR the {id} row is still blocked after a retry"),
+					Err(_) => println!("[bakamh] ERROR loading the {id} row"),
+				}
+			}
 		}
 
 		Ok(HomeLayout::default())
 	}
+}
+
+/// Requests per `send_all`: the app runs at most 5 at once, and more in one call can hang (docs/aidoku-rs-api.md).
+const HOME_BATCH: usize = 5;
+
+/// The home rows through the relay, sent in one batch so the home screen, and the covers queued
+/// behind this call, are not held up by five requests in a row. The relay solves each host's
+/// challenge once and holds the others back meanwhile, so nothing here is cancelled.
+fn send_home_rows_together() {
+	// Rows whose request could not be built stay out of the batch and stay empty, as a failed
+	// `fetch_html` left them.
+	let mut rows = Vec::new();
+	let mut requests = Vec::new();
+	for (title, id) in HOME_ROWS {
+		let Some(url) = listing_url(id, 1) else {
+			continue;
+		};
+		match site_get(&url) {
+			Ok(request) => {
+				rows.push((title, id, url));
+				requests.push(request);
+			}
+			Err(_) => println!("[bakamh] ERROR loading the {id} row"),
+		}
+	}
+
+	let mut responses = Vec::new();
+	let mut requests = requests.into_iter().peekable();
+	while requests.peek().is_some() {
+		let batch: Vec<Request> = requests.by_ref().take(HOME_BATCH).collect();
+		responses.extend(Request::send_all(batch));
+	}
+
+	// Read in row order after the batch: `read_page` records the site's sign-in state, which
+	// must not happen while requests are still being built.
+	let mut responses = responses.into_iter();
+	for (title, id, url) in rows {
+		let page = match responses.next() {
+			Some(Ok(response)) => read_page(&url, response),
+			Some(Err(_)) | None => Err(error!("[bakamh] no response for {url}")),
+		};
+		let entries = match page {
+			Ok(Some(html)) => parse_manga_list(&html).entries,
+			// A challenge page, which `fetch_html` turns into an error.
+			Ok(None) | Err(_) => {
+				println!("[bakamh] ERROR loading the {id} row");
+				continue;
+			}
+		};
+		send_home_row(title, id, entries);
+	}
+}
+
+/// Streams one filled row into the skeleton; an empty row keeps its placeholder.
+fn send_home_row(title: &str, id: &str, entries: Vec<Manga>) {
+	if entries.is_empty() {
+		return;
+	}
+	send_partial_result(&HomePartialResult::Component(HomeComponent {
+		title: Some(String::from(title)),
+		subtitle: None,
+		value: HomeComponentValue::Scroller {
+			entries: entries.into_iter().map(Link::from).collect(),
+			listing: Some(Listing {
+				id: String::from(id),
+				name: String::from(title),
+				..Default::default()
+			}),
+		},
+	}));
 }
 
 impl DeepLinkHandler for BakamhSource {
@@ -281,6 +372,8 @@ impl ImageRequestProvider for BakamhSource {
 	/// itself, so with a relay they go through it too. Otherwise this is the plain request the
 	/// app would have sent. Sends nothing.
 	fn get_image_request(&self, url: String, _context: Option<PageContext>) -> Result<Request> {
+		// A cover saved under another mirror loads from the domain in use.
+		let url = onto_base(&url, &base_url());
 		if is_site_image(&url) && relay_url(&url).is_some() {
 			return site_get(&url);
 		}
