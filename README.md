@@ -7,6 +7,14 @@ Aidoku 新版中文圖源<br>
 
 進入[這裡](https://0blueyan0.github.io/aidoku-new-zh-sources)並點擊 Add Repository
 
+## Cloudflare 驗證轉發伺服器
+
+巴卡漫畫、18漫畫整站都有 Cloudflare 驗證，App 常常要驗證好幾次才打得開。有一台一直開著、裝了 Docker 的電腦或 NAS 的話，可以架設 [aidoku-cf-relay](https://github.com/0BlueYan0/aidoku-cf-relay) 轉發伺服器：
+
+- 架好後，在這兩個圖源設定頁的「轉發伺服器」填入網址與密碼，所有頁面都改由它開啟，若運作正常是不會跳出驗證頁面，當然這跟IP品質有關係，速度上也要看轉發伺服器和原站之間的連線速度。
+- 架設方法見 aidoku-cf-relay 的說明。在家裡以外的地方使用時，建議搭配 [Tailscale](https://tailscale.com/)。
+- 不架設也能照常使用，欄位留空就是原本的連線方式。
+
 ## 圖源列表
 
 - [BOOK☆WALKER 台灣](https://www.bookwalker.com.tw/)（只列已購買的書，需網頁登入）
@@ -18,13 +26,13 @@ Aidoku 新版中文圖源<br>
 - [喜漫漫畫](https://www.favcomic.com/)（可用帳號密碼登入並顯示金幣餘額，支援四個鏡像網域與圖片線路切換）
 - [嬉皮漫畫](https://m.hipmh.com/)
 - [輕書架](https://www.lightnovel.app/)（小說與漫畫，需帳密登入）
-- [18漫畫](https://18mh.org/)（站方有 Cloudflare 驗證，載入不出內容時可在設定頁手動通過驗證）
+- [18漫畫](https://18mh.org/)（站方有 Cloudflare 驗證，載入不出內容時可在設定頁手動通過驗證，可搭配自架的 Cloudflare 轉發伺服器）
 - [漫畫狗](https://dogemanga.com/)
 - [HO5HO](https://www.ho5ho.com/)
 - [漫小肆韓漫](https://www.jjmhw9.top/)（支援七個鏡像網域，也可自訂網址）
 - [vomic漫](https://www.vomicmh.com/)（閱讀需帳密登入，可切換原圖畫質）
 - [嗶哩輕小說](https://tw.linovelib.com/)
 - [漫網](https://www.manwang.net/)
-- [巴卡漫畫](https://bakamh.com/)（可用帳號密碼登入閱讀需登入的章節，換網址會自動重新登入，支援五個鏡像網域，也可自訂網址，站方有 Cloudflare 驗證，載入不出內容時可在設定頁手動通過驗證）
+- [巴卡漫畫](https://bakamh.com/)（可用帳號密碼登入閱讀需登入的章節，換網址會自動重新登入，支援五個鏡像網域，也可自訂網址，站方有 Cloudflare 驗證，載入不出內容時可在設定頁手動通過驗證，可搭配自架的 Cloudflare 轉發伺服器）
 - [漫畫1234](https://m.wmh1234.com/)
 - [漫畫客](http://yumanhua.com/)
