@@ -89,6 +89,38 @@
 	},
 	{
 		"type": "group",
+		"title": "轉發伺服器",
+		"footer": "一直被 Cloudflare 驗證擋住時，可以自己架設轉發伺服器，架設方法見 github.com/0BlueYan0/aidoku-cf-relay。填了網址就所有頁面都經由它開啟，不會再跳出驗證。頁面打不開時，先確認轉發伺服器有在執行、密碼與伺服器的設定相同。留空就照原本的方式連線。",
+		"items": [
+			{
+				"type": "text",
+				"key": "relayUrl",
+				"title": "轉發網址",
+				"placeholder": "http://192.168.0.10:8191",
+				"keyboardType": 3,
+				"autocapitalizationType": 0,
+				"autocorrectionDisabled": true,
+				"refreshes": [
+					"content",
+					"listings"
+				]
+			},
+			{
+				"type": "text",
+				"key": "relayToken",
+				"title": "轉發密碼",
+				"secure": true,
+				"autocapitalizationType": 0,
+				"autocorrectionDisabled": true,
+				"refreshes": [
+					"content",
+					"listings"
+				]
+			}
+		]
+	},
+	{
+		"type": "group",
 		"title": "帳號",
 		"footer": "登入後可閱讀標示「需登入」的章節。帳號密碼會保存在此裝置，登入過期時自動續期；登出即清除。\n標示「解鎖」日期的章節要有邀請碼才能提前閱讀，App 內無法使用，到日期後就能讀。\n登入失敗時，錯誤視窗只會顯示通用訊息；實際原因請看下方「帳號資訊」，關掉這一頁再重新打開才會更新。\n登出會登出所有登入過的網址。移除巴卡漫畫前請先登出，否則網站上仍是登入狀態。",
 		"items": [

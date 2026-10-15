@@ -2,11 +2,12 @@
 
 use aidoku::{
 	alloc::{vec, String, Vec},
-	imports::std::send_partial_result,
+	imports::{net::Request, std::send_partial_result},
 	prelude::*,
 	BasicLoginHandler, Chapter, DeepLinkHandler, DeepLinkResult, DynamicSettings, FilterValue,
 	GroupSetting, Home, HomeComponent, HomeComponentValue, HomeLayout, HomePartialResult, Link,
-	Listing, ListingProvider, Manga, MangaPageResult, NotificationHandler, Page, Result, Setting,
+	ImageRequestProvider, Listing, ListingProvider, Manga, MangaPageResult, NotificationHandler,
+	Page, PageContext, Result, Setting,
 	HashMap, Source, WebLoginHandler,
 };
 
@@ -275,6 +276,18 @@ impl WebLoginHandler for BakamhSource {
 	}
 }
 
+impl ImageRequestProvider for BakamhSource {
+	/// Covers are on the site's own domain, behind its challenge, and the app fetches them
+	/// itself, so with a relay they go through it too. Otherwise this is the plain request the
+	/// app would have sent. Sends nothing.
+	fn get_image_request(&self, url: String, _context: Option<PageContext>) -> Result<Request> {
+		if is_site_image(&url) && relay_url(&url).is_some() {
+			return site_get(&url);
+		}
+		Ok(Request::get(url)?)
+	}
+}
+
 register_source!(
 	BakamhSource,
 	ListingProvider,
@@ -283,7 +296,8 @@ register_source!(
 	BasicLoginHandler,
 	NotificationHandler,
 	DynamicSettings,
-	WebLoginHandler
+	WebLoginHandler,
+	ImageRequestProvider
 );
 
 #[cfg(test)]

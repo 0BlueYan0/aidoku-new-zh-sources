@@ -105,15 +105,95 @@ pub fn accept_clearance(cookies: &aidoku::HashMap<String, String>) -> bool {
 		.is_some_and(|value: &String| !value.is_empty())
 }
 
-/// A GET to the site, carrying the button's clearance when it was obtained on the domain
-/// in use (zh.18mh sends it the same way). The app puts its own jar's cookies in front;
-/// which copy Cloudflare reads when both are there has not been verified.
+/// The reader's Cloudflare relay (https://github.com/0BlueYan0/aidoku-cf-relay), set in
+/// settings. With one, every request to the site goes to `<relay>/r/<host><path>` instead, and
+/// the relay sends it on with a clearance it earned once, so the app never meets the challenge.
+/// Measured 2026-10-15: 0.5 to 1.9 s a page, and no verification sheet on the device.
+const RELAY_URL_KEY: &str = "relayUrl";
+const RELAY_TOKEN_KEY: &str = "relayToken";
+const RELAY_TOKEN_HEADER: &str = "X-Relay-Token";
+
+/// The relay address from settings, trimmed and defaulting to `http://`: a relay on the
+/// reader's own network has no certificate.
+fn relay_base() -> Option<String> {
+	let value = defaults_get::<String>(RELAY_URL_KEY)?;
+	let trimmed = value.trim().trim_end_matches('/');
+	if trimmed.is_empty() {
+		None
+	} else if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+		Some(String::from(trimmed))
+	} else {
+		Some(format!("http://{trimmed}"))
+	}
+}
+
+/// Where a request for `url` goes through the relay at `base`.
+pub fn relay_target(base: &str, url: &str) -> String {
+	let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+	// The relay files cookies under `/r/<lowercase host>/`, so the host is lowercased and at
+	// least `/` follows it.
+	let (host, path) = rest.find(['/', '?']).map_or((rest, ""), |at| rest.split_at(at));
+	let slash = if path.starts_with('/') { "" } else { "/" };
+	format!("{base}/r/{}{slash}{path}", host.to_lowercase())
+}
+
+/// `url` through the relay, when one is set.
+pub fn relay_url(url: &str) -> Option<String> {
+	relay_base().map(|base| relay_target(&base, url))
+}
+
+/// A request to the relay carrying its password.
+fn relay_request(request: Request) -> Request {
+	let token = defaults_get::<String>(RELAY_TOKEN_KEY).unwrap_or_default();
+	request.header(RELAY_TOKEN_HEADER, token.trim())
+}
+
+/// The relay's own failures (wrong password 401, host not allowed 403, no clearance 502) and
+/// the site's errors behind it are errors, not pages: parsed as pages they would read as empty
+/// lists, and a library refresh would take them for works with no chapters.
+pub fn check_relay_status(url: &str, response: &Response) -> Result<()> {
+	let status = response.status_code();
+	if !(200..400).contains(&status) {
+		println!("[bakamh] relay answered {status} for {url}");
+		bail!("[bakamh] relay answered {status} for {url}");
+	}
+	Ok(())
+}
+
+/// A GET to the site, through the relay when one is set. Otherwise it carries the button's
+/// clearance when it was obtained on the domain in use (zh.18mh sends it the same way). The
+/// app puts its own jar's cookies in front; which copy Cloudflare reads when both are there
+/// has not been verified.
 pub fn site_get(url: &str) -> Result<Request> {
+	if let Some(relayed) = relay_url(url) {
+		return Ok(relay_request(Request::get(relayed)?));
+	}
 	let mut request = Request::get(url)?;
 	if let Some(cookie) = clearance_cookie(url) {
 		request = request.header("Cookie", &cookie);
 	}
 	Ok(request)
+}
+
+/// `site_get` for a form post.
+pub fn site_post(url: &str) -> Result<Request> {
+	if let Some(relayed) = relay_url(url) {
+		return Ok(relay_request(Request::post(relayed)?));
+	}
+	let mut request = Request::post(url)?;
+	if let Some(cookie) = clearance_cookie(url) {
+		request = request.header("Cookie", &cookie);
+	}
+	Ok(request)
+}
+
+/// Whether an image is on the site's own domains, behind its challenge. Page images are on
+/// `t1.bakamh.de`, which has none.
+pub fn is_site_image(url: &str) -> bool {
+	CLOUDFLARE_BUTTONS
+		.iter()
+		.any(|(_, domain)| same_domain(url, domain))
+		|| same_domain(url, &base_url())
 }
 
 /// `cf_clearance=…` from the button of `url`'s domain. Decided by the request rather than
@@ -205,7 +285,14 @@ fn fetch_page(url: &str, timeout: Option<f64>) -> Result<Option<Document>> {
 		request = request.timeout(seconds);
 	}
 	let response = request.send()?;
-	let html = response.get_html()?;
+	// Through the relay the response's own address is the relay's, so the page is parsed
+	// against the site's address for links to resolve to the site.
+	let html = if relay_url(url).is_some() {
+		check_relay_status(url, &response)?;
+		Html::parse_with_url(&response.get_string()?, url)?
+	} else {
+		response.get_html()?
+	};
 	if is_challenge(&html) {
 		log_challenge(url, &response);
 		return Ok(None);
@@ -241,6 +328,9 @@ fn log_challenge(url: &str, response: &Response) {
 /// `fetch_html` for callers that need the raw text.
 pub fn fetch_text(url: &str) -> Result<String> {
 	let response = site_get(url)?.send()?;
+	if relay_url(url).is_some() {
+		check_relay_status(url, &response)?;
+	}
 	let text = response.get_string()?;
 	if Html::parse(&text).map(|doc| is_challenge(&doc)).unwrap_or(false) {
 		log_challenge(url, &response);
@@ -1015,5 +1105,45 @@ mod test {
 			Some("09a2d227cb")
 		);
 		assert_eq!(login_nonce("<html></html>"), None);
+	}
+
+	#[aidoku_test]
+	fn maps_requests_onto_the_relay() {
+		assert_eq!(
+			relay_target("http://192.168.0.10:8191", "https://bakamh.com/manga/x/?a=1"),
+			"http://192.168.0.10:8191/r/bakamh.com/manga/x/?a=1"
+		);
+		assert_eq!(
+			relay_target("http://r", "https://baka1.cfd/"),
+			"http://r/r/baka1.cfd/"
+		);
+		assert_eq!(
+			relay_target("http://r", "https://BakaMH.com/Manga?a=B"),
+			"http://r/r/bakamh.com/Manga?a=B"
+		);
+		assert_eq!(relay_target("http://r", "https://bakamh.com"), "http://r/r/bakamh.com/");
+		assert_eq!(relay_target("http://r", "https://bakamh.com?s=x"), "http://r/r/bakamh.com/?s=x");
+	}
+
+	#[aidoku_test]
+	fn only_site_images_go_through_the_relay() {
+		assert!(is_site_image(
+			"https://bakamh.com/wp-content/uploads/2026/10/x-270x400.jpg"
+		));
+		assert!(is_site_image("https://baka1.cfd/wp-content/uploads/x.jpg"));
+		assert!(!is_site_image("https://t1.bakamh.de/manga/x/1.jpg"));
+		assert!(!is_site_image("https://bakamh.com.evil.example/x.jpg"));
+	}
+
+	#[aidoku_test]
+	fn the_account_group_stays_last() {
+		// Dynamic settings are appended after `settings.json`, so the account info only sits
+		// under the account group while that group is last.
+		let settings = include_str!("../res/settings.json");
+		let account = settings.find("\"title\": \"帳號\"").expect("account group");
+		for key in ["\"key\": \"relayUrl\"", "\"key\": \"relayToken\""] {
+			assert!(settings.find(key).expect(key) < account, "{key}");
+		}
+		assert_eq!(settings[account..].matches("\"type\": \"group\"").count(), 0);
 	}
 }

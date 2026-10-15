@@ -14,15 +14,14 @@ use aidoku::{
 	imports::{
 		defaults::{defaults_get, defaults_set, DefaultValue},
 		html::Html,
-		net::Request,
 		std::current_date,
 	},
 	prelude::*,
 };
 
 use crate::helper::{
-	base_url, clearance_cookie, fetch_html, fetch_text, is_challenge, is_signed_in, is_site_page,
-	login_nonce, logout_url, site_get, user_name,
+	base_url, fetch_html, fetch_text, is_challenge, is_signed_in, is_site_page,
+	login_nonce, logout_url, relay_url, site_get, site_post, user_name, check_relay_status,
 };
 
 const USERNAME_KEY: &str = "auth_username";
@@ -172,7 +171,15 @@ fn login_page_nonce() -> Option<String> {
 	let page = fetch_text(&home).ok()?;
 	let doc = Html::parse_with_url(&page, &home).ok()?;
 	if !is_signed_in(&doc) {
-		return login_nonce(&page);
+		let nonce = login_nonce(&page);
+		if nonce.is_none() {
+			println!(
+				"[bakamh] login: no nonce on a signed-out page ({} bytes, wpMangaLogin present: {})",
+				page.len(),
+				page.contains("wpMangaLogin")
+			);
+		}
+		return nonce;
 	}
 	println!("[bakamh] login: the site is already signed in, logging out first");
 	let url = logout_url(&doc)?;
@@ -198,12 +205,9 @@ pub fn login(username: &str, password: &str) -> LoginOutcome {
 		encode_uri_component(password)
 	);
 	let ajax = format!("{}/wp-admin/admin-ajax.php", base_url());
-	let Ok(mut request) = Request::post(&ajax) else {
+	let Ok(request) = site_post(&ajax) else {
 		return LoginOutcome::Unreachable;
 	};
-	if let Some(cookie) = clearance_cookie(&ajax) {
-		request = request.header("Cookie", &cookie);
-	}
 	let Ok(response) = request
 		.header("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
 		.header("Referer", &format!("{}/", base_url()))
@@ -303,7 +307,9 @@ fn end_site_session(base: &str) {
 	let home = format!("{base}/");
 	let page = site_get(&home)
 		.ok()
-		.and_then(|request| request.timeout(LOGOUT_TIMEOUT).string().ok())
+		.and_then(|request| request.timeout(LOGOUT_TIMEOUT).send().ok())
+		.filter(|response| relay_url(&home).is_none() || check_relay_status(&home, response).is_ok())
+		.and_then(|response| response.get_string().ok())
 		.and_then(|text| Html::parse_with_url(&text, &home).ok())
 		.filter(|doc| !is_challenge(doc));
 	let Some(url) = page.as_ref().and_then(logout_url) else {

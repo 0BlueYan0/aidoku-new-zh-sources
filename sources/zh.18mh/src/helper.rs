@@ -2,8 +2,8 @@ use aidoku::{
 	alloc::{String, Vec},
 	imports::{
 		defaults::{defaults_get, defaults_get_map, defaults_set, DefaultValue},
-		html::{Document, Element},
-		net::Request,
+		html::{Document, Element, Html},
+		net::{Request, Response},
 	},
 	prelude::*,
 	Chapter, ContentRating, Manga, MangaPageResult, MangaStatus, Page, PageContent, Result, Viewer,
@@ -57,6 +57,61 @@ pub const CATEGORIES: [(&str, &str); 36] = [
 pub const CLOUDFLARE_KEY: &str = "cloudflare";
 pub const CLEARANCE_COOKIE: &str = "cf_clearance";
 
+/// The reader's Cloudflare relay (https://github.com/0BlueYan0/aidoku-cf-relay), set in
+/// settings. With one, every request to the site goes to `<relay>/r/<host><path>` instead, and
+/// the relay sends it on with a clearance it earned once, so the app never meets the challenge.
+/// Measured 2026-10-15: 0.5 to 1.9 s a page, and no verification sheet on the device.
+const RELAY_URL_KEY: &str = "relayUrl";
+const RELAY_TOKEN_KEY: &str = "relayToken";
+const RELAY_TOKEN_HEADER: &str = "X-Relay-Token";
+
+/// The relay address from settings, trimmed and defaulting to `http://`: a relay on the
+/// reader's own network has no certificate.
+fn relay_base() -> Option<String> {
+	let value = defaults_get::<String>(RELAY_URL_KEY)?;
+	let trimmed = value.trim().trim_end_matches('/');
+	if trimmed.is_empty() {
+		None
+	} else if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+		Some(String::from(trimmed))
+	} else {
+		Some(format!("http://{trimmed}"))
+	}
+}
+
+/// Where a request for `url` goes through the relay at `base`.
+pub fn relay_target(base: &str, url: &str) -> String {
+	let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+	// The relay files cookies under `/r/<lowercase host>/`, so the host is lowercased and at
+	// least `/` follows it.
+	let (host, path) = rest.find(['/', '?']).map_or((rest, ""), |at| rest.split_at(at));
+	let slash = if path.starts_with('/') { "" } else { "/" };
+	format!("{base}/r/{}{slash}{path}", host.to_lowercase())
+}
+
+/// `url` through the relay, when one is set.
+pub fn relay_url(url: &str) -> Option<String> {
+	relay_base().map(|base| relay_target(&base, url))
+}
+
+/// A request to the relay carrying its password.
+fn relay_request(request: Request) -> Request {
+	let token = defaults_get::<String>(RELAY_TOKEN_KEY).unwrap_or_default();
+	request.header(RELAY_TOKEN_HEADER, token.trim())
+}
+
+/// The relay's own failures (wrong password 401, host not allowed 403, no clearance 502) and
+/// the site's errors behind it are errors, not pages: parsed as pages they would read as empty
+/// lists, and a library refresh would take them for works with no chapters.
+fn check_relay_status(url: &str, response: &Response) -> Result<()> {
+	let status = response.status_code();
+	if !(200..400).contains(&status) {
+		println!("[18mh] relay answered {status} for {url}");
+		bail!("[18mh] relay answered {status} for {url}");
+	}
+	Ok(())
+}
+
 /// No `User-Agent`: the site sits behind a Cloudflare challenge, and the app only reuses
 /// the `cf_clearance` it solved for when the request carries the app's own user agent,
 /// which it adds when the source sets none.
@@ -65,6 +120,13 @@ pub const CLEARANCE_COOKIE: &str = "cf_clearance";
 /// still challenged on the retry). As a fallback, a clearance the reader got through the
 /// settings button is sent as well. The app puts its own jar's cookies in front of ours.
 pub fn fetch_html(url: &str) -> Result<Document> {
+	// Through the relay the response's own address is the relay's, so the page is parsed
+	// against the site's address for links to resolve to the site.
+	if let Some(relayed) = relay_url(url) {
+		let response = relay_request(Request::get(relayed)?).send()?;
+		check_relay_status(url, &response)?;
+		return Ok(Html::parse_with_url(&response.get_string()?, url)?);
+	}
 	let mut request = Request::get(url)?;
 	if let Some(clearance) = defaults_get_map(CLOUDFLARE_KEY)
 		.and_then(|cookies| cookies.get(CLEARANCE_COOKIE).cloned())
@@ -534,5 +596,16 @@ mod test {
 		assert_eq!(chapter_number("第1.5話"), Some(1.5));
 		assert_eq!(chapter_number("最終話"), None);
 		assert_eq!(chapter_number("後記"), None);
+	}
+
+	#[aidoku_test]
+	fn maps_requests_onto_the_relay() {
+		assert_eq!(
+			relay_target("http://192.168.0.10:8191", "https://18mh.org/manga/x"),
+			"http://192.168.0.10:8191/r/18mh.org/manga/x"
+		);
+		let settings = include_str!("../res/settings.json");
+		assert!(settings.contains("\"key\": \"relayUrl\""));
+		assert!(settings.contains("\"key\": \"relayToken\""));
 	}
 }
