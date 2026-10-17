@@ -1,1 +1,32 @@
-[]
+[
+	{
+		"type": "group",
+		"title": "閱讀說明",
+		"items": [],
+		"footer": "免費與試閱內容可直接閱讀。登入後可閱讀同一帳號已購買或仍有效的已解鎖章節。購買、觀看廣告及取得限時解鎖資格請使用官方 App。"
+	},
+	{
+		"type": "group",
+		"title": "帳號",
+		"footer": "使用官方網頁登入，不保存密碼。完成登入後，登入頁會自動關閉；若未自動關閉，請關閉登入頁後按「同步登入狀態」。下方「帳號資訊」顯示帳號名稱才代表成功。\n登入狀態會保存在此裝置，按「登出」清除。\n需要 iOS 17 以上。",
+		"items": [
+			{
+				"type": "login",
+				"key": "login",
+				"title": "登入",
+				"method": "web",
+				"url": "https://www.webtoons.com/member/login?returnUrl=https%3A%2F%2Fwww.webtoons.com%2Fzh-hant%2F",
+				"logoutTitle": "登出",
+				"clearCookiesOnLogOut": true,
+				"notification": "login",
+				"refreshes": ["settings", "listings", "content"]
+			},
+			{
+				"type": "button",
+				"title": "同步登入狀態",
+				"notification": "syncLogin",
+				"refreshes": ["settings", "listings", "content"]
+			}
+		]
+	}
+]

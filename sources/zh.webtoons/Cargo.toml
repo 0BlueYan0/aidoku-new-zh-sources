@@ -8,6 +8,18 @@ crate-type = ["cdylib"]
 
 [dependencies]
 aidoku = { git = "https://github.com/Aidoku/aidoku-rs.git", branch = "main" }
+serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }
+serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
+hmac = { version = "0.12", default-features = false }
+sha1 = { version = "0.10", default-features = false }
+base64 = { version = "0.22", default-features = false, features = ["alloc"] }
+
+[dev-dependencies]
+aidoku = { git = "https://github.com/Aidoku/aidoku-rs.git", branch = "main", features = ["test"] }
+aidoku-test = { git = "https://github.com/Aidoku/aidoku-rs.git", branch = "main" }
+
+[features]
+live-tests = []
 
 [profile.dev]
 panic = "abort"

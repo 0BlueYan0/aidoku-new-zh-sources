@@ -111,121 +111,82 @@ pub fn parse_manga_item(item: &Element) -> Option<Manga> {
 
 
 
-// --- Mobile API JSON parsing ---
+// --- Mobile web API: used only to preserve already-published chapter keys. ---
 
-const BASE_URL_HELPER: &str = "https://www.webtoons.com";
-const THUMB_CDN_HELPER: &str = "https://webtoon-phinf.pstatic.net";
-
-/// Extract a JSON string value for a given key from a JSON object substring.
-/// Looks for `"key":"value"` and returns the value.
-fn json_str_value<'a>(json: &'a str, key: &str) -> Option<&'a str> {
-	let search = aidoku::alloc::format!("\"{}\":\"", key);
-	let pos = json.find(&search)?;
-	let start = pos + search.len();
-	let rest = &json[start..];
-	let end = rest.find('"')?;
-	Some(&rest[..end])
+#[derive(serde::Deserialize)]
+struct MobileEnvelope {
+	success: bool,
+	result: MobileResult,
 }
 
-/// Extract a JSON number value for a given key from a JSON object substring.
-fn json_num_value(json: &str, key: &str) -> Option<i64> {
-	let search = aidoku::alloc::format!("\"{}\":", key);
-	let pos = json.find(&search)?;
-	let start = pos + search.len();
-	let rest = &json[start..];
-
-	let mut num_str = String::new();
-	for ch in rest.chars() {
-		if ch.is_ascii_digit() || ch == '-' {
-			num_str.push(ch);
-		} else if !num_str.is_empty() {
-			break;
-		}
-	}
-
-	num_str.parse::<i64>().ok()
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MobileResult {
+	episode_list: Vec<MobileEpisode>,
 }
 
-/// Parse the Webtoons mobile API JSON response into a list of Chapter objects.
-/// The JSON format is:
-/// ```json
-/// {"result":{"episodeList":[{"episodeNo":1,"episodeTitle":"...","viewerLink":"...","thumbnail":"...","exposureDateMillis":123456},...]},"success":true}
-/// ```
-pub fn parse_episodes_json(body: &str) -> Vec<Chapter> {
-	let mut chapters: Vec<Chapter> = Vec::new();
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MobileEpisode {
+	episode_no: i32,
+	episode_title: Option<String>,
+	viewer_link: Option<String>,
+	thumbnail: Option<String>,
+	exposure_date_millis: Option<i64>,
+}
 
-	// Find the episodeList array
-	let list_start = match body.find("\"episodeList\":[") {
-		Some(pos) => pos + 14, // skip past "episodeList":[
-		None => return chapters,
-	};
-
-	let body_from_list = &body[list_start..];
-
-	// Split by each episode object: find each {...} block
-	let mut depth = 0;
-	let mut obj_start: Option<usize> = None;
-
-	for (i, ch) in body_from_list.char_indices() {
-		match ch {
-			'{' => {
-				if depth == 0 {
-					obj_start = Some(i);
-				}
-				depth += 1;
-			}
-			'}' => {
-				depth -= 1;
-				if depth == 0 {
-					if let Some(start) = obj_start {
-						let obj_str = &body_from_list[start..=i];
-						if let Some(chapter) = parse_single_episode(obj_str) {
-							chapters.push(chapter);
-						}
-					}
-					obj_start = None;
-				}
-			}
-			']' if depth == 0 => break,
-			_ => {}
-		}
+pub fn parse_episodes_json(body: &str) -> aidoku::Result<Vec<Chapter>> {
+	let envelope: MobileEnvelope = serde_json::from_str(body)
+		.map_err(|_| aidoku::error!("無法解析網頁章節清單"))?;
+	if !envelope.success {
+		return Err(aidoku::error!("網頁章節清單請求失敗"));
 	}
-
-	// API returns oldest first; reverse to show newest first
+	let mut chapters: Vec<Chapter> = envelope.result.episode_list.into_iter().map(|episode| {
+		let url = episode.viewer_link.map(|link| absolute_url("https://www.webtoons.com", &link));
+		Chapter {
+			key: url.clone().unwrap_or_else(|| aidoku::alloc::format!("{}", episode.episode_no)),
+			title: episode.episode_title,
+			chapter_number: Some(episode.episode_no as f32),
+			date_uploaded: episode.exposure_date_millis.map(|ms| ms / 1000),
+			url,
+			thumbnail: episode.thumbnail.map(|path| absolute_url("https://webtoon-phinf.pstatic.net", &path)),
+			..Default::default()
+		}
+	}).collect();
 	chapters.reverse();
-	chapters
+	Ok(chapters)
 }
 
-fn parse_single_episode(obj: &str) -> Option<Chapter> {
-	let episode_no = json_num_value(obj, "episodeNo")? as i32;
-	let title = json_str_value(obj, "episodeTitle")
-		.map(|s: &str| String::from(s));
-	let viewer_link = json_str_value(obj, "viewerLink");
-	let thumb_path = json_str_value(obj, "thumbnail");
-	let date_millis = json_num_value(obj, "exposureDateMillis");
+pub fn absolute_url(base: &str, path: &str) -> String {
+	if path.starts_with("https://") || path.starts_with("http://") {
+		String::from(path)
+	} else {
+		aidoku::alloc::format!("{}/{}", base.trim_end_matches('/'), path.trim_start_matches('/'))
+	}
+}
 
-	// Unescape URL-encoded paths (the JSON has already-encoded URLs)
-	let viewer_url = viewer_link.map(|link: &str| {
-		aidoku::alloc::format!("{BASE_URL_HELPER}{link}")
-	});
+/// Existing chapter keys can be viewer URLs or bare episode IDs.
+pub fn episode_no(key: &str) -> Option<i32> {
+	let raw = key.split_once("episode_no=").map(|(_, tail)| {
+		tail.split(['&', '#']).next().unwrap_or_default()
+	}).unwrap_or(key);
+	raw.parse::<i32>().ok().filter(|n| *n > 0)
+}
 
-	let thumbnail = thumb_path.map(|path: &str| {
-		aidoku::alloc::format!("{THUMB_CDN_HELPER}{path}")
-	});
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use aidoku_test::aidoku_test;
 
-	let date_uploaded = date_millis.map(|ms: i64| ms / 1000);
+	#[aidoku_test]
+	fn mobile_titles_preserve_quotes_and_braces() {
+		let chapters = parse_episodes_json(r#"{"result":{"episodeList":[{"episodeNo":1,"episodeTitle":"試閱 \"{咒術}\"","viewerLink":"/zh-hant/action/jjk/trial/viewer?title_no=10568&episode_no=1"}]},"success":true}"#).unwrap();
+		assert_eq!(chapters[0].title.as_deref(), Some("試閱 \"{咒術}\""));
+	}
 
-	let key = viewer_url
-		.clone()
-		.unwrap_or_else(|| aidoku::alloc::format!("{episode_no}"));
-
-	Some(Chapter {
-		key,
-		title,
-		chapter_number: Some(episode_no as f32),
-		date_uploaded,
-		url: viewer_url,
-		thumbnail,
-		..Default::default()
-	})
+	#[aidoku_test]
+	fn mobile_absolute_links_keep_the_existing_chapter_key() {
+		let chapters = parse_episodes_json(r#"{"result":{"episodeList":[{"episodeNo":1,"viewerLink":"https://www.webtoons.com/zh-hant/viewer?title_no=10568&episode_no=1"}]},"success":true}"#).unwrap();
+		assert_eq!(chapters[0].key, "https://www.webtoons.com/zh-hant/viewer?title_no=10568&episode_no=1");
+	}
 }
