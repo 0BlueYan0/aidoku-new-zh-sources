@@ -3,7 +3,44 @@
 		"type": "group",
 		"title": "閱讀說明",
 		"items": [],
-		"footer": "免費與試閱內容可直接閱讀。登入後可閱讀同一帳號已購買或仍有效的已解鎖章節。購買、觀看廣告及取得限時解鎖資格請使用官方 App。"
+		"footer": "免費與試閱內容可直接閱讀。登入後可讀取已取得權限的章節；代幣解鎖可在本設定頁選擇方案並確認。廣告與限時解鎖資格請在官方 App 取得，再回來按「同步解鎖權限」。"
+	},
+	{
+		"type": "group",
+		"title": "代幣解鎖",
+		"footer": "先開啟想解鎖的章節，再到本頁下方「待解鎖章節」選章節、載入方案與價格，選定後會顯示「待確認的解鎖」。最後按此處的確認按鈕，確認後才送出一次扣款。\n廣告請在官方 App 看完，回來同步權限。購買代幣仍須使用官方 App。",
+		"items": [
+			{
+				"type": "button",
+				"title": "確認使用代幣解鎖",
+				"notification": "confirmUnlock",
+				"confirmTitle": "使用代幣解鎖",
+				"confirmText": "將依下方「待確認的解鎖」所列章節、方案與價格使用代幣。請先核對；確認後只送出一次扣款，不會自動重試。",
+				"refreshes": [
+					"settings",
+					"content",
+					"listings"
+				]
+			},
+			{
+				"type": "button",
+				"title": "取消待確認方案",
+				"notification": "cancelUnlock",
+				"refreshes": [
+					"settings"
+				]
+			},
+			{
+				"type": "button",
+				"title": "同步解鎖權限",
+				"notification": "syncUnlock",
+				"refreshes": [
+					"settings",
+					"content",
+					"listings"
+				]
+			}
+		]
 	},
 	{
 		"type": "group",
@@ -19,13 +56,21 @@
 				"logoutTitle": "登出",
 				"clearCookiesOnLogOut": true,
 				"notification": "login",
-				"refreshes": ["settings", "listings", "content"]
+				"refreshes": [
+					"settings",
+					"listings",
+					"content"
+				]
 			},
 			{
 				"type": "button",
 				"title": "同步登入狀態",
 				"notification": "syncLogin",
-				"refreshes": ["settings", "listings", "content"]
+				"refreshes": [
+					"settings",
+					"listings",
+					"content"
+				]
 			}
 		]
 	}

@@ -4,7 +4,7 @@ use aidoku::{
 	helpers::uri::encode_uri_component,
 	imports::{defaults::{defaults_get, defaults_get_map, defaults_set, DefaultValue}, net::Request, std::current_date},
 	prelude::*,
-	Chapter, HashMap, Page, PageContext, Result,
+	Chapter, HashMap, Manga, Page, PageContext, Result,
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use hmac::{Hmac, Mac};
@@ -43,11 +43,17 @@ fn anonymous_id() -> String {
 }
 
 fn request_with_cookie(path: &str, params: &str, cookie: Option<&str>) -> Result<Request> {
+	request_with_method(path, params, cookie, false)
+}
+
+fn request_with_method(path: &str, params: &str, cookie: Option<&str>, post: bool) -> Result<Request> {
 	let separator = if params.is_empty() { "" } else { "&" };
 	let url = format!("{API}/{path}?{params}{separator}platform=APP_ANDROID&language=zh-hant&locale=zh-hant&serviceZone=GLOBAL");
 	let signed = sign_url(&url, current_date() * 1000, APP_KEY)?;
-	let mut request = Request::get(signed)?.timeout(20.0)
-		.header("User-Agent", USER_AGENT).header("wtu", anonymous_id().as_str());
+	let request = if post { Request::post(signed)? } else { Request::get(signed)? };
+	let mut request = request.timeout(20.0)
+		.header("User-Agent", USER_AGENT).header("wtu", anonymous_id().as_str())
+		.header("Cache-Control", "no-cache, no-store").header("Pragma", "no-cache");
 	if let Some(cookie) = cookie { request = request.header("Cookie", cookie); }
 	Ok(request)
 }
@@ -93,6 +99,31 @@ pub fn product_rights(title: &str) -> Result<Vec<ProductRight>> {
 	let title = parse_title(title)?;
 	let result: RightList = fetch("webtoon/productRightList.json", &format!("v=1&titleNo={title}"))?;
 	Ok(result.right_list)
+}
+
+pub fn product_menu(title: i32, episode: i32) -> Result<crate::unlock_models::ProductMenu> {
+	if title <= 0 || episode <= 0 { return Err(error!("無效的章節編號")); }
+	fetch("webtoon/getProduct.json", &format!("v=5&titleNo={title}&episodeNo={episode}"))
+}
+
+pub fn coin_balance() -> Result<crate::unlock_models::CoinBalance> {
+	let result: crate::unlock_models::CoinBalanceResult = fetch("webtoon/coinBalance.json", "v=1")?;
+	Ok(result.balance)
+}
+
+fn buy_params(offer: &crate::unlock_models::Offer) -> Result<String> {
+	if offer.policy_price <= 0 || offer.product_id.is_empty() || offer.product_sale_unit_id.is_empty() {
+		return Err(error!("無效的代幣解鎖方案"));
+	}
+	Ok(format!("v=1&productId={}&productSaleUnitId={}&price={}",
+		encode_uri_component(&offer.product_id), encode_uri_component(&offer.product_sale_unit_id), offer.policy_price))
+}
+
+/// The only debit request. Called once, only after the explicit confirmation
+/// handler has persisted its account/product transaction guard. No retry here.
+pub fn buy_product(offer: &crate::unlock_models::Offer, cookie: &str) -> Result<crate::unlock_models::BuyResult> {
+	let response = request_with_method("webtoon/buyProduct.json", &buy_params(offer)?, Some(cookie), true)?.send()?;
+	parse_response(response, Some(cookie))
 }
 
 pub fn title_info(title: &str) -> Result<TitleInfo> {
@@ -160,10 +191,20 @@ fn collect_episode_pages(
 	Ok(episodes)
 }
 
-pub fn app_pages(title: &str, episode: i32, manga: bool) -> Result<Vec<Page>> {
+pub fn app_pages(manga: &Manga, chapter: &Chapter, is_manga: bool) -> Result<Vec<Page>> {
 	// Read permission is checked by episodeInfo before requesting an image token.
-	let info = episode_info(title, episode)?;
-	if !info.requires_secure_token(manga) {
+	let title = parse_title(&manga.key)?;
+	let episode = crate::helper::episode_no(&chapter.key).ok_or_else(|| error!("無效的章節編號"))?;
+	let cookie = crate::auth::api_cookie();
+	let path = if cookie.is_some() { "webtoon/episodeInfoWithLogin.json" } else { "webtoon/episodeInfo.json" };
+	let response = request_with_cookie(path, &format!("v=4&titleNo={title}&episodeNo={episode}"), cookie.as_deref())?.send()?;
+	if matches!(response_code(&response.get_string()?), Some(2003 | 5003)) {
+		crate::unlock::queue_candidate(manga, chapter)?;
+		return Err(error!("此章節尚未解鎖，請至來源設定選擇代幣方案，或在官方 App 看完廣告後同步權限"));
+	}
+	let result: EpisodeInfoResult = parse_response(response, cookie.as_deref())?;
+	let info = result.episode_info;
+	if !info.requires_secure_token(is_manga) {
 		return info.into_pages(IMAGE_HOST, None);
 	}
 	let service: ServiceInfoResult = fetch("webtoon/serviceInfo.json", "v=1")?;
@@ -210,6 +251,18 @@ pub fn image_request(url: String, context: Option<&PageContext>) -> Result<Reque
 mod tests {
 	use super::*;
 	use aidoku_test::aidoku_test;
+
+	#[aidoku_test]
+	fn coin_purchase_query_escapes_sale_id_and_rejects_zero_price() {
+		let mut offer = crate::unlock_models::Offer {
+			product_id: "linewebtoon-WEBTOON-10568-2".into(), product_sale_unit_id: "sale+2&x".into(),
+			policy_price_currency: "TW_WCOIN".into(), policy_price: 27, sale_unit_type: "COMPLETE".into(),
+			end_sale_date: 32503647599000, rental_days: None,
+		};
+		assert_eq!(buy_params(&offer).unwrap(), "v=1&productId=linewebtoon-WEBTOON-10568-2&productSaleUnitId=sale%2B2%26x&price=27");
+		offer.policy_price = 0;
+		assert!(buy_params(&offer).is_err());
+	}
 
 	#[aidoku_test]
 	fn only_explicit_not_login_responses_invalidate_a_session() {
