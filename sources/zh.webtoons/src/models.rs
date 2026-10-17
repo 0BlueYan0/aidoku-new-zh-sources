@@ -52,25 +52,20 @@ pub struct ProductRight {
 	infinite: bool,
 	#[serde(default)]
 	expire_time: i64,
-	#[serde(default)]
-	reward_ad: bool,
-	#[serde(default)]
-	time_deal: bool,
 }
 
 pub fn apply_rights(chapters: &mut [Chapter], title: &str, rights: &[ProductRight], now_ms: i64) {
 	for chapter in chapters {
 		let Some(episode) = episode_no(&chapter.key) else { continue; };
 		let expected = format!("linewebtoon-WEBTOON-{title}-{episode}");
-		let Some(right) = rights.iter().find(|right| {
+		if !rights.iter().any(|right| {
 			right.episode_no == episode && right.product_id == expected && right.has_right
 				&& (right.infinite || right.expire_time > now_ms)
-		}) else { continue; };
+		}) { continue; }
 		if let Some(name) = chapter.title.as_ref() {
 			let base = ["（需官方 App 購買）", "（需官方 App 解鎖）", "（需官方 App 限時解鎖）"]
 				.into_iter().find_map(|suffix| name.strip_suffix(suffix)).unwrap_or(name);
-			let status = if right.reward_ad || right.time_deal { "已解鎖" } else { "已購買" };
-			chapter.title = Some(format!("{base}（{status}）"));
+			chapter.title = Some(String::from(base));
 		}
 	}
 }
@@ -171,6 +166,18 @@ pub struct EpisodeInfo {
 #[serde(rename_all = "camelCase")]
 struct ImageInfo { sort_order: i32, url: String }
 
+pub fn trusted_image_url(url: &str) -> bool {
+	url.strip_prefix(IMAGE_HOST).or_else(|| url.strip_prefix(PRODUCT_HOST))
+		.is_some_and(|path| path.starts_with('/'))
+}
+
+fn image_host(url: &str) -> &str {
+	url.split_once("://").map(|(_, rest)| {
+		rest.split(['/', '?', '#']).next().unwrap_or_default()
+			.rsplit('@').next().unwrap_or_default()
+	}).unwrap_or("relative")
+}
+
 impl EpisodeInfo {
 	pub fn requires_secure_token(&self, manga: bool) -> bool { self.product || manga }
 
@@ -190,14 +197,26 @@ impl EpisodeInfo {
 			return Err(error!("WEBTOON 未回傳可閱讀的圖片"));
 		}
 		self.image_info.sort_by_key(|image| image.sort_order);
-		self.image_info.into_iter().map(|image| {
-			let url = absolute_url(host, &image.url);
-			if !url.starts_with(&format!("{host}/")) {
+		self.image_info.into_iter().enumerate().map(|(index, image)| {
+			// Android preserves absolute URLs, using productDomain only for relative
+			// paths. Paid WEBTOON images may already point at the regular image CDN.
+			let url = if let Some(rest) = image.url.strip_prefix("http://") {
+				format!("https://{rest}")
+			} else if image.url.starts_with("//") {
+				format!("https:{}", image.url)
+			} else {
+				absolute_url(host, &image.url)
+			};
+			if !trusted_image_url(&url) {
+				println!("[webtoons] rejected image host: {}", image_host(&url));
 				return Err(error!("WEBTOON 圖片主機與預期不符"));
 			}
+			if index == 0 {
+				println!("[webtoons] image source: host={}, secure_cookie={}", image_host(&url), cookie.is_some());
+			}
 			let mut context = PageContext::new();
-			if host == PRODUCT_HOST {
-				if let Some(cookie) = cookie { context.insert("Cookie".into(), cookie.into()); }
+			if let Some(cookie) = cookie {
+				context.insert("Cookie".into(), cookie.into());
 			}
 			Ok(Page {
 				content: PageContent::url_context(url, context),
@@ -271,7 +290,7 @@ mod tests {
 		let rights: RightList = decode(r#"{"message":{"result":{"rightList":[{"episodeNo":31,"productId":"linewebtoon-WEBTOON-10568-31","hasRight":true,"infinite":true,"expireTime":0}]}}}"#).unwrap();
 		apply_rights(&mut chapters, "10568", &rights.right_list, 1_000);
 		assert_eq!(chapters[0].key, "31");
-		assert_eq!(chapters[0].title.as_deref(), Some("第30集（已購買）"));
+		assert_eq!(chapters[0].title.as_deref(), Some("第30集"));
 		assert!(!chapters[0].locked);
 		assert_eq!(chapters[1].title.as_deref(), Some("第29集（需官方 App 購買）"));
 	}
@@ -322,6 +341,25 @@ mod tests {
 			}
 			_ => panic!("expected image"),
 		}
+	}
+
+	#[aidoku_test]
+	fn paid_images_preserve_absolute_official_urls_and_their_secure_cookie() {
+		let info: EpisodeInfoResult = decode(r#"{"message":{"result":{"episodeInfo":{"product":true,"imageInfo":[{"sortOrder":1,"url":"https://webtoon-phinf.pstatic.net/paid/page.jpg?type=q90"}]}}}}"#).unwrap();
+		let pages = info.episode_info.into_pages(PRODUCT_HOST, Some("token=value")).unwrap();
+		let PageContent::Url(url, Some(context)) = &pages[0].content else { panic!("expected secure image") };
+		assert_eq!(url, "https://webtoon-phinf.pstatic.net/paid/page.jpg?type=q90");
+		assert_eq!(context.get("Cookie").map(String::as_str), Some("token=value"));
+	}
+
+	#[aidoku_test]
+	fn official_http_and_protocol_relative_image_urls_use_https() {
+		let info: EpisodeInfoResult = decode(r#"{"message":{"result":{"episodeInfo":{"product":true,"imageInfo":[{"sortOrder":1,"url":"http://webtoon-phinf.pstatic.net/a.jpg"},{"sortOrder":2,"url":"//prowebtoon-phinf.pstatic.net/b.jpg"}]}}}}"#).unwrap();
+		let pages = info.episode_info.into_pages(PRODUCT_HOST, Some("token=value")).unwrap();
+		let PageContent::Url(first, _) = &pages[0].content else { panic!("expected image") };
+		let PageContent::Url(second, _) = &pages[1].content else { panic!("expected image") };
+		assert_eq!(first, "https://webtoon-phinf.pstatic.net/a.jpg");
+		assert_eq!(second, "https://prowebtoon-phinf.pstatic.net/b.jpg");
 	}
 
 	#[aidoku_test]

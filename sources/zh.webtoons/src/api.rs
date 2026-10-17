@@ -193,7 +193,7 @@ pub fn remember_keys(title: &str, chapters: &mut [Chapter]) {
 }
 
 fn image_cookie<'a>(url: &str, context: Option<&'a PageContext>) -> Option<&'a str> {
-	if !url.starts_with("https://prowebtoon-phinf.pstatic.net/") { return None; }
+	if !trusted_image_url(url) { return None; }
 	context?.get("Cookie").map(String::as_str)
 }
 
@@ -256,11 +256,12 @@ mod tests {
 	}
 
 	#[aidoku_test]
-	fn secure_cookie_is_only_attached_to_product_images() {
+	fn secure_cookie_is_scoped_to_official_page_images_and_not_contextless_covers() {
 		let mut context = PageContext::new();
 		context.insert("Cookie".into(), "token=value".into());
 		assert_eq!(image_cookie(&format!("{PRODUCT_HOST}/a.jpg"), Some(&context)), Some("token=value"));
-		assert_eq!(image_cookie(&format!("{IMAGE_HOST}/a.jpg"), Some(&context)), None);
+		assert_eq!(image_cookie(&format!("{IMAGE_HOST}/a.jpg"), Some(&context)), Some("token=value"));
+		assert_eq!(image_cookie(&format!("{IMAGE_HOST}/cover.jpg"), None), None);
 		assert_eq!(image_cookie("https://prowebtoon-phinf.pstatic.net.evil.test/a.jpg", Some(&context)), None);
 	}
 }
