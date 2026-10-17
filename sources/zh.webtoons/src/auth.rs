@@ -15,7 +15,6 @@ use sha1::{Digest, Sha1};
 const SESSION_KEY: &str = "auth_session";
 const NAME_KEY: &str = "auth_nickname";
 const NEXT_CHECK_KEY: &str = "auth_next_check_at";
-const LOGGED_IN_AT_KEY: &str = "auth_logged_in_at";
 const NEEDS_RELOGIN_KEY: &str = "auth_needs_relogin";
 const FAILED_KEY: &str = "auth_failed_cookie_hash";
 const FAILED_AT_KEY: &str = "auth_failed_at";
@@ -112,9 +111,7 @@ fn set_timestamp(key: &str, value: i64) {
 	defaults_set(key, DefaultValue::String(format!("{value}")));
 }
 
-fn accept_session(session: SessionCookies, nickname: &str, notify_login: bool) {
-	let changed = stored_session().is_none_or(|old| old.api_header() != session.api_header())
-		|| needs_relogin();
+fn accept_session(session: SessionCookies, nickname: &str) {
 	let Ok(raw) = serde_json::to_string(&session) else { return; };
 	defaults_set(SESSION_KEY, DefaultValue::String(raw));
 	defaults_set(NAME_KEY, DefaultValue::String(nickname.into()));
@@ -122,13 +119,11 @@ fn accept_session(session: SessionCookies, nickname: &str, notify_login: bool) {
 	set_timestamp(NEXT_CHECK_KEY, current_date() + 300);
 	defaults_set(FAILED_KEY, DefaultValue::Null);
 	defaults_set(FAILED_AT_KEY, DefaultValue::Null);
-	if notify_login && (changed || defaults_get::<String>("login").as_deref() != Some("logged_in")) {
-		set_timestamp(LOGGED_IN_AT_KEY, current_date());
-	} else if !notify_login {
-		set_timestamp(LOGGED_IN_AT_KEY, 0);
+	// SettingView notifies on this value change for both native and manual login.
+	// Do not rewrite an unchanged key and trigger redundant setting notifications.
+	if defaults_get::<String>("login").as_deref() != Some("logged_in") {
+		defaults_set("login", DefaultValue::String("logged_in".into()));
 	}
-	// Native login sets this too; a manual sync needs it when the callback did not fire.
-	defaults_set("login", DefaultValue::String("logged_in".into()));
 }
 
 fn read_web_session() -> Option<SessionCookies> {
@@ -142,10 +137,10 @@ fn read_web_session() -> Option<SessionCookies> {
 
 /// A callback may carry an empty cookie map because login redirects to another
 /// host and the App filters parent-domain cookies. Read the shared source store.
-pub fn capture_web_login(notify_login: bool) -> bool {
+pub fn capture_web_login(force_verify: bool) -> bool {
 	let Some(session) = read_web_session() else { return false; };
 	let header = session.api_header();
-	if notify_login && api_cookie().as_deref() == Some(header.as_str()) {
+	if !force_verify && api_cookie().as_deref() == Some(header.as_str()) {
 		return true;
 	}
 	let fingerprint: String = Sha1::digest(header.as_bytes()).iter()
@@ -159,7 +154,7 @@ pub fn capture_web_login(notify_login: bool) -> bool {
 	set_timestamp(FAILED_AT_KEY, current_date());
 	match crate::api::member_with_cookie(&header) {
 		Ok(Some(member)) => {
-			accept_session(session, &member.nickname, notify_login);
+			accept_session(session, &member.nickname);
 			println!("[webtoons] official login verified by App API");
 			true
 		}
@@ -200,7 +195,7 @@ pub fn ensure_session() {
 				if new_session.api_header() != header {
 					if let Ok(Some(member)) = crate::api::member_with_cookie(&new_session.api_header()) {
 						if api_cookie().as_deref() == Some(header.as_str()) {
-							accept_session(new_session, &member.nickname, false);
+							accept_session(new_session, &member.nickname);
 						}
 						return;
 					}
@@ -215,14 +210,11 @@ pub fn ensure_session() {
 	}
 }
 
-fn take_sign_in_notification() -> bool {
-	let at = timestamp(LOGGED_IN_AT_KEY);
-	set_timestamp(LOGGED_IN_AT_KEY, 0);
-	at > 0 && (0..60).contains(&(current_date() - at))
-}
-
 pub fn handle_login_notification() {
-	if take_sign_in_notification() { return; }
+	if !login_notification_is_logout() {
+		println!("[webtoons] login notification: no logout requested, session preserved");
+		return;
+	}
 	let session = stored_session();
 	// Clear first so concurrent refreshes cannot use the account during logout.
 	clear_local();
@@ -236,8 +228,16 @@ pub fn handle_login_notification() {
 	println!("[webtoons] logout: source web store cleared={cleared}");
 }
 
+fn login_notification_is_logout() -> bool {
+	// Aidoku writes a nonempty login setting on successful login and removes it
+	// BEFORE posting the notification for an explicit user logout. Notifications
+	// can be delayed or repeated; elapsed time cannot identify their meaning.
+	stored_session().is_some()
+		&& defaults_get::<String>("login").is_none_or(|value| value.is_empty())
+}
+
 fn clear_local() {
-	for key in [SESSION_KEY, NAME_KEY, NEXT_CHECK_KEY, LOGGED_IN_AT_KEY,
+	for key in [SESSION_KEY, NAME_KEY, NEXT_CHECK_KEY, "auth_logged_in_at",
 		FAILED_KEY, FAILED_AT_KEY, "login"] {
 		// Overwrite first: even a failed deletion must not leave usable credentials.
 		// The current test runner also rejects Null's zero pointer before removing it.
@@ -258,6 +258,28 @@ mod tests {
 			name: name.into(), value: value.into(), domain: domain.into(),
 			path: "/".into(), expires_date: None, is_secure: true, is_http_only: true,
 		}
+	}
+
+	#[aidoku_test]
+	fn manual_sync_and_repeated_login_notifications_keep_the_verified_session() {
+		clear_local();
+		accept_session(SessionCookies { session: "sync".into(), check: "sync".into() }, "測試帳號");
+		assert!(!login_notification_is_logout());
+		assert!(!login_notification_is_logout());
+		assert!(is_logged_in());
+	}
+
+	#[aidoku_test]
+	fn delayed_login_notification_keeps_session_but_immediate_real_logout_is_honored() {
+		clear_local();
+		accept_session(SessionCookies { session: "auto".into(), check: "auto".into() }, "測試帳號");
+		set_timestamp("auth_logged_in_at", current_date() - 600);
+		assert!(!login_notification_is_logout());
+		// Aidoku clears its login setting before posting the user's logout notification.
+		defaults_set("login", DefaultValue::String(String::new()));
+		assert!(login_notification_is_logout());
+		clear_local();
+		assert!(!login_notification_is_logout());
 	}
 
 	#[aidoku_test]
@@ -295,29 +317,30 @@ mod tests {
 	}
 
 	#[aidoku_test]
-	fn sign_in_notification_is_consumed_once_and_logout_clears_session() {
+	fn real_notification_handler_preserves_session_on_repeated_sync_notifications() {
 		clear_local();
-		accept_session(SessionCookies { session: "test".into(), check: "test".into() }, "測試帳號", true);
+		accept_session(SessionCookies { session: "sync".into(), check: "sync".into() }, "測試帳號");
+		handle_login_notification();
+		handle_login_notification();
 		assert!(is_logged_in());
-		assert!(take_sign_in_notification());
-		assert!(!take_sign_in_notification());
+		assert!(api_cookie().is_some());
 		clear_local();
 		assert!(!is_logged_in());
 		assert!(api_cookie().is_none());
 	}
 
 	#[aidoku_test]
-	fn manual_sync_never_turns_immediate_logout_into_a_sign_in() {
+	fn immediate_real_logout_is_not_hidden_by_a_recent_login() {
 		clear_local();
-		accept_session(SessionCookies { session: "sync".into(), check: "sync".into() }, "測試帳號", false);
-		assert!(!take_sign_in_notification());
-		clear_local();
+		accept_session(SessionCookies { session: "recent".into(), check: "recent".into() }, "測試帳號");
+		defaults_set("login", DefaultValue::String(String::new()));
+		assert!(login_notification_is_logout());
 	}
 
 	#[aidoku_test]
 	fn a_stale_request_cannot_expire_a_new_session() {
 		clear_local();
-		accept_session(SessionCookies { session: "new".into(), check: "new".into() }, "測試帳號", false);
+		accept_session(SessionCookies { session: "new".into(), check: "new".into() }, "測試帳號");
 		mark_relogin("NEO_SES=\"old\"; NEO_CHK=old");
 		assert!(is_logged_in());
 		let current = api_cookie().unwrap();

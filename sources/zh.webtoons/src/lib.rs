@@ -532,10 +532,19 @@ register_source!(
 	DynamicSettings
 );
 
+/// Aidoku's web-login commit removes its login setting when the callback map
+/// is empty, even if the source verified cookies from the shared WebView store.
+fn native_web_login_result(verified: bool, cookies: &HashMap<String, String>) -> bool {
+	if verified && cookies.is_empty() {
+		println!("[webtoons] verified login: empty callback map, keeping native sheet open");
+	}
+	verified && !cookies.is_empty()
+}
+
 impl WebLoginHandler for WebtoonSource {
-	fn handle_web_login(&self, key: String, _cookies: HashMap<String, String>) -> Result<bool> {
+	fn handle_web_login(&self, key: String, cookies: HashMap<String, String>) -> Result<bool> {
 		if key != "login" { bail!("Invalid login key: {key}"); }
-		Ok(auth::capture_web_login(true))
+		Ok(native_web_login_result(auth::capture_web_login(false), &cookies))
 	}
 }
 
@@ -544,7 +553,7 @@ impl NotificationHandler for WebtoonSource {
 		match notification.as_str() {
 			"login" => auth::handle_login_notification(),
 			"syncLogin" => {
-				let synced = auth::capture_web_login(false);
+				let synced = auth::capture_web_login(true);
 				println!("[webtoons] manual login sync succeeded={synced}");
 			}
 			_ => {}
@@ -561,5 +570,20 @@ impl DynamicSettings for WebtoonSource {
 			items: Vec::new(),
 			..Default::default()
 		}.into()])
+	}
+}
+
+#[cfg(test)]
+mod login_tests {
+	use super::*;
+	use aidoku_test::aidoku_test;
+
+	#[aidoku_test]
+	fn verified_login_with_empty_callback_cannot_tell_app_to_clear_its_login_key() {
+		let mut cookies = HashMap::new();
+		assert!(!native_web_login_result(true, &cookies));
+		cookies.insert("locale".into(), "zh-hant".into());
+		assert!(native_web_login_result(true, &cookies));
+		assert!(!native_web_login_result(false, &cookies));
 	}
 }
