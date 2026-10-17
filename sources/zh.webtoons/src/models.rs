@@ -9,6 +9,8 @@ use crate::helper::{absolute_url, episode_no};
 
 pub const IMAGE_HOST: &str = "https://webtoon-phinf.pstatic.net";
 pub const PRODUCT_HOST: &str = "https://prowebtoon-phinf.pstatic.net";
+// Actual absolute image host returned for purchased WEBTOON episodes on device.
+pub const STATIC_HOST: &str = "https://webtoons-static.pstatic.net";
 
 #[derive(Deserialize)]
 struct Envelope<T> { message: Message<T> }
@@ -167,8 +169,9 @@ pub struct EpisodeInfo {
 struct ImageInfo { sort_order: i32, url: String }
 
 pub fn trusted_image_url(url: &str) -> bool {
-	url.strip_prefix(IMAGE_HOST).or_else(|| url.strip_prefix(PRODUCT_HOST))
-		.is_some_and(|path| path.starts_with('/'))
+	[IMAGE_HOST, PRODUCT_HOST, STATIC_HOST].iter().any(|host| {
+		url.strip_prefix(host).is_some_and(|path| path.starts_with('/'))
+	})
 }
 
 fn image_host(url: &str) -> &str {
@@ -341,6 +344,17 @@ mod tests {
 			}
 			_ => panic!("expected image"),
 		}
+	}
+
+	#[aidoku_test]
+	fn paid_static_image_url_observed_on_device_keeps_url_and_secure_cookie() {
+		let info: EpisodeInfoResult = decode(r#"{"message":{"result":{"episodeInfo":{"product":true,"imageInfo":[{"sortOrder":1,"url":"https://webtoons-static.pstatic.net/paid/page.jpg?type=q90"}]}}}}"#).unwrap();
+		let pages = info.episode_info.into_pages(PRODUCT_HOST, Some("token=value")).unwrap();
+		let PageContent::Url(url, Some(context)) = &pages[0].content else { panic!("expected secure image") };
+		assert_eq!(url, "https://webtoons-static.pstatic.net/paid/page.jpg?type=q90");
+		assert_eq!(context.get("Cookie").map(String::as_str), Some("token=value"));
+		assert!(!trusted_image_url("https://webtoons-static.pstatic.net.evil.test/paid/page.jpg"));
+		assert!(!trusted_image_url("https://webtoons-static.pstatic.net@evil.test/paid/page.jpg"));
 	}
 
 	#[aidoku_test]

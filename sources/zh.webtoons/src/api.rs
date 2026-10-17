@@ -261,6 +261,9 @@ mod tests {
 		context.insert("Cookie".into(), "token=value".into());
 		assert_eq!(image_cookie(&format!("{PRODUCT_HOST}/a.jpg"), Some(&context)), Some("token=value"));
 		assert_eq!(image_cookie(&format!("{IMAGE_HOST}/a.jpg"), Some(&context)), Some("token=value"));
+		assert_eq!(image_cookie("https://webtoons-static.pstatic.net/paid/page.jpg", Some(&context)), Some("token=value"));
+		assert_eq!(image_cookie("https://webtoons-static.pstatic.net/cover.jpg", None), None);
+		assert_eq!(image_cookie("https://webtoons-static.pstatic.net.evil.test/a.jpg", Some(&context)), None);
 		assert_eq!(image_cookie(&format!("{IMAGE_HOST}/cover.jpg"), None), None);
 		assert_eq!(image_cookie("https://prowebtoon-phinf.pstatic.net.evil.test/a.jpg", Some(&context)), None);
 	}
