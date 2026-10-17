@@ -1,6 +1,6 @@
 //! The login token. vomic's tokens are issued until 2043 and stay valid when the same
 //! account logs in again elsewhere, so nothing is renewed and the password is not kept
-//! (zh.komiic and zh.favcomic keep it to renew short-lived tokens).
+//! (zh.komiic2 and zh.favcomic keep it to renew short-lived tokens).
 
 use aidoku::{
 	alloc::String,

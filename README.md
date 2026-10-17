@@ -17,6 +17,9 @@ Aidoku 新版中文圖源<br>
 
 ## 圖源列表
 
+> [!NOTE]
+> Komiic 漫畫、紳士漫畫、巴卡漫畫在 2026-10-17 改了圖源 id，避免和 Aidoku 官方清單的同名圖源互相覆蓋。之前裝過的話，請先移除舊的再重新安裝，書庫與閱讀進度要重新加入，有登入的要重新登入。
+
 - [BOOK☆WALKER 台灣](https://www.bookwalker.com.tw/)（只列已購買的書，需網頁登入）
 - [CCC追漫台](https://www.creative-comic.tw/)（登入可以顯示金幣、點數餘額）
 - [Line Webtoons 繁體中文](https://www.webtoons.com/zh-hant/)

@@ -36,7 +36,7 @@ const LOGGED_IN_AT_KEY: &str = "auth_logged_in_at";
 const LAST_FAILED_KEY: &str = "auth_last_failed";
 
 /// A `login` notification within this many seconds of a capture is the sign-in, not a
-/// sign-out. A timestamp rather than a flag (zh.komiic does the same): a late duplicate
+/// sign-out. A timestamp rather than a flag (zh.komiic2 does the same): a late duplicate
 /// callback after the login page closed would leave a flag set and turn the next logout
 /// into a no-op.
 const LOGIN_WINDOW: i64 = 60;
@@ -51,7 +51,7 @@ const ARCHIVE_PATH: &str = "/bookcase/available_book_list/archive?sd=1&d=0&sort=
 const ARCHIVED_IDS_KEY: &str = "auth_archived_ids";
 const ARCHIVED_AT_KEY: &str = "auth_archived_at";
 /// Refresh the archived set at most this often. Archiving is rare, and this rides on
-/// the chapter-list path, so it is gated like zh.komiic's session probe: every branch
+/// the chapter-list path, so it is gated like zh.komiic2's session probe: every branch
 /// that would fetch advances the gate first, so parallel updates fetch it only once.
 const ARCHIVE_TTL: i64 = 300;
 
@@ -173,7 +173,7 @@ fn refresh_archived_if_stale() {
 		return;
 	}
 	// Advance the gate before the request, so several manga updating at once fetch the
-	// shelf only once (the zh.komiic rule).
+	// shelf only once (the zh.komiic2 rule).
 	defaults_set(ARCHIVED_AT_KEY, DefaultValue::String(current_date().to_string()));
 
 	let url = format!("{BASE_URL}{ARCHIVE_PATH}");
