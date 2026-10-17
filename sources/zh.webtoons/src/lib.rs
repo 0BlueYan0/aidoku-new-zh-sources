@@ -15,13 +15,17 @@ use aidoku::{
 };
 
 mod helper;
+mod models;
+mod api;
+#[cfg(all(test, feature = "live-tests"))]
+mod live_tests;
 use helper::*;
 
 const BASE_URL: &str = "https://www.webtoons.com";
 const LANG_PATH: &str = "/zh-hant";
 const USER_AGENT: &str = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1";
 
-/// Webtoons mobile API base URL for fetching all episodes in one request.
+/// Mobile web API: preserves viewer URLs already used as library chapter keys.
 const MOBILE_API: &str = "https://m.webtoons.com/api/v1/webtoon";
 
 /// Requests per `send_all`: the app runs at most 5 at once, and more in one call can hang (docs/aidoku-rs-api.md).
@@ -83,6 +87,16 @@ fn listing_url(id: &str, page: i32) -> Option<String> {
 	}
 }
 
+/// The mobile web list is a compatibility map, never the authoritative App list.
+fn mobile_chapters(title_no: &str) -> Result<Vec<Chapter>> {
+	let title_no = title_no.parse::<i32>().map_err(|_| error!("無效的作品編號"))?;
+	let url = with_cache_bust(&format!("{MOBILE_API}/{title_no}/episodes?pageSize=99999"));
+	let body = Request::get(url)?.timeout(20.0)
+		.header("Referer", BASE_URL).header("User-Agent", USER_AGENT)
+		.header("Cache-Control", "no-cache, no-store, must-revalidate").string()?;
+	parse_episodes_json(&body)
+}
+
 impl Source for WebtoonSource {
 	fn new() -> Self {
 		Self
@@ -107,19 +121,16 @@ impl Source for WebtoonSource {
 		let mut sort_order = "MANA";
 
 		for filter in filters {
-			match filter {
-				FilterValue::Select { id, value } => {
-					if id == "genre" {
-						genre_slug = genre_name_to_slug(&value);
-					} else if id == "sort" {
-						sort_order = match value.as_str() {
-							"愛心排序" => "LIKEIT",
-							"最近更新" => "UPDATE",
-							_ => "MANA",
-						};
-					}
+			if let FilterValue::Select { id, value } = filter {
+				if id == "genre" {
+					genre_slug = genre_name_to_slug(&value);
+				} else if id == "sort" {
+					sort_order = match value.as_str() {
+						"愛心排序" => "LIKEIT",
+						"最近更新" => "UPDATE",
+						_ => "MANA",
+					};
 				}
-				_ => {}
 			}
 		}
 
@@ -228,45 +239,27 @@ impl Source for WebtoonSource {
 			println!("[webtoons] details fetched OK for title_no={}", title_no);
 		}
 
-		if needs_chapters {
-			// Use Webtoons mobile API to get ALL chapters in one request.
-			// Endpoint: m.webtoons.com/api/v1/webtoon/{titleId}/episodes?pageSize=99999
-			let api_url = format!(
-				"{MOBILE_API}/{title_no}/episodes?pageSize=99999"
-			);
-			let api_url = with_cache_bust(&api_url);
-
-			println!("[webtoons] fetching chapters: {}", api_url);
-
-			// Use graceful error handling: if the API call fails, log the error
-			// but still return Ok(manga) so library refresh doesn't silently break.
-			let fetch_result = (|| -> Result<Vec<Chapter>> {
-				let body = Request::get(&api_url)?
-					.header("Referer", BASE_URL)
-					.header("User-Agent", USER_AGENT)
-					.header("Cache-Control", "no-cache, no-store, must-revalidate")
-					.header("Pragma", "no-cache")
-					.string()?;
-				Ok(parse_episodes_json(&body))
-			})();
-
-			match fetch_result {
-				Ok(chapters) => {
-					println!(
-						"[webtoons] chapters fetched OK: {} chapters for title_no={}",
-						chapters.len(),
-						title_no
-					);
-					manga.chapters = Some(chapters);
+		if needs_details || needs_chapters {
+			let info = api::title_info(&title_no)?;
+			if info.is_manga() {
+				// Use the actual viewer response; MANGA does not always imply RTL.
+				manga.viewer = match api::episode_info(&title_no, info.first_episode_no) {
+					Ok(episode) => episode.viewer(),
+					Err(_) => Viewer::Unknown,
+				};
+			} else {
+				manga.viewer = Viewer::Webtoon;
+			}
+			if needs_chapters {
+				let mut legacy = mobile_chapters(&title_no)?;
+				// A library refresh may also provide stored keys from before a slug change.
+				if let Some(previous) = manga.chapters.as_ref() {
+					legacy.extend(previous.iter().cloned());
 				}
-				Err(_) => {
-					println!(
-						"[webtoons] ERROR fetching chapters for title_no={}",
-						title_no
-					);
-					// Don't propagate the error — return the manga as-is
-					// so the library refresh can continue with other manga.
-				}
+				let episodes = api::episodes(&title_no, info.total_episode_count)?;
+				let mut chapters = models::chapters_from_episodes(episodes, &legacy, info.is_manga())?;
+				api::remember_keys(&title_no, &mut chapters);
+				manga.chapters = Some(chapters);
 			}
 		}
 
@@ -274,11 +267,25 @@ impl Source for WebtoonSource {
 		Ok(manga)
 	}
 
-	fn get_page_list(&self, _manga: Manga, chapter: Chapter) -> Result<Vec<Page>> {
+	fn get_page_list(&self, manga: Manga, chapter: Chapter) -> Result<Vec<Page>> {
+		if chapter.locked {
+			bail!("此章節需在官方 App 購買或解鎖");
+		}
+		let info = api::title_info(&manga.key)?;
+		if info.is_manga() {
+			let episode = episode_no(&chapter.key).ok_or_else(|| error!("無效的章節編號"))?;
+			return api::manga_pages(&manga.key, episode);
+		}
+
 		let viewer_url = if let Some(ref url) = chapter.url {
 			url.clone()
-		} else {
+		} else if chapter.key.starts_with("https://") {
 			chapter.key.clone()
+		} else {
+			// An App-only free WEBTOON may lack a public viewer link. Its image
+			// list is still available from the same permission-checking App API.
+			let episode = episode_no(&chapter.key).ok_or_else(|| error!("無效的章節編號"))?;
+			return api::episode_info(&manga.key, episode)?.into_pages(models::IMAGE_HOST, None);
 		};
 
 		let viewer_url = with_cache_bust(&viewer_url);
@@ -325,6 +332,9 @@ impl Source for WebtoonSource {
 			}
 		}
 
+		if pages.is_empty() {
+			bail!("WEBTOON 網頁未回傳閱讀圖片");
+		}
 		Ok(pages)
 	}
 }
@@ -472,11 +482,9 @@ impl ImageRequestProvider for WebtoonSource {
 	fn get_image_request(
 		&self,
 		url: String,
-		_context: Option<PageContext>,
+		context: Option<PageContext>,
 	) -> Result<Request> {
-		let request = Request::get(&url)?
-			.header("Referer", "https://www.webtoons.com");
-		Ok(request)
+		api::image_request(url, context.as_ref())
 	}
 }
 
@@ -484,9 +492,17 @@ impl DeepLinkHandler for WebtoonSource {
 	fn handle_deep_link(&self, url: String) -> Result<Option<DeepLinkResult>> {
 		if let Some(title_no) = extract_title_no(&url) {
 			if url.contains("/viewer") {
+				let episode = episode_no(&url).ok_or_else(|| error!("無效的章節連結"))?;
+				let key = match api::saved_key(&title_no, episode) {
+					Some(key) => key,
+					None => mobile_chapters(&title_no)?.into_iter()
+						.find(|chapter| episode_no(&chapter.key) == Some(episode))
+						.map(|chapter| chapter.key)
+						.unwrap_or_else(|| format!("{episode}")),
+				};
 				Ok(Some(DeepLinkResult::Chapter {
 					manga_key: title_no,
-					key: url,
+					key,
 				}))
 			} else {
 				Ok(Some(DeepLinkResult::Manga { key: title_no }))
