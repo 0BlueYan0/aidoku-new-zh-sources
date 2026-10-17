@@ -237,7 +237,6 @@ fn login_notification_is_logout() -> bool {
 }
 
 fn clear_local() {
-	crate::unlock::clear_session_state();
 	for key in [SESSION_KEY, NAME_KEY, NEXT_CHECK_KEY, "auth_logged_in_at",
 		FAILED_KEY, FAILED_AT_KEY, "login"] {
 		// Overwrite first: even a failed deletion must not leave usable credentials.

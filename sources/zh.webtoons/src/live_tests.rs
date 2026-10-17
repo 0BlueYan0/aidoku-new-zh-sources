@@ -37,9 +37,9 @@ fn live_latest_api_includes_preview_episodes_missing_from_old_api() {
 	let chapters = manga.chapters.as_ref().unwrap();
 	assert_eq!(chapters.len(), expected);
 	assert!(chapters.len() >= 271);
-	assert!(chapters.iter().any(|chapter| chapter.title.as_deref().is_some_and(|title| title.contains("需官方 App") || title.contains("需代幣解鎖"))));
+	assert!(chapters.iter().any(|chapter| chapter.title.as_deref().is_some_and(|title| title.contains("需官方 App"))));
 	assert!(chapters.iter().any(|chapter| !chapter.locked));
-	let free = chapters.iter().find(|chapter| !chapter.title.as_deref().is_some_and(|title| title.contains("需官方 App") || title.contains("需代幣解鎖"))).unwrap().clone();
+	let free = chapters.iter().find(|chapter| !chapter.title.as_deref().is_some_and(|title| title.contains("需官方 App"))).unwrap().clone();
 	let pages = source.get_page_list(manga, free).unwrap();
 	assert!(!pages.is_empty());
 }

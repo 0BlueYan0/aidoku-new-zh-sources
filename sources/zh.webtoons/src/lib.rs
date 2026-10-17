@@ -19,8 +19,6 @@ mod helper;
 mod models;
 mod api;
 mod auth;
-mod unlock_models;
-mod unlock;
 #[cfg(all(test, feature = "live-tests"))]
 mod live_tests;
 use helper::*;
@@ -284,7 +282,7 @@ impl Source for WebtoonSource {
 			let episode = episode_no(&chapter.key).ok_or_else(|| error!("無效的章節編號"))?;
 			println!("[webtoons] App reader: title={}, episode={}, manga={}, logged_in={}",
 				manga.key, episode, info.is_manga(), auth::is_logged_in());
-			return api::app_pages(&manga, &chapter, info.is_manga());
+			return api::app_pages(&manga.key, episode, info.is_manga());
 		}
 
 		let viewer_url = if let Some(ref url) = chapter.url {
@@ -294,7 +292,8 @@ impl Source for WebtoonSource {
 		} else {
 			// An App-only free WEBTOON may lack a public viewer link. Its image
 			// list is still available from the same permission-checking App API.
-			return api::app_pages(&manga, &chapter, false);
+			let episode = episode_no(&chapter.key).ok_or_else(|| error!("無效的章節編號"))?;
+			return api::app_pages(&manga.key, episode, false);
 		};
 
 		let viewer_url = with_cache_bust(&viewer_url);
@@ -551,7 +550,6 @@ impl WebLoginHandler for WebtoonSource {
 
 impl NotificationHandler for WebtoonSource {
 	fn handle_notification(&self, notification: String) {
-		if unlock::handle_notification(&notification) { return; }
 		match notification.as_str() {
 			"login" => auth::handle_login_notification(),
 			"syncLogin" => {
@@ -565,15 +563,13 @@ impl NotificationHandler for WebtoonSource {
 
 impl DynamicSettings for WebtoonSource {
 	fn get_dynamic_settings(&self) -> Result<Vec<Setting>> {
-		let mut settings = aidoku::alloc::vec![GroupSetting {
+		Ok(aidoku::alloc::vec![GroupSetting {
 			key: "accountInfo".into(),
 			title: "帳號資訊".into(),
 			footer: Some(auth::account_footer().into()),
 			items: Vec::new(),
 			..Default::default()
-		}.into()];
-		settings.extend(unlock::settings());
-		Ok(settings)
+		}.into()])
 	}
 }
 

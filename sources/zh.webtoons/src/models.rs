@@ -59,19 +59,17 @@ pub struct ProductRight {
 pub fn apply_rights(chapters: &mut [Chapter], title: &str, rights: &[ProductRight], now_ms: i64) {
 	for chapter in chapters {
 		let Some(episode) = episode_no(&chapter.key) else { continue; };
-		if !has_valid_right(rights, title, episode, now_ms) { continue; }
+		let expected = format!("linewebtoon-WEBTOON-{title}-{episode}");
+		if !rights.iter().any(|right| {
+			right.episode_no == episode && right.product_id == expected && right.has_right
+				&& (right.infinite || right.expire_time > now_ms)
+		}) { continue; }
 		if let Some(name) = chapter.title.as_ref() {
-			let base = ["（需官方 App 購買）", "（需代幣解鎖）", "（需官方 App 解鎖）", "（需官方 App 限時解鎖）"]
+			let base = ["（需官方 App 購買）", "（需官方 App 解鎖）", "（需官方 App 限時解鎖）"]
 				.into_iter().find_map(|suffix| name.strip_suffix(suffix)).unwrap_or(name);
 			chapter.title = Some(String::from(base));
 		}
 	}
-}
-
-pub fn has_valid_right(rights: &[ProductRight], title: &str, episode: i32, now_ms: i64) -> bool {
-	let expected = format!("linewebtoon-WEBTOON-{title}-{episode}");
-	rights.iter().any(|right| right.episode_no == episode && right.product_id == expected
-		&& right.has_right && (right.infinite || right.expire_time > now_ms))
 }
 
 #[derive(Deserialize)]
@@ -108,7 +106,7 @@ pub fn chapters_from_episodes(
 		} else if episode.reward_ad_episode {
 			Some("需官方 App 解鎖")
 		} else if episode.product_id.is_some() || episode.basic_product_sale_unit.is_some() {
-			Some("需代幣解鎖")
+			Some("需官方 App 購買")
 		} else {
 			None
 		};
@@ -273,7 +271,7 @@ mod tests {
 		assert!(!chapters[0].locked);
 		let paid = chapters_from_episodes(page.episode_list, &legacy, true).unwrap();
 		assert_eq!(paid[0].key, "31");
-		assert_eq!(paid[0].title.as_deref(), Some("第30集（需代幣解鎖）"));
+		assert_eq!(paid[0].title.as_deref(), Some("第30集（需官方 App 購買）"));
 		assert_eq!(paid[0].chapter_number, None);
 		assert!(!paid[0].locked);
 	}
@@ -297,7 +295,7 @@ mod tests {
 		assert_eq!(chapters[0].key, "31");
 		assert_eq!(chapters[0].title.as_deref(), Some("第30集"));
 		assert!(!chapters[0].locked);
-		assert_eq!(chapters[1].title.as_deref(), Some("第29集（需代幣解鎖）"));
+		assert_eq!(chapters[1].title.as_deref(), Some("第29集（需官方 App 購買）"));
 	}
 
 	#[aidoku_test]
@@ -306,8 +304,8 @@ mod tests {
 		let mut chapters = chapters_from_episodes(page.episode_list, &[], true).unwrap();
 		let rights: RightList = decode(r#"{"message":{"result":{"rightList":[{"episodeNo":31,"productId":"linewebtoon-WEBTOON-999-31","hasRight":true,"infinite":true,"expireTime":0},{"episodeNo":30,"productId":"linewebtoon-WEBTOON-10568-30","hasRight":true,"infinite":false,"expireTime":999}]}}}"#).unwrap();
 		apply_rights(&mut chapters, "10568", &rights.right_list, 1_000);
-		assert_eq!(chapters[0].title.as_deref(), Some("第30集（需代幣解鎖）"));
-		assert_eq!(chapters[1].title.as_deref(), Some("第29集（需代幣解鎖）"));
+		assert_eq!(chapters[0].title.as_deref(), Some("第30集（需官方 App 購買）"));
+		assert_eq!(chapters[1].title.as_deref(), Some("第29集（需官方 App 購買）"));
 		// A user can purchase in the official App after this refresh, so keep it clickable.
 		assert!(!chapters[0].locked);
 	}
