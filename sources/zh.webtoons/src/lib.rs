@@ -100,6 +100,120 @@ fn mobile_chapters(title_no: &str) -> Result<Vec<Chapter>> {
 	parse_episodes_json(&body)
 }
 
+/// HTML details remain useful when optional App metadata is unavailable.
+/// Full chapter updates still require authoritative App metadata.
+fn update_viewer(
+	manga: &mut Manga,
+	needs_chapters: bool,
+	info: Result<models::TitleInfo>,
+	episode_info: impl FnOnce(&str, i32) -> Result<models::EpisodeInfo>,
+) -> Result<Option<models::TitleInfo>> {
+	let info = match info {
+		Ok(info) => info,
+		Err(err) if needs_chapters => return Err(err),
+		Err(_) => {
+			println!("[webtoons] optional App details unavailable; retaining web details");
+			return Ok(None);
+		}
+	};
+	manga.viewer = if info.is_manga() {
+		episode_info(&manga.key, info.first_episode_no).map(|episode| episode.viewer()).unwrap_or(manga.viewer)
+	} else { Viewer::Webtoon };
+	Ok(Some(info))
+}
+
+/// The public viewer is an independent reader, including after an expired
+/// session. App APIs still check all permissions for App-only chapters.
+fn read_chapter(
+	manga: &Manga,
+	chapter: &Chapter,
+	logged_in: bool,
+	title_info: impl FnOnce() -> Result<models::TitleInfo>,
+	app_pages: impl FnOnce(i32, bool) -> Result<Vec<Page>>,
+	web_pages: impl FnOnce(&str) -> Result<Vec<Page>>,
+) -> Result<Vec<Page>> {
+	let public_url = chapter.url.as_deref().filter(|url| url.starts_with("https://www.webtoons.com/"))
+		.or_else(|| chapter.key.starts_with("https://www.webtoons.com/").then_some(chapter.key.as_str()));
+	if !logged_in && manga.viewer == Viewer::Webtoon {
+		if let Some(url) = public_url { return web_pages(url); }
+	}
+	let info = match title_info() {
+		Ok(info) => info,
+		Err(err) => return match public_url {
+			Some(url) => web_pages(url),
+			None => Err(err),
+		},
+	};
+	if !info.is_manga() && !logged_in {
+		if let Some(url) = public_url { return web_pages(url); }
+	}
+	let app_result = (|| {
+		let episode = episode_no(&chapter.key).ok_or_else(|| error!("無效的章節編號"))?;
+		app_pages(episode, info.is_manga())
+	})();
+	match app_result {
+		Ok(pages) => Ok(pages),
+		Err(err) => match public_url {
+			Some(url) => {
+				println!("[webtoons] App reader unavailable; trying public viewer");
+				web_pages(url)
+			}
+			None => Err(err),
+		}
+	}
+}
+
+fn web_pages(viewer_url: &str) -> Result<Vec<Page>> {
+	let viewer_url = with_cache_bust(viewer_url);
+	let request = Request::get(&viewer_url)?.timeout(20.0)
+		.header("Referer", BASE_URL)
+		.header("User-Agent", USER_AGENT)
+		.header("Cache-Control", "no-cache, no-store, must-revalidate")
+		.header("Pragma", "no-cache");
+	let html = auth::with_web_session(request).html()?;
+
+	let mut pages: Vec<Page> = Vec::new();
+
+	let image_selector = if html.select_first("#_imageList").is_some() {
+		"#_imageList img"
+	} else {
+		".viewer_img img"
+	};
+
+	if let Some(images) = html.select(image_selector) {
+		for img in images {
+			let img_url: Option<String> = img
+				.attr("data-url")
+				.or_else(|| img.attr("src"));
+
+			if let Some(url) = img_url {
+				if url.contains("bg_transparency")
+					|| url.contains("warning")
+					|| url.contains("loading")
+				{
+					continue;
+				}
+
+				let mut context = PageContext::new();
+				context.insert(
+					String::from("Referer"),
+					String::from("https://www.webtoons.com"),
+				);
+
+				pages.push(Page {
+					content: PageContent::url_context(&url, context),
+					..Default::default()
+				});
+			}
+		}
+	}
+
+	if pages.is_empty() {
+		bail!("WEBTOON 網頁未回傳閱讀圖片");
+	}
+	Ok(pages)
+}
+
 impl Source for WebtoonSource {
 	fn new() -> Self {
 		Self
@@ -239,22 +353,13 @@ impl Source for WebtoonSource {
 			};
 
 			manga.content_rating = ContentRating::Safe;
-			manga.viewer = Viewer::Webtoon;
+			if manga.viewer == Viewer::Unknown { manga.viewer = Viewer::Webtoon; }
 			println!("[webtoons] details fetched OK for title_no={}", title_no);
 		}
 
 		if needs_details || needs_chapters {
-			let info = api::title_info(&title_no)?;
-			if info.is_manga() {
-				// Use the actual viewer response; MANGA does not always imply RTL.
-				manga.viewer = match api::episode_info(&title_no, info.first_episode_no) {
-					Ok(episode) => episode.viewer(),
-					Err(_) => Viewer::Unknown,
-				};
-			} else {
-				manga.viewer = Viewer::Webtoon;
-			}
-			if needs_chapters {
+			let info = update_viewer(&mut manga, needs_chapters, api::title_info(&title_no), api::episode_info)?;
+			if let Some(info) = info.filter(|_| needs_chapters) {
 				let mut legacy = mobile_chapters(&title_no)?;
 				// A library refresh may also provide stored keys from before a slug change.
 				if let Some(previous) = manga.chapters.as_ref() {
@@ -277,74 +382,12 @@ impl Source for WebtoonSource {
 
 	fn get_page_list(&self, manga: Manga, chapter: Chapter) -> Result<Vec<Page>> {
 		auth::ensure_session();
-		let info = api::title_info(&manga.key)?;
-		if info.is_manga() || auth::is_logged_in() {
-			let episode = episode_no(&chapter.key).ok_or_else(|| error!("無效的章節編號"))?;
-			println!("[webtoons] App reader: title={}, episode={}, manga={}, logged_in={}",
-				manga.key, episode, info.is_manga(), auth::is_logged_in());
-			return api::app_pages(&manga.key, episode, info.is_manga());
-		}
-
-		let viewer_url = if let Some(ref url) = chapter.url {
-			url.clone()
-		} else if chapter.key.starts_with("https://") {
-			chapter.key.clone()
-		} else {
-			// An App-only free WEBTOON may lack a public viewer link. Its image
-			// list is still available from the same permission-checking App API.
-			let episode = episode_no(&chapter.key).ok_or_else(|| error!("無效的章節編號"))?;
-			return api::app_pages(&manga.key, episode, false);
-		};
-
-		let viewer_url = with_cache_bust(&viewer_url);
-		let request = Request::get(&viewer_url)?
-			.header("Referer", BASE_URL)
-			.header("User-Agent", USER_AGENT)
-			.header("Cache-Control", "no-cache, no-store, must-revalidate")
-			.header("Pragma", "no-cache");
-		let html = auth::with_web_session(request).html()?;
-
-		let mut pages: Vec<Page> = Vec::new();
-
-		let image_selector = if html.select_first("#_imageList").is_some() {
-			"#_imageList img"
-		} else {
-			".viewer_img img"
-		};
-
-		if let Some(images) = html.select(image_selector) {
-			for img in images {
-				let img_url: Option<String> = img
-					.attr("data-url")
-					.or_else(|| img.attr("src"));
-
-				if let Some(url) = img_url {
-					if url.contains("bg_transparency")
-						|| url.contains("warning")
-						|| url.contains("loading")
-					{
-						continue;
-					}
-
-					let mut context = PageContext::new();
-					context.insert(
-						String::from("Referer"),
-						String::from("https://www.webtoons.com"),
-					);
-
-					pages.push(Page {
-						content: PageContent::url_context(&url, context),
-						..Default::default()
-					});
-				}
-			}
-		}
-
-		if pages.is_empty() {
-			bail!("WEBTOON 網頁未回傳閱讀圖片");
-		}
-		Ok(pages)
+		read_chapter(&manga, &chapter, auth::is_logged_in(),
+			|| api::title_info(&manga.key),
+			|episode, is_manga| api::app_pages(&manga.key, episode, is_manga),
+			web_pages)
 	}
+
 }
 
 impl ListingProvider for WebtoonSource {
@@ -585,5 +628,58 @@ mod login_tests {
 		cookies.insert("locale".into(), "zh-hant".into());
 		assert!(native_web_login_result(true, &cookies));
 		assert!(!native_web_login_result(false, &cookies));
+	}
+}
+
+#[cfg(test)]
+mod fallback_tests {
+	use super::*;
+	use aidoku_test::aidoku_test;
+
+	fn public_chapter() -> Chapter {
+		Chapter { key: "https://www.webtoons.com/zh-hant/a/b/viewer?title_no=1&episode_no=1".into(), ..Default::default() }
+	}
+
+	#[aidoku_test]
+	fn details_survive_api_failure_but_full_chapter_updates_fail() {
+		let mut manga = Manga { title: "網頁詳情".into(), description: Some("簡介".into()), viewer: Viewer::LeftToRight, ..Default::default() };
+		assert!(update_viewer(&mut manga, false, Err(error!("offline")), |_, _| panic!("no episode request")).unwrap().is_none());
+		assert_eq!(manga.title, "網頁詳情");
+		assert_eq!(manga.description.as_deref(), Some("簡介"));
+		assert_eq!(manga.viewer, Viewer::LeftToRight);
+		assert!(update_viewer(&mut manga, true, Err(error!("offline")), |_, _| panic!("no episode request")).is_err());
+	}
+
+	#[aidoku_test]
+	fn anonymous_public_webtoon_reads_without_app_api() {
+		let manga = Manga { viewer: Viewer::Webtoon, ..Default::default() };
+		let pages = read_chapter(&manga, &public_chapter(), false,
+			|| panic!("public webtoon must not need titleInfo"),
+			|_, _| panic!("no App reader"),
+			|_| Ok(aidoku::alloc::vec![Page::default()])).unwrap();
+		assert_eq!(pages.len(), 1);
+	}
+
+	#[aidoku_test]
+	fn api_outage_and_expired_session_can_read_public_viewer_in_same_call() {
+		let manga = Manga { viewer: Viewer::RightToLeft, ..Default::default() };
+		let chapter = public_chapter();
+		assert_eq!(read_chapter(&manga, &chapter, true,
+			|| Err(error!("titleInfo offline")), |_, _| panic!("no App reader"),
+			|_| Ok(aidoku::alloc::vec![Page::default()])).unwrap().len(), 1);
+		let info = models::TitleInfo { viewer: "MANGA".into(), first_episode_no: 1, total_episode_count: 1 };
+		assert_eq!(read_chapter(&manga, &chapter, true,
+			|| Ok(info), |_, manga| { assert!(manga); Err(error!("登入已失效")) },
+			|_| Ok(aidoku::alloc::vec![Page::default()])).unwrap().len(), 1);
+	}
+
+	#[aidoku_test]
+	fn app_only_failure_and_empty_public_viewer_are_not_successful_reading() {
+		let manga = Manga::default();
+		let chapter = Chapter { key: "2".into(), ..Default::default() };
+		assert!(read_chapter(&manga, &chapter, false, || Err(error!("offline")),
+			|_, _| panic!("no App reader"), |_| panic!("no fabricated web URL")).is_err());
+		assert!(read_chapter(&Manga { viewer: Viewer::Webtoon, ..Default::default() }, &public_chapter(), false,
+			|| panic!("no titleInfo"), |_, _| panic!("no App reader"), |_| Err(error!("no images"))).is_err());
 	}
 }

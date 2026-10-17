@@ -94,8 +94,17 @@ pub struct Episode {
 pub fn chapters_from_episodes(
 	episodes: Vec<Episode>, legacy: &[Chapter], manga: bool,
 ) -> Result<Vec<Chapter>> {
-	let keys: HashMap<i32, &Chapter> = legacy.iter()
-		.filter_map(|chapter| episode_no(&chapter.key).map(|no| (no, chapter))).collect();
+	let mut keys = HashMap::new();
+	let mut urls = HashMap::new();
+	// The caller supplies the current web list before stored chapters. Keep
+	// stored keys for progress, but prefer the first available (current) URL.
+	for chapter in legacy {
+		let Some(no) = episode_no(&chapter.key) else { continue; };
+		keys.insert(no, chapter);
+		if let Some(url) = &chapter.url {
+			urls.entry(no).or_insert_with(|| url.clone());
+		}
+	}
 	episodes.into_iter().map(|episode| {
 		if episode.episode_no <= 0 {
 			return Err(error!("WEBTOON 回傳無效章節編號"));
@@ -118,7 +127,7 @@ pub fn chapters_from_episodes(
 			// Existing public keys remain byte-for-byte unchanged. New App-only keys
 			// use the episode ID; unlike a viewer slug, it does not change with the title.
 			key: old.map(|c| c.key.clone()).unwrap_or_else(|| format!("{}", episode.episode_no)),
-			url: old.and_then(|c| c.url.clone()),
+			url: urls.get(&episode.episode_no).cloned(),
 			title: Some(title),
 			chapter_number: (!manga).then_some(episode.episode_no as f32),
 			date_uploaded: episode.exposure_ymdt.map(|ms| ms / 1000),
@@ -284,6 +293,38 @@ mod tests {
 		preserve_keys(&mut chapters, &saved);
 		assert_eq!(chapters[0].key, "271");
 		assert_eq!(chapters[0].url.as_deref(), Some(web_url));
+	}
+
+	#[aidoku_test]
+	fn refreshed_public_url_survives_stored_numeric_key_and_reads_without_app_api() {
+		let web_url = "https://www.webtoons.com/zh-hant/x/y/viewer?title_no=3123&episode_no=271";
+		for previous_url in [None, Some("https://www.webtoons.com/zh-hant/old/slug/viewer?title_no=3123&episode_no=271")] {
+			let mut legacy = crate::helper::parse_episodes_json(r#"{"success":true,"result":{"episodeList":[{"episodeNo":271,"viewerLink":"/zh-hant/x/y/viewer?title_no=3123&episode_no=271"}]}}"#).unwrap();
+			legacy.push(Chapter { key: "271".into(), url: previous_url.map(String::from), ..Default::default() });
+			let page: EpisodeList = decode(r#"{"message":{"result":{"episodeList":[{"episodeNo":271,"episodeTitle":"Free"}]}}}"#).unwrap();
+			let mut chapters = chapters_from_episodes(page.episode_list, &legacy, false).unwrap();
+			preserve_keys(&mut chapters, &HashMap::from([("271".into(), "271".into())]));
+			assert_eq!(chapters[0].key, "271");
+			assert_eq!(chapters[0].url.as_deref(), Some(web_url));
+			let manga = aidoku::Manga { viewer: Viewer::Webtoon, ..Default::default() };
+			let pages = crate::read_chapter(&manga, &chapters[0], false,
+				|| panic!("public free chapter must not call titleInfo"),
+				|_, _| panic!("public free chapter must not use App reader"),
+				|url| { assert_eq!(url, web_url); Ok(vec![Page::default()]) }).unwrap();
+			assert_eq!(pages.len(), 1);
+		}
+	}
+
+	#[aidoku_test]
+	fn stored_url_is_retained_when_no_new_public_url_exists() {
+		let old_url = "https://www.webtoons.com/zh-hant/old/slug/viewer?title_no=3123&episode_no=271";
+		for previous_url in [None, Some(old_url)] {
+			let legacy = vec![Chapter { key: "271".into(), url: previous_url.map(String::from), ..Default::default() }];
+			let page: EpisodeList = decode(r#"{"message":{"result":{"episodeList":[{"episodeNo":271,"episodeTitle":"Episode"}]}}}"#).unwrap();
+			let chapters = chapters_from_episodes(page.episode_list, &legacy, false).unwrap();
+			assert_eq!(chapters[0].key, "271");
+			assert_eq!(chapters[0].url.as_deref(), previous_url);
+		}
 	}
 
 	#[aidoku_test]

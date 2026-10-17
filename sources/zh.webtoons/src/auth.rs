@@ -350,4 +350,26 @@ mod tests {
 		assert!(api_cookie().is_none());
 		clear_local();
 	}
+	#[aidoku_test]
+	fn expired_session_falls_back_to_anonymous_web_reading_without_a_second_open() {
+		clear_local();
+		accept_session(SessionCookies { session: "expired-test".into(), check: "check".into() }, "test");
+		let cookie = api_cookie().unwrap();
+		let chapter = aidoku::Chapter { key: "https://www.webtoons.com/zh-hant/a/b/viewer?title_no=1&episode_no=1".into(), ..Default::default() };
+		let pages = crate::read_chapter(&aidoku::Manga::default(), &chapter, true,
+			|| {
+				// Same state transition as a 1001 response in parse_response.
+				mark_relogin(&cookie);
+				Err(error!("Not Login"))
+			},
+			|_, _| panic!("must not retry authenticated reader"),
+			|_| {
+				assert!(web_cookie().is_none());
+				Ok(aidoku::alloc::vec![aidoku::Page::default()])
+			}).unwrap();
+		assert_eq!(pages.len(), 1);
+		assert!(needs_relogin());
+		clear_local();
+	}
+
 }
