@@ -189,7 +189,7 @@ pub fn cover_url(src: &str) -> String {
 
 /// Tags that raise a work's rating. The site has no adult flag, so the tags are the only
 /// evidence; a work without one of them is `Safe`. Chosen by the user (2026-10-10) after
-/// zh.komiic and zh.manwang. Each name is in `tags::TAGS`.
+/// zh.komiic2 and zh.manwang. Each name is in `tags::TAGS`.
 pub const NSFW_TAGS: [&str; 1] = ["SM"];
 pub const SUGGESTIVE_TAGS: [&str; 6] = ["耽美", "百合", "后宫", "蔷薇", "ABO", "多攻"];
 
@@ -204,7 +204,7 @@ pub fn content_rating<S: AsRef<str>>(tags: &[S]) -> ContentRating {
 }
 
 /// Japanese works are page-sized images (900x1344); Korean and most Chinese ones are long
-/// strips (690x2000). Chosen by the user (2026-10-10), as zh.bakamh does by category.
+/// strips (690x2000). Chosen by the user (2026-10-10), as zh.bakamh2 does by category.
 pub fn viewer<S: AsRef<str>>(tags: &[S]) -> Viewer {
 	if tags.iter().any(|t: &S| t.as_ref() == "日漫") {
 		Viewer::RightToLeft

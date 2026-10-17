@@ -1,4 +1,4 @@
-//! Login state, kept in defaults. Same shape as zh.komiic's `auth.rs`.
+//! Login state, kept in defaults. Same shape as zh.komiic2's `auth.rs`.
 //!
 //! `POST /api/user/login` takes the SHA-256 hex of the password and returns an access
 //! token and a refresh token. The access token is a JWT that lives 30 seconds;

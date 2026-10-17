@@ -305,7 +305,7 @@ pub fn logout() {
 
 /// Builds the account summary shown under the login setting.
 ///
-/// Fetched on every settings draw, with no caching, exactly as `zh.komiic` and
+/// Fetched on every settings draw, with no caching, exactly as `zh.komiic2` and
 /// `zh.creativecomic` do - a reader who just spent coins on the site expects the figure
 /// here to have moved. A 60 second cache lived here briefly and was the reason it did not.
 ///

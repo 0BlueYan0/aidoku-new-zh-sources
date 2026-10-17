@@ -186,7 +186,7 @@ fn fetch_member() -> MemberResult {
 /// The cost of an ungated renewal is multiplied by the number of entry points, which is
 /// what turns it from an optimisation into a freeze.
 ///
-/// Same shape as `zh.komiic`'s `ensure_session`, deliberately.
+/// Same shape as `zh.komiic2`'s `ensure_session`, deliberately.
 pub fn ensure_session() {
 	if !is_logged_in() || needs_relogin() {
 		return;

@@ -116,7 +116,7 @@ pub fn post_list(path: &str, form: &str) -> Result<Option<String>> {
 
 /// `post_list` with the retry for an unanswered request optional. The app runs the blank
 /// search by itself whenever content reloads; two unanswered sends would hold the source for
-/// about two minutes (zh.bakamh hit the same on device, 2026-10-16), so that one is sent once.
+/// about two minutes (zh.bakamh2 hit the same on device, 2026-10-16), so that one is sent once.
 pub fn post_list_with(path: &str, form: &str, retry: bool) -> Result<Option<String>> {
 	let url = format!("{BASE_URL}{path}");
 	let build = || {

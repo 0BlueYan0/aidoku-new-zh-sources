@@ -128,7 +128,7 @@ fn cover_url(src: String) -> String {
 }
 
 /// Tags that raise a work's rating. The site has no adult flag, so the tags are the
-/// only evidence; a work without one of them is `Safe`. The lists follow zh.komiic and
+/// only evidence; a work without one of them is `Safe`. The lists follow zh.komiic2 and
 /// were chosen by the user (2026-10-09). Each name is in `tags::TAGS`.
 pub const NSFW_TAGS: [&str; 4] = ["本子", "限制", "伦理", "人妻"];
 pub const SUGGESTIVE_TAGS: [&str; 8] = ["橘里橘气", "轻橘", "橘味", "后宫", "耽美", "百合", "血腥", "猎奇"];
