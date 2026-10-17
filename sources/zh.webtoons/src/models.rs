@@ -27,6 +27,54 @@ pub fn decode<T: DeserializeOwned>(body: &str) -> Result<T> {
 	response.message.result.ok_or_else(|| error!("WEBTOON App 未回傳資料"))
 }
 
+pub fn response_code(body: &str) -> Option<i64> {
+	let value: serde_json::Value = serde_json::from_str(body).ok()?;
+	value.get("message")?.get("code")?.as_i64()
+}
+
+#[derive(Deserialize)]
+pub struct MemberInfo {
+	pub id: String,
+	pub nickname: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RightList { pub right_list: Vec<ProductRight> }
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductRight {
+	episode_no: i32,
+	product_id: String,
+	has_right: bool,
+	#[serde(default)]
+	infinite: bool,
+	#[serde(default)]
+	expire_time: i64,
+	#[serde(default)]
+	reward_ad: bool,
+	#[serde(default)]
+	time_deal: bool,
+}
+
+pub fn apply_rights(chapters: &mut [Chapter], title: &str, rights: &[ProductRight], now_ms: i64) {
+	for chapter in chapters {
+		let Some(episode) = episode_no(&chapter.key) else { continue; };
+		let expected = format!("linewebtoon-WEBTOON-{title}-{episode}");
+		let Some(right) = rights.iter().find(|right| {
+			right.episode_no == episode && right.product_id == expected && right.has_right
+				&& (right.infinite || right.expire_time > now_ms)
+		}) else { continue; };
+		if let Some(name) = chapter.title.as_ref() {
+			let base = ["（需官方 App 購買）", "（需官方 App 解鎖）", "（需官方 App 限時解鎖）"]
+				.into_iter().find_map(|suffix| name.strip_suffix(suffix)).unwrap_or(name);
+			let status = if right.reward_ad || right.time_deal { "已解鎖" } else { "已購買" };
+			chapter.title = Some(format!("{base}（{status}）"));
+		}
+	}
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EpisodeList { pub episode_list: Vec<Episode> }
@@ -78,8 +126,8 @@ pub fn chapters_from_episodes(
 			chapter_number: (!manga).then_some(episode.episode_no as f32),
 			date_uploaded: episode.exposure_ymdt.map(|ms| ms / 1000),
 			thumbnail: episode.episode_thumbnail.map(|path| absolute_url(IMAGE_HOST, &path)),
-			// This anonymous-only implementation cannot obtain purchase/ad rights.
-			locked: requirement.is_some(),
+			// Purchases can change after a refresh. Always recheck at reader entry.
+			locked: false,
 			..Default::default()
 		})
 	}).collect()
@@ -115,6 +163,8 @@ pub struct EpisodeInfoResult { pub episode_info: EpisodeInfo }
 #[serde(rename_all = "camelCase")]
 pub struct EpisodeInfo {
 	pub page_progression_direction: Option<String>,
+	#[serde(default)]
+	product: bool,
 	image_info: Vec<ImageInfo>,
 }
 #[derive(Deserialize)]
@@ -122,6 +172,8 @@ pub struct EpisodeInfo {
 struct ImageInfo { sort_order: i32, url: String }
 
 impl EpisodeInfo {
+	pub fn requires_secure_token(&self, manga: bool) -> bool { self.product || manga }
+
 	pub fn viewer(&self) -> Viewer {
 		match self.page_progression_direction.as_deref() {
 			Some("RTL") => Viewer::RightToLeft,
@@ -199,7 +251,7 @@ mod tests {
 		assert_eq!(paid[0].key, "31");
 		assert_eq!(paid[0].title.as_deref(), Some("第30集（需官方 App 購買）"));
 		assert_eq!(paid[0].chapter_number, None);
-		assert!(paid[0].locked);
+		assert!(!paid[0].locked);
 	}
 
 	#[aidoku_test]
@@ -210,6 +262,36 @@ mod tests {
 		preserve_keys(&mut chapters, &saved);
 		assert_eq!(chapters[0].key, "271");
 		assert_eq!(chapters[0].url.as_deref(), Some(web_url));
+	}
+
+	#[aidoku_test]
+	fn valid_purchase_rights_remove_purchase_requirement_without_changing_keys() {
+		let page: EpisodeList = decode(include_str!("fixtures/app-10568-0.json")).unwrap();
+		let mut chapters = chapters_from_episodes(page.episode_list, &[], true).unwrap();
+		let rights: RightList = decode(r#"{"message":{"result":{"rightList":[{"episodeNo":31,"productId":"linewebtoon-WEBTOON-10568-31","hasRight":true,"infinite":true,"expireTime":0}]}}}"#).unwrap();
+		apply_rights(&mut chapters, "10568", &rights.right_list, 1_000);
+		assert_eq!(chapters[0].key, "31");
+		assert_eq!(chapters[0].title.as_deref(), Some("第30集（已購買）"));
+		assert!(!chapters[0].locked);
+		assert_eq!(chapters[1].title.as_deref(), Some("第29集（需官方 App 購買）"));
+	}
+
+	#[aidoku_test]
+	fn expired_or_wrong_product_rights_never_claim_ownership() {
+		let page: EpisodeList = decode(include_str!("fixtures/app-10568-0.json")).unwrap();
+		let mut chapters = chapters_from_episodes(page.episode_list, &[], true).unwrap();
+		let rights: RightList = decode(r#"{"message":{"result":{"rightList":[{"episodeNo":31,"productId":"linewebtoon-WEBTOON-999-31","hasRight":true,"infinite":true,"expireTime":0},{"episodeNo":30,"productId":"linewebtoon-WEBTOON-10568-30","hasRight":true,"infinite":false,"expireTime":999}]}}}"#).unwrap();
+		apply_rights(&mut chapters, "10568", &rights.right_list, 1_000);
+		assert_eq!(chapters[0].title.as_deref(), Some("第30集（需官方 App 購買）"));
+		assert_eq!(chapters[1].title.as_deref(), Some("第29集（需官方 App 購買）"));
+		// A user can purchase in the official App after this refresh, so keep it clickable.
+		assert!(!chapters[0].locked);
+	}
+
+	#[aidoku_test]
+	fn paid_webtoon_images_require_secure_tokens_too() {
+		let info: EpisodeInfoResult = decode(r#"{"message":{"result":{"episodeInfo":{"product":true,"imageInfo":[{"sortOrder":1,"url":"/a.jpg"}]}}}}"#).unwrap();
+		assert!(info.episode_info.requires_secure_token(false));
 	}
 
 	#[aidoku_test]
@@ -224,7 +306,7 @@ mod tests {
 		let page: EpisodeList = decode(include_str!("fixtures/app-3123-0.json")).unwrap();
 		assert_eq!(page.episode_list[0].episode_no, 271);
 		let chapters = chapters_from_episodes(page.episode_list, &[], false).unwrap();
-		assert!(chapters[0].locked);
+		assert!(!chapters[0].locked);
 		assert_eq!(chapters[0].chapter_number, Some(271.0));
 	}
 

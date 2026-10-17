@@ -42,21 +42,57 @@ fn anonymous_id() -> String {
 	id
 }
 
-fn request(path: &str, params: &str) -> Result<Request> {
+fn request_with_cookie(path: &str, params: &str, cookie: Option<&str>) -> Result<Request> {
 	let separator = if params.is_empty() { "" } else { "&" };
 	let url = format!("{API}/{path}?{params}{separator}platform=APP_ANDROID&language=zh-hant&locale=zh-hant&serviceZone=GLOBAL");
 	let signed = sign_url(&url, current_date() * 1000, APP_KEY)?;
-	Ok(Request::get(signed)?.timeout(20.0)
-		.header("User-Agent", USER_AGENT).header("wtu", anonymous_id().as_str()))
+	let mut request = Request::get(signed)?.timeout(20.0)
+		.header("User-Agent", USER_AGENT).header("wtu", anonymous_id().as_str());
+	if let Some(cookie) = cookie { request = request.header("Cookie", cookie); }
+	Ok(request)
 }
 
 fn fetch<T: DeserializeOwned>(path: &str, params: &str) -> Result<T> {
 	// Do not log signed URLs, cookie values, or full API bodies.
-	let response = request(path, params)?.send()?;
+	let cookie = crate::auth::api_cookie();
+	let response = request_with_cookie(path, params, cookie.as_deref())?.send()?;
+	parse_response(response, cookie.as_deref())
+}
+
+fn parse_response<T: DeserializeOwned>(response: aidoku::imports::net::Response, cookie: Option<&str>) -> Result<T> {
+	let body = response.get_string()?;
+	if response_code(&body) == Some(1001) {
+		if let Some(cookie) = cookie { crate::auth::mark_relogin(cookie); }
+		return Err(error!("WEBTOON 登入已失效"));
+	}
 	if response.status_code() != 200 {
 		return Err(error!("WEBTOON App HTTP {}", response.status_code()));
 	}
-	decode(&response.get_string()?)
+	decode(&body)
+}
+
+fn classify_member(status: i32, body: &str) -> Result<Option<MemberInfo>> {
+	if response_code(body) == Some(1001) { return Ok(None); }
+	if status != 200 { return Err(error!("WEBTOON 帳號驗證 HTTP {status}")); }
+	let member: MemberInfo = decode(body)?;
+	if member.id.is_empty() || member.nickname.is_empty() {
+		return Err(error!("WEBTOON 未回傳有效的帳號資訊"));
+	}
+	Ok(Some(member))
+}
+
+pub fn member_with_cookie(cookie: &str) -> Result<Option<MemberInfo>> {
+	let response = request_with_cookie("webtoon/getMemberInfo", "v=1&needCanvasAuthor=false", Some(cookie))?.send()?;
+	let body = response.get_string()?;
+	println!("[webtoons] member check: HTTP {}, code {:?}", response.status_code(), response_code(&body));
+	classify_member(response.status_code(), &body)
+}
+
+pub fn product_rights(title: &str) -> Result<Vec<ProductRight>> {
+	if !crate::auth::is_logged_in() { return Ok(Vec::new()); }
+	let title = parse_title(title)?;
+	let result: RightList = fetch("webtoon/productRightList.json", &format!("v=1&titleNo={title}"))?;
+	Ok(result.right_list)
 }
 
 pub fn title_info(title: &str) -> Result<TitleInfo> {
@@ -68,7 +104,8 @@ pub fn title_info(title: &str) -> Result<TitleInfo> {
 pub fn episode_info(title: &str, episode: i32) -> Result<EpisodeInfo> {
 	let title = parse_title(title)?;
 	if episode <= 0 { return Err(error!("無效的章節編號")); }
-	let result: EpisodeInfoResult = fetch("webtoon/episodeInfo.json",
+	let path = if crate::auth::is_logged_in() { "webtoon/episodeInfoWithLogin.json" } else { "webtoon/episodeInfo.json" };
+	let result: EpisodeInfoResult = fetch(path,
 		&format!("v=4&titleNo={title}&episodeNo={episode}"))?;
 	Ok(result.episode_info)
 }
@@ -80,16 +117,13 @@ fn parse_title(title: &str) -> Result<i32> {
 pub fn episodes(title: &str, expected: usize) -> Result<Vec<Episode>> {
 	let title = parse_title(title)?;
 	collect_episode_pages(expected, |offsets| {
+		let cookie = crate::auth::api_cookie();
 		let requests: Result<Vec<Request>> = offsets.iter().map(|offset| {
-			request("webtoon/titleHomeEpisodeListV3",
-				&format!("v=1&titleNo={title}&offset={offset}&pageSize={PAGE_SIZE}&ordering=LATEST"))
+			request_with_cookie("webtoon/titleHomeEpisodeListV3",
+				&format!("v=1&titleNo={title}&offset={offset}&pageSize={PAGE_SIZE}&ordering=LATEST"), cookie.as_deref())
 		}).collect();
 		Request::send_all(requests?).into_iter().map(|response| {
-			let response = response?;
-			if response.status_code() != 200 {
-				return Err(error!("WEBTOON 章節 HTTP {}", response.status_code()));
-			}
-			decode(&response.get_string()?)
+			parse_response(response?, cookie.as_deref())
 		}).collect()
 	})
 }
@@ -126,9 +160,12 @@ fn collect_episode_pages(
 	Ok(episodes)
 }
 
-pub fn manga_pages(title: &str, episode: i32) -> Result<Vec<Page>> {
+pub fn app_pages(title: &str, episode: i32, manga: bool) -> Result<Vec<Page>> {
 	// Read permission is checked by episodeInfo before requesting an image token.
 	let info = episode_info(title, episode)?;
+	if !info.requires_secure_token(manga) {
+		return info.into_pages(IMAGE_HOST, None);
+	}
 	let service: ServiceInfoResult = fetch("webtoon/serviceInfo.json", "v=1")?;
 	if service.service_info.product_image_domain != PRODUCT_HOST {
 		return Err(error!("WEBTOON 圖片主機已變更"));
@@ -173,6 +210,16 @@ pub fn image_request(url: String, context: Option<&PageContext>) -> Result<Reque
 mod tests {
 	use super::*;
 	use aidoku_test::aidoku_test;
+
+	#[aidoku_test]
+	fn only_explicit_not_login_responses_invalidate_a_session() {
+		assert!(classify_member(200, r#"{"message":{"code":1001,"message":"Not Login"}}"#).unwrap().is_none());
+		assert!(classify_member(401, r#"{"message":{"code":1001}}"#).unwrap().is_none());
+		assert!(classify_member(503, "temporarily unavailable").is_err());
+		assert!(classify_member(200, r#"{"message":{"result":{}}}"#).is_err());
+		let member = classify_member(200, r#"{"message":{"result":{"id":"test-id","nickname":"測試帳號"}}}"#).unwrap().unwrap();
+		assert_eq!(member.nickname, "測試帳號");
+	}
 
 	#[aidoku_test]
 	fn signing_matches_independent_hmac_vector_and_url_prefix_limit() {

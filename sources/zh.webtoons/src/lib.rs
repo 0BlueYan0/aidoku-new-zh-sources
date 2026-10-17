@@ -8,7 +8,8 @@ use aidoku::{
 		std::{current_date, send_partial_result},
 	},
 	prelude::*,
-	Chapter, ContentRating, DeepLinkHandler, DeepLinkResult, FilterValue,
+	Chapter, ContentRating, DeepLinkHandler, DeepLinkResult, DynamicSettings, FilterValue,
+	GroupSetting, HashMap, NotificationHandler, Setting, WebLoginHandler,
 	Home, HomeComponent, HomeComponentValue, HomeLayout, HomePartialResult,
 	ImageRequestProvider, Link, Listing, ListingProvider, Manga, MangaPageResult,
 	MangaStatus, Page, PageContent, PageContext, Result, Source, Viewer,
@@ -17,6 +18,7 @@ use aidoku::{
 mod helper;
 mod models;
 mod api;
+mod auth;
 #[cfg(all(test, feature = "live-tests"))]
 mod live_tests;
 use helper::*;
@@ -45,11 +47,11 @@ fn with_cache_bust(url: &str) -> String {
 /// Build-only half of `fetch_manga_list`, so `get_home` can batch rows with `send_all`.
 fn manga_list_request(url: &str) -> Result<Request> {
 	let request_url = with_cache_bust(url);
-	Ok(Request::get(&request_url)?
+	Ok(auth::with_web_session(Request::get(&request_url)?
 		.header("Referer", BASE_URL)
 		.header("User-Agent", USER_AGENT)
 		.header("Cache-Control", "no-cache, no-store, must-revalidate")
-		.header("Pragma", "no-cache"))
+		.header("Pragma", "no-cache")))
 }
 
 fn parse_manga_list(html: &Document) -> (Vec<Manga>, bool) {
@@ -91,9 +93,10 @@ fn listing_url(id: &str, page: i32) -> Option<String> {
 fn mobile_chapters(title_no: &str) -> Result<Vec<Chapter>> {
 	let title_no = title_no.parse::<i32>().map_err(|_| error!("無效的作品編號"))?;
 	let url = with_cache_bust(&format!("{MOBILE_API}/{title_no}/episodes?pageSize=99999"));
-	let body = Request::get(url)?.timeout(20.0)
+	let request = Request::get(url)?.timeout(20.0)
 		.header("Referer", BASE_URL).header("User-Agent", USER_AGENT)
-		.header("Cache-Control", "no-cache, no-store, must-revalidate").string()?;
+		.header("Cache-Control", "no-cache, no-store, must-revalidate");
+	let body = auth::with_web_session(request).string()?;
 	parse_episodes_json(&body)
 }
 
@@ -152,6 +155,7 @@ impl Source for WebtoonSource {
 		needs_details: bool,
 		needs_chapters: bool,
 	) -> Result<Manga> {
+		if needs_details || needs_chapters { auth::ensure_session(); }
 		let title_no = manga.key.clone();
 		println!(
 			"[webtoons] get_manga_update: title_no={}, needs_details={}, needs_chapters={}",
@@ -168,12 +172,12 @@ impl Source for WebtoonSource {
 			println!("[webtoons] fetching details: {}", detail_url);
 
 			let detail_url = with_cache_bust(&detail_url);
-			let html = Request::get(&detail_url)?
+			let request = Request::get(&detail_url)?
 				.header("Referer", BASE_URL)
 				.header("User-Agent", USER_AGENT)
 				.header("Cache-Control", "no-cache, no-store, must-revalidate")
-				.header("Pragma", "no-cache")
-				.html()?;
+				.header("Pragma", "no-cache");
+			let html = auth::with_web_session(request).html()?;
 
 			if let Some(title_el) = html.select_first("h1.subj") {
 				if let Some(text) = title_el.text() {
@@ -258,6 +262,10 @@ impl Source for WebtoonSource {
 				}
 				let episodes = api::episodes(&title_no, info.total_episode_count)?;
 				let mut chapters = models::chapters_from_episodes(episodes, &legacy, info.is_manga())?;
+				let rights = api::product_rights(&title_no)?;
+				println!("[webtoons] title {}: {} chapters, {} returned rights, logged_in={}",
+					title_no, chapters.len(), rights.len(), auth::is_logged_in());
+				models::apply_rights(&mut chapters, &title_no, &rights, current_date() * 1000);
 				api::remember_keys(&title_no, &mut chapters);
 				manga.chapters = Some(chapters);
 			}
@@ -268,13 +276,13 @@ impl Source for WebtoonSource {
 	}
 
 	fn get_page_list(&self, manga: Manga, chapter: Chapter) -> Result<Vec<Page>> {
-		if chapter.locked {
-			bail!("此章節需在官方 App 購買或解鎖");
-		}
+		auth::ensure_session();
 		let info = api::title_info(&manga.key)?;
-		if info.is_manga() {
+		if info.is_manga() || auth::is_logged_in() {
 			let episode = episode_no(&chapter.key).ok_or_else(|| error!("無效的章節編號"))?;
-			return api::manga_pages(&manga.key, episode);
+			println!("[webtoons] App reader: title={}, episode={}, manga={}, logged_in={}",
+				manga.key, episode, info.is_manga(), auth::is_logged_in());
+			return api::app_pages(&manga.key, episode, info.is_manga());
 		}
 
 		let viewer_url = if let Some(ref url) = chapter.url {
@@ -285,16 +293,16 @@ impl Source for WebtoonSource {
 			// An App-only free WEBTOON may lack a public viewer link. Its image
 			// list is still available from the same permission-checking App API.
 			let episode = episode_no(&chapter.key).ok_or_else(|| error!("無效的章節編號"))?;
-			return api::episode_info(&manga.key, episode)?.into_pages(models::IMAGE_HOST, None);
+			return api::app_pages(&manga.key, episode, false);
 		};
 
 		let viewer_url = with_cache_bust(&viewer_url);
-		let html = Request::get(&viewer_url)?
+		let request = Request::get(&viewer_url)?
 			.header("Referer", BASE_URL)
 			.header("User-Agent", USER_AGENT)
 			.header("Cache-Control", "no-cache, no-store, must-revalidate")
-			.header("Pragma", "no-cache")
-			.html()?;
+			.header("Pragma", "no-cache");
+		let html = auth::with_web_session(request).html()?;
 
 		let mut pages: Vec<Page> = Vec::new();
 
@@ -518,5 +526,40 @@ register_source!(
 	Home,
 	ListingProvider,
 	ImageRequestProvider,
-	DeepLinkHandler
+	DeepLinkHandler,
+	WebLoginHandler,
+	NotificationHandler,
+	DynamicSettings
 );
+
+impl WebLoginHandler for WebtoonSource {
+	fn handle_web_login(&self, key: String, _cookies: HashMap<String, String>) -> Result<bool> {
+		if key != "login" { bail!("Invalid login key: {key}"); }
+		Ok(auth::capture_web_login(true))
+	}
+}
+
+impl NotificationHandler for WebtoonSource {
+	fn handle_notification(&self, notification: String) {
+		match notification.as_str() {
+			"login" => auth::handle_login_notification(),
+			"syncLogin" => {
+				let synced = auth::capture_web_login(false);
+				println!("[webtoons] manual login sync succeeded={synced}");
+			}
+			_ => {}
+		}
+	}
+}
+
+impl DynamicSettings for WebtoonSource {
+	fn get_dynamic_settings(&self) -> Result<Vec<Setting>> {
+		Ok(aidoku::alloc::vec![GroupSetting {
+			key: "accountInfo".into(),
+			title: "帳號資訊".into(),
+			footer: Some(auth::account_footer().into()),
+			items: Vec::new(),
+			..Default::default()
+		}.into()])
+	}
+}
