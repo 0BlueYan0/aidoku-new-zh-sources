@@ -156,14 +156,18 @@ mod test {
 	/// `images` of `GET /v2/chapter?hid=Yzo5MjAz-ODA4MzoxLjAw` (manga 8083, chapter 1),
 	/// with `order_id` 106 and `sid` 9203, captured 2026-09-24.
 	const CHAPTER_1: &str = include_str!("test_chapter_images.txt");
-	const FOLDER: &str = "/i/f4VYJA7-l5CeLzKZdirSoieDP9U4fd9hD2LqS_qNWRPFJRolJa7ul6ZbAlz5xzqtdSHHshvkYQ/";
+	const FOLDER: &str =
+		"/i/f4VYJA7-l5CeLzKZdirSoieDP9U4fd9hD2LqS_qNWRPFJRolJa7ul6ZbAlz5xzqtdSHHshvkYQ/";
 
 	#[aidoku_test]
 	fn decodes_the_same_list_as_the_site_script() {
 		let images = decode(CHAPTER_1).expect("decode");
 		assert_eq!(images.len(), 151);
 		assert_eq!(images[0], format!("{FOLDER}MmE5ZTVhMWVfMV8x_1.lpy8fs.webp"));
-		assert_eq!(images[150], format!("{FOLDER}MmE5ZTVhMWVfMV8xNTA_150.dv9owf.webp"));
+		assert_eq!(
+			images[150],
+			format!("{FOLDER}MmE5ZTVhMWVfMV8xNTA_150.dv9owf.webp")
+		);
 	}
 
 	#[aidoku_test]
@@ -172,8 +176,13 @@ mod test {
 		remove_decoy(&mut images, 106, 9203);
 		assert_eq!(images.len(), 150);
 		// The real page 78 stays, its 67-byte twin is gone, and page 79 follows it.
-		assert_eq!(images[77], format!("{FOLDER}MmE5ZTVhMWVfMV83OA_78.oteos5.webp"));
-		assert!(!images.iter().any(|path: &String| path.ends_with("_78.m3x7q0.webp")));
+		assert_eq!(
+			images[77],
+			format!("{FOLDER}MmE5ZTVhMWVfMV83OA_78.oteos5.webp")
+		);
+		assert!(!images
+			.iter()
+			.any(|path: &String| path.ends_with("_78.m3x7q0.webp")));
 		assert!(images[78].contains("_79."));
 	}
 

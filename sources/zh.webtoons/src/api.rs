@@ -1,16 +1,20 @@
 //! App networking and request signatures, as observed in WEBTOON Android 3.9.13.
+use crate::models::*;
 use aidoku::{
 	alloc::{String, Vec},
 	helpers::uri::encode_uri_component,
-	imports::{defaults::{defaults_get, defaults_get_map, defaults_set, DefaultValue}, net::Request, std::current_date},
+	imports::{
+		defaults::{defaults_get, defaults_get_map, defaults_set, DefaultValue},
+		net::Request,
+		std::current_date,
+	},
 	prelude::*,
 	Chapter, HashMap, Page, PageContext, Result,
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use hmac::{Hmac, Mac};
-use sha1::{Digest, Sha1};
 use serde::de::DeserializeOwned;
-use crate::models::*;
+use sha1::{Digest, Sha1};
 
 const API: &str = "https://global.apis.naver.com/lineWebtoon";
 const USER_AGENT: &str = "nApps (Android 13; Pixel 7; linewebtoon; 3.9.13)";
@@ -28,12 +32,17 @@ fn sign_url(url: &str, timestamp: i64, key: &str) -> Result<String> {
 	mac.update(format!("{timestamp}").as_bytes());
 	let digest = STANDARD.encode(mac.finalize().into_bytes());
 	let separator = if url.contains('?') { '&' } else { '?' };
-	Ok(format!("{url}{separator}msgpad={timestamp}&md={}", encode_uri_component(digest)))
+	Ok(format!(
+		"{url}{separator}msgpad={timestamp}&md={}",
+		encode_uri_component(digest)
+	))
 }
 
 fn anonymous_id() -> String {
 	if let Some(id) = defaults_get::<String>("webtoon_anonymous_id") {
-		if id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit()) { return id; }
+		if id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit()) {
+			return id;
+		}
 	}
 	// A local anonymous identifier, never a real Android ID or an account token.
 	let digest = Sha1::digest(format!("aidoku-webtoon-{}", current_date()).as_bytes());
@@ -46,9 +55,13 @@ fn request_with_cookie(path: &str, params: &str, cookie: Option<&str>) -> Result
 	let separator = if params.is_empty() { "" } else { "&" };
 	let url = format!("{API}/{path}?{params}{separator}platform=APP_ANDROID&language=zh-hant&locale=zh-hant&serviceZone=GLOBAL");
 	let signed = sign_url(&url, current_date() * 1000, APP_KEY)?;
-	let mut request = Request::get(signed)?.timeout(20.0)
-		.header("User-Agent", USER_AGENT).header("wtu", anonymous_id().as_str());
-	if let Some(cookie) = cookie { request = request.header("Cookie", cookie); }
+	let mut request = Request::get(signed)?
+		.timeout(20.0)
+		.header("User-Agent", USER_AGENT)
+		.header("wtu", anonymous_id().as_str());
+	if let Some(cookie) = cookie {
+		request = request.header("Cookie", cookie);
+	}
 	Ok(request)
 }
 
@@ -59,10 +72,15 @@ fn fetch<T: DeserializeOwned>(path: &str, params: &str) -> Result<T> {
 	parse_response(response, cookie.as_deref())
 }
 
-fn parse_response<T: DeserializeOwned>(response: aidoku::imports::net::Response, cookie: Option<&str>) -> Result<T> {
+fn parse_response<T: DeserializeOwned>(
+	response: aidoku::imports::net::Response,
+	cookie: Option<&str>,
+) -> Result<T> {
 	let body = response.get_string()?;
 	if response_code(&body) == Some(1001) {
-		if let Some(cookie) = cookie { crate::auth::mark_relogin(cookie); }
+		if let Some(cookie) = cookie {
+			crate::auth::mark_relogin(cookie);
+		}
 		return Err(error!("WEBTOON 登入已失效"));
 	}
 	if response.status_code() != 200 {
@@ -72,8 +90,12 @@ fn parse_response<T: DeserializeOwned>(response: aidoku::imports::net::Response,
 }
 
 fn classify_member(status: i32, body: &str) -> Result<Option<MemberInfo>> {
-	if response_code(body) == Some(1001) { return Ok(None); }
-	if status != 200 { return Err(error!("WEBTOON 帳號驗證 HTTP {status}")); }
+	if response_code(body) == Some(1001) {
+		return Ok(None);
+	}
+	if status != 200 {
+		return Err(error!("WEBTOON 帳號驗證 HTTP {status}"));
+	}
 	let member: MemberInfo = decode(body)?;
 	if member.id.is_empty() || member.nickname.is_empty() {
 		return Err(error!("WEBTOON 未回傳有效的帳號資訊"));
@@ -82,16 +104,25 @@ fn classify_member(status: i32, body: &str) -> Result<Option<MemberInfo>> {
 }
 
 pub fn member_with_cookie(cookie: &str) -> Result<Option<MemberInfo>> {
-	let response = request_with_cookie("webtoon/getMemberInfo", "v=1&needCanvasAuthor=false", Some(cookie))?.send()?;
+	let response = request_with_cookie(
+		"webtoon/getMemberInfo",
+		"v=1&needCanvasAuthor=false",
+		Some(cookie),
+	)?
+	.send()?;
 	let body = response.get_string()?;
-	println!("[webtoons] member check: HTTP {}, code {:?}", response.status_code(), response_code(&body));
 	classify_member(response.status_code(), &body)
 }
 
 pub fn product_rights(title: &str) -> Result<Vec<ProductRight>> {
-	if !crate::auth::is_logged_in() { return Ok(Vec::new()); }
+	if !crate::auth::is_logged_in() {
+		return Ok(Vec::new());
+	}
 	let title = parse_title(title)?;
-	let result: RightList = fetch("webtoon/productRightList.json", &format!("v=1&titleNo={title}"))?;
+	let result: RightList = fetch(
+		"webtoon/productRightList.json",
+		&format!("v=1&titleNo={title}"),
+	)?;
 	Ok(result.right_list)
 }
 
@@ -103,28 +134,47 @@ pub fn title_info(title: &str) -> Result<TitleInfo> {
 
 pub fn episode_info(title: &str, episode: i32) -> Result<EpisodeInfo> {
 	let title = parse_title(title)?;
-	if episode <= 0 { return Err(error!("無效的章節編號")); }
-	let path = if crate::auth::is_logged_in() { "webtoon/episodeInfoWithLogin.json" } else { "webtoon/episodeInfo.json" };
-	let result: EpisodeInfoResult = fetch(path,
-		&format!("v=4&titleNo={title}&episodeNo={episode}"))?;
+	if episode <= 0 {
+		return Err(error!("無效的章節編號"));
+	}
+	let path = if crate::auth::is_logged_in() {
+		"webtoon/episodeInfoWithLogin.json"
+	} else {
+		"webtoon/episodeInfo.json"
+	};
+	let result: EpisodeInfoResult =
+		fetch(path, &format!("v=4&titleNo={title}&episodeNo={episode}"))?;
 	Ok(result.episode_info)
 }
 
 fn parse_title(title: &str) -> Result<i32> {
-	title.parse::<i32>().ok().filter(|n| *n > 0).ok_or_else(|| error!("無效的作品編號"))
+	title
+		.parse::<i32>()
+		.ok()
+		.filter(|n| *n > 0)
+		.ok_or_else(|| error!("無效的作品編號"))
 }
 
 pub fn episodes(title: &str, expected: usize) -> Result<Vec<Episode>> {
 	let title = parse_title(title)?;
 	collect_episode_pages(expected, |offsets| {
 		let cookie = crate::auth::api_cookie();
-		let requests: Result<Vec<Request>> = offsets.iter().map(|offset| {
-			request_with_cookie("webtoon/titleHomeEpisodeListV3",
-				&format!("v=1&titleNo={title}&offset={offset}&pageSize={PAGE_SIZE}&ordering=LATEST"), cookie.as_deref())
-		}).collect();
-		Request::send_all(requests?).into_iter().map(|response| {
-			parse_response(response?, cookie.as_deref())
-		}).collect()
+		let requests: Result<Vec<Request>> = offsets
+			.iter()
+			.map(|offset| {
+				request_with_cookie(
+					"webtoon/titleHomeEpisodeListV3",
+					&format!(
+						"v=1&titleNo={title}&offset={offset}&pageSize={PAGE_SIZE}&ordering=LATEST"
+					),
+					cookie.as_deref(),
+				)
+			})
+			.collect();
+		Request::send_all(requests?)
+			.into_iter()
+			.map(|response| parse_response(response?, cookie.as_deref()))
+			.collect()
 	})
 }
 
@@ -177,7 +227,9 @@ pub fn app_pages(title: &str, episode: i32, manga: bool) -> Result<Vec<Page>> {
 }
 
 pub fn saved_key(title: &str, episode: i32) -> Option<String> {
-	defaults_get_map(&format!("webtoon_chapter_keys_{title}"))?.get(&format!("{episode}")).cloned()
+	defaults_get_map(&format!("webtoon_chapter_keys_{title}"))?
+		.get(&format!("{episode}"))
+		.cloned()
 }
 
 pub fn remember_keys(title: &str, chapters: &mut [Chapter]) {
@@ -193,13 +245,16 @@ pub fn remember_keys(title: &str, chapters: &mut [Chapter]) {
 }
 
 fn image_cookie<'a>(url: &str, context: Option<&'a PageContext>) -> Option<&'a str> {
-	if !trusted_image_url(url) { return None; }
+	if !trusted_image_url(url) {
+		return None;
+	}
 	context?.get("Cookie").map(String::as_str)
 }
 
 pub fn image_request(url: String, context: Option<&PageContext>) -> Result<Request> {
 	let mut request = Request::get(&url)?
-		.header("Referer", "https://www.webtoons.com").header("User-Agent", USER_AGENT);
+		.header("Referer", "https://www.webtoons.com")
+		.header("User-Agent", USER_AGENT);
 	if let Some(cookie) = image_cookie(&url, context) {
 		request = request.header("Cookie", cookie);
 	}
@@ -213,18 +268,32 @@ mod tests {
 
 	#[aidoku_test]
 	fn only_explicit_not_login_responses_invalidate_a_session() {
-		assert!(classify_member(200, r#"{"message":{"code":1001,"message":"Not Login"}}"#).unwrap().is_none());
-		assert!(classify_member(401, r#"{"message":{"code":1001}}"#).unwrap().is_none());
+		assert!(
+			classify_member(200, r#"{"message":{"code":1001,"message":"Not Login"}}"#)
+				.unwrap()
+				.is_none()
+		);
+		assert!(classify_member(401, r#"{"message":{"code":1001}}"#)
+			.unwrap()
+			.is_none());
 		assert!(classify_member(503, "temporarily unavailable").is_err());
 		assert!(classify_member(200, r#"{"message":{"result":{}}}"#).is_err());
-		let member = classify_member(200, r#"{"message":{"result":{"id":"test-id","nickname":"測試帳號"}}}"#).unwrap().unwrap();
+		let member = classify_member(
+			200,
+			r#"{"message":{"result":{"id":"test-id","nickname":"測試帳號"}}}"#,
+		)
+		.unwrap()
+		.unwrap();
 		assert_eq!(member.nickname, "測試帳號");
 	}
 
 	#[aidoku_test]
 	fn signing_matches_independent_hmac_vector_and_url_prefix_limit() {
 		let url = sign_url("https://example.com/a?x=1", 1_700_000_000_000, "key").unwrap();
-		assert_eq!(url, "https://example.com/a?x=1&msgpad=1700000000000&md=Ucpvki5iJ0Budc4nbOxdSHrnTyg%3D");
+		assert_eq!(
+			url,
+			"https://example.com/a?x=1&msgpad=1700000000000&md=Ucpvki5iJ0Budc4nbOxdSHrnTyg%3D"
+		);
 		let long = format!("https://example.com/{}", "a".repeat(260));
 		let signed = sign_url(&long, 1_700_000_000_000, "key").unwrap();
 		assert!(signed.ends_with("&md=uyAJtFP8XkWWe6FYnFwuC6Hb0hg%3D"));
@@ -235,10 +304,19 @@ mod tests {
 		let mut offsets = Vec::new();
 		let episodes = collect_episode_pages(31, |batch| {
 			offsets.extend_from_slice(batch);
-			Ok(batch.iter().map(|offset| decode::<EpisodeList>(if *offset == 0 {
-				include_str!("fixtures/app-10568-0.json")
-			} else { include_str!("fixtures/app-10568-30.json") }).unwrap()).collect())
-		}).unwrap();
+			Ok(batch
+				.iter()
+				.map(|offset| {
+					decode::<EpisodeList>(if *offset == 0 {
+						include_str!("fixtures/app-10568-0.json")
+					} else {
+						include_str!("fixtures/app-10568-30.json")
+					})
+					.unwrap()
+				})
+				.collect())
+		})
+		.unwrap();
 		assert_eq!(offsets, [0, 30]);
 		assert_eq!(episodes.len(), 31);
 		assert_eq!(episodes[0].episode_no, 31);
@@ -248,9 +326,12 @@ mod tests {
 	#[aidoku_test]
 	fn incomplete_or_repeated_pages_fail_the_entire_update() {
 		assert!(collect_episode_pages(31, |batch| {
-			Ok(batch.iter().map(|_| decode::<EpisodeList>(
-				include_str!("fixtures/app-10568-0.json")).unwrap()).collect())
-		}).is_err());
+			Ok(batch
+				.iter()
+				.map(|_| decode::<EpisodeList>(include_str!("fixtures/app-10568-0.json")).unwrap())
+				.collect())
+		})
+		.is_err());
 		assert!(collect_episode_pages(31, |_| Ok(Vec::new())).is_err());
 		assert!(collect_episode_pages(31, |_| Err(error!("offline"))).is_err());
 	}
@@ -259,12 +340,39 @@ mod tests {
 	fn secure_cookie_is_scoped_to_official_page_images_and_not_contextless_covers() {
 		let mut context = PageContext::new();
 		context.insert("Cookie".into(), "token=value".into());
-		assert_eq!(image_cookie(&format!("{PRODUCT_HOST}/a.jpg"), Some(&context)), Some("token=value"));
-		assert_eq!(image_cookie(&format!("{IMAGE_HOST}/a.jpg"), Some(&context)), Some("token=value"));
-		assert_eq!(image_cookie("https://webtoons-static.pstatic.net/paid/page.jpg", Some(&context)), Some("token=value"));
-		assert_eq!(image_cookie("https://webtoons-static.pstatic.net/cover.jpg", None), None);
-		assert_eq!(image_cookie("https://webtoons-static.pstatic.net.evil.test/a.jpg", Some(&context)), None);
+		assert_eq!(
+			image_cookie(&format!("{PRODUCT_HOST}/a.jpg"), Some(&context)),
+			Some("token=value")
+		);
+		assert_eq!(
+			image_cookie(&format!("{IMAGE_HOST}/a.jpg"), Some(&context)),
+			Some("token=value")
+		);
+		assert_eq!(
+			image_cookie(
+				"https://webtoons-static.pstatic.net/paid/page.jpg",
+				Some(&context)
+			),
+			Some("token=value")
+		);
+		assert_eq!(
+			image_cookie("https://webtoons-static.pstatic.net/cover.jpg", None),
+			None
+		);
+		assert_eq!(
+			image_cookie(
+				"https://webtoons-static.pstatic.net.evil.test/a.jpg",
+				Some(&context)
+			),
+			None
+		);
 		assert_eq!(image_cookie(&format!("{IMAGE_HOST}/cover.jpg"), None), None);
-		assert_eq!(image_cookie("https://prowebtoon-phinf.pstatic.net.evil.test/a.jpg", Some(&context)), None);
+		assert_eq!(
+			image_cookie(
+				"https://prowebtoon-phinf.pstatic.net.evil.test/a.jpg",
+				Some(&context)
+			),
+			None
+		);
 	}
 }

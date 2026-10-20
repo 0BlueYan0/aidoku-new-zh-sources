@@ -5,9 +5,9 @@ use aidoku::{
 	helpers::uri::encode_uri_component,
 	imports::{html::Element, std::send_partial_result},
 	prelude::*,
-	Chapter, DeepLinkHandler, DeepLinkResult, FilterValue, Home, HomeComponent, HomeComponentValue,
-	HashMap, HomeLayout, HomePartialResult, Link, Listing, ListingProvider, Manga, MangaPageResult,
-	Page, Result, Source, WebLoginHandler,
+	Chapter, DeepLinkHandler, DeepLinkResult, FilterValue, HashMap, Home, HomeComponent,
+	HomeComponentValue, HomeLayout, HomePartialResult, Link, Listing, ListingProvider, Manga,
+	MangaPageResult, Page, Result, Source, WebLoginHandler,
 };
 
 mod helper;
@@ -66,7 +66,7 @@ impl Source for Mh18Source {
 						None => Ok(empty_page()),
 					};
 				}
-				FilterValue::Select { id, value } if id == "genre" && !value.is_empty() => {
+				FilterValue::Select { id, value } if id == "genre" => {
 					// Paths can't be combined, so there is only the one select. A name that is
 					// not on it gets no results rather than some other list.
 					match category_path(&value) {
@@ -94,7 +94,10 @@ impl Source for Mh18Source {
 
 		if needs_details || (needs_chapters && mid.is_none()) {
 			let html = fetch_html(&manga_url(&manga.key))?;
-			let (details, found) = parse_details(&html, &manga.key);
+			// A page that is not the work's details must not empty the library entry.
+			let Some((details, found)) = parse_details(&html, &manga.key) else {
+				return Ok(manga);
+			};
 			if let Some(found) = found.as_deref() {
 				remember_mid(&manga.key, found);
 			}
@@ -109,12 +112,15 @@ impl Source for Mh18Source {
 
 		if needs_chapters {
 			// One unreadable title must not abort a whole library refresh.
-			match mid {
-				Some(mid) => match fetch_html(&chapters_url(&mid)) {
-					Ok(html) => manga.chapters = Some(parse_chapters(&html, &mid)),
-					Err(_) => println!("[18mh] ERROR fetching chapters for {}", manga.key),
-				},
-				None => println!("[18mh] ERROR no work id on the page of {}", manga.key),
+			if let Some(mid) = mid {
+				if let Ok(html) = fetch_html(&chapters_url(&mid)) {
+					// An empty list is far more likely a wrong page than a work that lost every
+					// chapter, so the library keeps what it had.
+					let chapters = parse_chapters(&html, &mid);
+					if !chapters.is_empty() {
+						manga.chapters = Some(chapters);
+					}
+				}
 			}
 		}
 
@@ -178,7 +184,11 @@ impl Home for Mh18Source {
 			}));
 		};
 
-		send(RECENT_TITLE, parse_cards(&root, ".pb-unit-md a.slicarda"), None);
+		send(
+			RECENT_TITLE,
+			parse_cards(&root, ".pb-unit-md a.slicarda"),
+			None,
+		);
 
 		if let Some(lists) = root.select(".cardlist") {
 			for ((title, id), list) in HOME_ROWS.iter().zip(lists) {
@@ -211,7 +221,10 @@ impl DeepLinkHandler for Mh18Source {
 			.trim_end_matches('/')
 			.contains('/');
 		if is_chapter {
-			let reader = format!("{BASE_URL}/manga/{}", rest.split(['?', '#']).next().unwrap_or(rest));
+			let reader = format!(
+				"{BASE_URL}/manga/{}",
+				rest.split(['?', '#']).next().unwrap_or(rest)
+			);
 			if let Some(key) = reader_chapter_key(&fetch_html(&reader)?) {
 				return Ok(Some(DeepLinkResult::Chapter {
 					manga_key: slug,
@@ -236,7 +249,13 @@ impl WebLoginHandler for Mh18Source {
 	}
 }
 
-register_source!(Mh18Source, ListingProvider, Home, DeepLinkHandler, WebLoginHandler);
+register_source!(
+	Mh18Source,
+	ListingProvider,
+	Home,
+	DeepLinkHandler,
+	WebLoginHandler
+);
 
 #[cfg(test)]
 mod test {
@@ -269,7 +288,10 @@ mod test {
 	fn listing_names_match_source_json() {
 		let json = include_str!("../res/source.json");
 		for (title, id) in HOME_ROWS {
-			assert!(json.contains(&format!("\"id\": \"{id}\",\n\t\t\t\"name\": \"{title}\"")), "{id}");
+			assert!(
+				json.contains(&format!("\"id\": \"{id}\",\n\t\t\t\"name\": \"{title}\"")),
+				"{id}"
+			);
 		}
 	}
 
@@ -277,11 +299,17 @@ mod test {
 	fn the_check_is_done_once_the_clearance_cookie_appears() {
 		let source = Mh18Source::new();
 		let mut cookies: HashMap<String, String> = HashMap::new();
-		assert!(!source.handle_web_login(String::from(CLOUDFLARE_KEY), cookies.clone()).unwrap());
+		assert!(!source
+			.handle_web_login(String::from(CLOUDFLARE_KEY), cookies.clone())
+			.unwrap());
 		cookies.insert(String::from("__cf_bm"), String::from("x"));
-		assert!(!source.handle_web_login(String::from(CLOUDFLARE_KEY), cookies.clone()).unwrap());
+		assert!(!source
+			.handle_web_login(String::from(CLOUDFLARE_KEY), cookies.clone())
+			.unwrap());
 		cookies.insert(String::from(CLEARANCE_COOKIE), String::from("abc"));
-		assert!(source.handle_web_login(String::from(CLOUDFLARE_KEY), cookies).unwrap());
+		assert!(source
+			.handle_web_login(String::from(CLOUDFLARE_KEY), cookies)
+			.unwrap());
 	}
 
 	#[aidoku_test]

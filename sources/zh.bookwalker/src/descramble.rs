@@ -20,18 +20,87 @@ const N_COMBO: u32 = N_TRIPLES * N_VARIANTS; // 486
 const DEFAULT_SEED: u32 = 2463534242;
 
 const TRIPLES: [[u32; 3]; 81] = [
-	[1, 3, 10], [1, 5, 16], [1, 5, 19], [1, 9, 29], [1, 11, 6], [1, 11, 16], [1, 19, 3],
-	[1, 21, 20], [1, 27, 27], [2, 5, 15], [2, 5, 21], [2, 7, 7], [2, 7, 9], [2, 7, 25],
-	[2, 9, 15], [2, 15, 17], [2, 15, 25], [2, 21, 9], [3, 1, 14], [3, 3, 26], [3, 3, 28],
-	[3, 3, 29], [3, 5, 20], [3, 5, 22], [3, 5, 25], [3, 7, 29], [3, 13, 7], [3, 23, 25],
-	[3, 25, 24], [3, 27, 11], [4, 3, 17], [4, 3, 27], [4, 5, 15], [5, 3, 21], [5, 7, 22],
-	[5, 9, 7], [5, 9, 28], [5, 9, 31], [5, 13, 6], [5, 15, 17], [5, 17, 13], [5, 21, 12],
-	[5, 27, 8], [5, 27, 21], [5, 27, 25], [5, 27, 28], [6, 1, 11], [6, 3, 17], [6, 17, 9],
-	[6, 21, 7], [6, 21, 13], [7, 1, 9], [7, 1, 18], [7, 1, 25], [7, 13, 25], [7, 17, 21],
-	[7, 25, 12], [7, 25, 20], [8, 7, 23], [8, 9, 23], [9, 5, 14], [9, 5, 25], [9, 11, 19],
-	[9, 21, 16], [10, 9, 21], [10, 9, 25], [11, 7, 12], [11, 7, 16], [11, 17, 13],
-	[11, 21, 13], [12, 9, 23], [13, 3, 17], [13, 3, 27], [13, 5, 19], [13, 17, 15],
-	[14, 1, 15], [14, 13, 15], [15, 1, 29], [17, 15, 20], [17, 15, 23], [17, 15, 26],
+	[1, 3, 10],
+	[1, 5, 16],
+	[1, 5, 19],
+	[1, 9, 29],
+	[1, 11, 6],
+	[1, 11, 16],
+	[1, 19, 3],
+	[1, 21, 20],
+	[1, 27, 27],
+	[2, 5, 15],
+	[2, 5, 21],
+	[2, 7, 7],
+	[2, 7, 9],
+	[2, 7, 25],
+	[2, 9, 15],
+	[2, 15, 17],
+	[2, 15, 25],
+	[2, 21, 9],
+	[3, 1, 14],
+	[3, 3, 26],
+	[3, 3, 28],
+	[3, 3, 29],
+	[3, 5, 20],
+	[3, 5, 22],
+	[3, 5, 25],
+	[3, 7, 29],
+	[3, 13, 7],
+	[3, 23, 25],
+	[3, 25, 24],
+	[3, 27, 11],
+	[4, 3, 17],
+	[4, 3, 27],
+	[4, 5, 15],
+	[5, 3, 21],
+	[5, 7, 22],
+	[5, 9, 7],
+	[5, 9, 28],
+	[5, 9, 31],
+	[5, 13, 6],
+	[5, 15, 17],
+	[5, 17, 13],
+	[5, 21, 12],
+	[5, 27, 8],
+	[5, 27, 21],
+	[5, 27, 25],
+	[5, 27, 28],
+	[6, 1, 11],
+	[6, 3, 17],
+	[6, 17, 9],
+	[6, 21, 7],
+	[6, 21, 13],
+	[7, 1, 9],
+	[7, 1, 18],
+	[7, 1, 25],
+	[7, 13, 25],
+	[7, 17, 21],
+	[7, 25, 12],
+	[7, 25, 20],
+	[8, 7, 23],
+	[8, 9, 23],
+	[9, 5, 14],
+	[9, 5, 25],
+	[9, 11, 19],
+	[9, 21, 16],
+	[10, 9, 21],
+	[10, 9, 25],
+	[11, 7, 12],
+	[11, 7, 16],
+	[11, 17, 13],
+	[11, 21, 13],
+	[12, 9, 23],
+	[13, 3, 17],
+	[13, 3, 27],
+	[13, 5, 19],
+	[13, 17, 15],
+	[14, 1, 15],
+	[14, 13, 15],
+	[15, 1, 29],
+	[17, 15, 20],
+	[17, 15, 23],
+	[17, 15, 26],
 ];
 
 /// One xorshift32 variant (`x` and shift results are 32-bit).
@@ -263,19 +332,19 @@ fn iw6(rng: &mut Rng, w06: &mut Sparse, y06: &mut Sparse, h06: i64, b06: i64, v0
 /// `mw6`, verbatim. Produces the interleaved index list consumed by `tiles`.
 #[allow(clippy::too_many_arguments)]
 fn mw6(
-	g_dim: i64,      // Gw6 = vw6
-	l_dim: i64,      // Lw6 = qw6
-	r_perm: &[i64],  // Rw6 = fw6 (len g_dim*l_dim)
-	s_perm: &[i64],  // Sw6 = jw6 (len g_dim)
-	x_perm: &[i64],  // Xw6 = nw6 (len l_dim)
-	p_arr: &[i64],   // Pw6 = bw6 (len g_dim)
-	l_arr: &[i64],   // lw6 = pw6 (len l_dim)
-	r_scalar: i64,   // rw6 = Dw6
-	j_scalar: i64,   // Jw6 = Qw6
-	s_arr: &[i64],   // sw6 = xw6 (len g_dim)
-	m_arr: &[i64],   // Mw6 = tw6 (len l_dim)
-	a86: i64,        // A86 = Uw6
-	z86: i64,        // Z86 = Kw6
+	g_dim: i64,     // Gw6 = vw6
+	l_dim: i64,     // Lw6 = qw6
+	r_perm: &[i64], // Rw6 = fw6 (len g_dim*l_dim)
+	s_perm: &[i64], // Sw6 = jw6 (len g_dim)
+	x_perm: &[i64], // Xw6 = nw6 (len l_dim)
+	p_arr: &[i64],  // Pw6 = bw6 (len g_dim)
+	l_arr: &[i64],  // lw6 = pw6 (len l_dim)
+	r_scalar: i64,  // rw6 = Dw6
+	j_scalar: i64,  // Jw6 = Qw6
+	s_arr: &[i64],  // sw6 = xw6 (len g_dim)
+	m_arr: &[i64],  // Mw6 = tw6 (len l_dim)
+	a86: i64,       // A86 = Uw6
+	z86: i64,       // Z86 = Kw6
 ) -> Vec<i64> {
 	let w86_cap = g_dim + 1; // W86
 	let y86_cap = l_dim + 1; // Y86
@@ -288,10 +357,26 @@ fn mw6(
 			let z = r_perm[(w + c * g_dim) as usize];
 			let n = z % g_dim;
 			let e = (z - n) / g_dim;
-			let t = if w < m_arr[c as usize] { w } else { w + w86_cap };
-			let k = if c < s_arr[w as usize] { c } else { c + y86_cap };
-			let hh = if n < l_arr[e as usize] { n } else { n + w86_cap };
-			let first = (if e < p_arr[n as usize] { e } else { e + y86_cap }) * h86 + t;
+			let t = if w < m_arr[c as usize] {
+				w
+			} else {
+				w + w86_cap
+			};
+			let k = if c < s_arr[w as usize] {
+				c
+			} else {
+				c + y86_cap
+			};
+			let hh = if n < l_arr[e as usize] {
+				n
+			} else {
+				n + w86_cap
+			};
+			let first = (if e < p_arr[n as usize] {
+				e
+			} else {
+				e + y86_cap
+			}) * h86 + t;
 			g86.push(first);
 			g86.push(hh * b86 + k);
 		}
@@ -366,12 +451,28 @@ fn a3f(p06: u64, l06: u64, r06: u64, j06: u64) -> Vec<i64> {
 	s06.seed(gw6);
 	let mut tw6a = Sparse::new();
 	let mut xw6a = Sparse::new();
-	iw6(&mut s06, &mut tw6a, &mut xw6a, uw6 as i64, kw6e as i64, vw6 as i64, qw6 as i64);
+	iw6(
+		&mut s06,
+		&mut tw6a,
+		&mut xw6a,
+		uw6 as i64,
+		kw6e as i64,
+		vw6 as i64,
+		qw6 as i64,
+	);
 	let jw6 = perm(&mut s06, vw6);
 	let nw6p = perm(&mut s06, qw6);
 	let mut pw6a = Sparse::new();
 	let mut bw6a = Sparse::new();
-	iw6(&mut s06, &mut pw6a, &mut bw6a, dw6 as i64, qw6o as i64, vw6 as i64, qw6 as i64);
+	iw6(
+		&mut s06,
+		&mut pw6a,
+		&mut bw6a,
+		dw6 as i64,
+		qw6o as i64,
+		vw6 as i64,
+		qw6 as i64,
+	);
 
 	let tw6v = tw6a.into_dense(qw6 as usize);
 	let xw6v = xw6a.into_dense(vw6 as usize);
@@ -502,21 +603,29 @@ pub fn tiles(pg: &Seeds, w: i64, h: i64) -> Vec<Tile> {
 	let mut out = Vec::new();
 	let mut a = 0usize;
 	let mut bnd = ((nx * ny) << 1) as usize;
-	emit_range(&mut out, &list, a, bnd, bw, bh, bw, bh, nx, ny, zx, zy, ox, oy);
+	emit_range(
+		&mut out, &list, a, bnd, bw, bh, bw, bh, nx, ny, zx, zy, ox, oy,
+	);
 	a = bnd;
 	bnd += 2;
-	emit_range(&mut out, &list, a, bnd, rx, ry, bw, bh, nx, ny, zx, zy, ox, oy);
+	emit_range(
+		&mut out, &list, a, bnd, rx, ry, bw, bh, nx, ny, zx, zy, ox, oy,
+	);
 	a = bnd;
 	bnd += (nx << 1) as usize;
-	emit_range(&mut out, &list, a, bnd, bw, ry, bw, bh, nx, ny, zx, zy, ox, oy);
+	emit_range(
+		&mut out, &list, a, bnd, bw, ry, bw, bh, nx, ny, zx, zy, ox, oy,
+	);
 	a = bnd;
 	bnd += (ny << 1) as usize;
-	emit_range(&mut out, &list, a, bnd, rx, bh, bw, bh, nx, ny, zx, zy, ox, oy);
+	emit_range(
+		&mut out, &list, a, bnd, rx, bh, bw, bh, nx, ny, zx, zy, ox, oy,
+	);
 	out
 }
 
 /// Content-wide keys derived from the final A/Z/T (`N1h` hooks).
-struct ContentKeys {
+pub struct ContentKeys {
 	b6o: u64,
 	e1u: u32,
 	l7g: u32,
@@ -532,13 +641,16 @@ fn xor_words(a: &[u8; 32]) -> u32 {
 	let mut r = 0u32;
 	let mut i = 0;
 	while i < 32 {
-		r ^= (a[i] as u32) << 24 ^ (a[i + 1] as u32) << 16 ^ (a[i + 2] as u32) << 8 ^ (a[i + 3] as u32);
+		r ^= (a[i] as u32) << 24
+			^ (a[i + 1] as u32) << 16
+			^ (a[i + 2] as u32) << 8
+			^ (a[i + 3] as u32);
 		i += 4;
 	}
 	r
 }
 
-fn content_keys(a: &[u8; 32], z: &[u8; 32], t: &[u8; 32]) -> ContentKeys {
+pub fn content_keys(a: &[u8; 32], z: &[u8; 32], t: &[u8; 32]) -> ContentKeys {
 	let mut u2g = [0u8; 32];
 	for i in 0..32 {
 		u2g[i] = a[i] ^ z[i] ^ t[i];
@@ -750,6 +862,14 @@ fn slice_page_object<'a>(json: &'a [u8], xhtml_key: &str) -> Option<&'a [u8]> {
 	Some(&json[start..end])
 }
 
+/// Whether `xhtml_key` is a page the site serves unscrambled: its `Page` object has no
+/// tile fields. The cover is one (measured on the test book, 2026-10-20). `false` when
+/// the page is not in the config at all.
+pub fn is_unscrambled_page(json: &[u8], xhtml_key: &str) -> bool {
+	slice_page_object(json, xhtml_key)
+		.is_some_and(|page| find(page, b"\"BlockWidth\"", 0).is_none())
+}
+
 /// Parse the `Page` object for `xhtml_key` out of the decrypted config JSON.
 pub fn parse_page_info(json: &[u8], xhtml_key: &str) -> Option<PageInfo> {
 	let page = slice_page_object(json, xhtml_key)?;
@@ -767,38 +887,26 @@ pub fn parse_page_info(json: &[u8], xhtml_key: &str) -> Option<PageInfo> {
 	})
 }
 
-/// Convenience: given decrypted config JSON, one xhtml key and the final A/Z/T keys,
-/// return the hashed page file base name and its tile list.
-/// The hashed file name and tile list for one page, from an already-parsed
-/// [`PageInfo`], so the image processor can recompute tiles without re-parsing the
-/// whole config.
-pub fn page_file_and_tiles_from_info(
+/// The tile list for one page, from an already-parsed [`PageInfo`], so the image
+/// processor can recompute tiles without re-parsing the whole config.
+pub fn page_tiles(
 	info: &PageInfo,
 	xhtml_key: &str,
 	a: &[u8; 32],
 	z: &[u8; 32],
 	t: &[u8; 32],
-) -> (String, Vec<Tile>) {
+) -> Vec<Tile> {
 	let ck = content_keys(a, z, t);
-	let file_name = format!("{}", info.no);
-	let seeds = page_seeds(&ck, xhtml_key, &file_name, info);
-	let file = hashed_name(&ck, xhtml_key, &file_name);
+	let seeds = page_seeds(&ck, xhtml_key, &format!("{}", info.no), info);
 	let w = info.size_width + seeds.y2a as i64;
 	let h = info.size_height + seeds.r7l as i64;
-	let tl = tiles(&seeds, w, h);
-	(file, tl)
+	tiles(&seeds, w, h)
 }
 
-/// The hashed file base name only (for building the image URL), without the tiles.
-pub fn page_file_name(
-	info: &PageInfo,
-	xhtml_key: &str,
-	a: &[u8; 32],
-	z: &[u8; 32],
-	t: &[u8; 32],
-) -> String {
-	let ck = content_keys(a, z, t);
-	hashed_name(&ck, xhtml_key, &format!("{}", info.no))
+/// The hashed file base name (for building the image URL). `ck` is the same for every
+/// page of a book, so the caller derives it once.
+pub fn page_file_name(info: &PageInfo, xhtml_key: &str, ck: &ContentKeys) -> String {
+	hashed_name(ck, xhtml_key, &format!("{}", info.no))
 }
 
 /// The ordered list of page xhtml keys from `configuration.contents`. That array is
@@ -937,8 +1045,9 @@ mod tests {
 	fn p001_file_name_and_tiles_match() {
 		let (json, a, z, t) = crypto::decrypt_config(DATA_B64).expect("decrypt");
 		let info = parse_page_info(&json, "item/xhtml/p-001.xhtml").expect("page info");
-		let (file, got) = page_file_and_tiles_from_info(&info, "item/xhtml/p-001.xhtml", &a, &z, &t);
+		let file = page_file_name(&info, "item/xhtml/p-001.xhtml", &content_keys(&a, &z, &t));
 		assert_eq!(file, "1055836d080ba885d1");
+		let got = page_tiles(&info, "item/xhtml/p-001.xhtml", &a, &z, &t);
 		let want = expected_tiles();
 		assert_eq!(got.len(), want.len(), "tile count");
 		for (i, (g, w)) in got.iter().zip(want.iter()).enumerate() {
@@ -974,28 +1083,61 @@ mod tests {
 	fn all_seed_variants_match() {
 		let (json, a, z, t) = crypto::decrypt_config(DATA_B64).expect("decrypt");
 		let cases = [
-			("item/xhtml/p-002.xhtml", include_str!("../tests/fixtures/p-002_tiles.txt")),
-			("item/xhtml/p-003.xhtml", include_str!("../tests/fixtures/p-003_tiles.txt")),
-			("item/xhtml/p-004.xhtml", include_str!("../tests/fixtures/p-004_tiles.txt")),
-			("item/xhtml/p-005.xhtml", include_str!("../tests/fixtures/p-005_tiles.txt")),
-			("item/xhtml/p-006.xhtml", include_str!("../tests/fixtures/p-006_tiles.txt")),
-			("item/xhtml/p-007.xhtml", include_str!("../tests/fixtures/p-007_tiles.txt")),
-			("item/xhtml/p-008.xhtml", include_str!("../tests/fixtures/p-008_tiles.txt")),
-			("item/xhtml/p-009.xhtml", include_str!("../tests/fixtures/p-009_tiles.txt")),
-			("item/xhtml/p-019.xhtml", include_str!("../tests/fixtures/p-019_tiles.txt")),
-			("item/xhtml/p-029.xhtml", include_str!("../tests/fixtures/p-029_tiles.txt")),
+			(
+				"item/xhtml/p-002.xhtml",
+				include_str!("../tests/fixtures/p-002_tiles.txt"),
+			),
+			(
+				"item/xhtml/p-003.xhtml",
+				include_str!("../tests/fixtures/p-003_tiles.txt"),
+			),
+			(
+				"item/xhtml/p-004.xhtml",
+				include_str!("../tests/fixtures/p-004_tiles.txt"),
+			),
+			(
+				"item/xhtml/p-005.xhtml",
+				include_str!("../tests/fixtures/p-005_tiles.txt"),
+			),
+			(
+				"item/xhtml/p-006.xhtml",
+				include_str!("../tests/fixtures/p-006_tiles.txt"),
+			),
+			(
+				"item/xhtml/p-007.xhtml",
+				include_str!("../tests/fixtures/p-007_tiles.txt"),
+			),
+			(
+				"item/xhtml/p-008.xhtml",
+				include_str!("../tests/fixtures/p-008_tiles.txt"),
+			),
+			(
+				"item/xhtml/p-009.xhtml",
+				include_str!("../tests/fixtures/p-009_tiles.txt"),
+			),
+			(
+				"item/xhtml/p-019.xhtml",
+				include_str!("../tests/fixtures/p-019_tiles.txt"),
+			),
+			(
+				"item/xhtml/p-029.xhtml",
+				include_str!("../tests/fixtures/p-029_tiles.txt"),
+			),
 		];
 		let mut fails: Vec<String> = Vec::new();
 		for (key, fixture) in cases {
 			let info = parse_page_info(&json, key).expect("page info");
-			let (_f, got) = page_file_and_tiles_from_info(&info, key, &a, &z, &t);
+			let got = page_tiles(&info, key, &a, &z, &t);
 			let want = parse_tiles(fixture);
 			if got.len() != want.len() {
 				fails.push(format!("{key}: len {} vs {}", got.len(), want.len()));
 				continue;
 			}
 			if let Some(i) = got.iter().zip(want.iter()).position(|(g, w)| g != w) {
-				fails.push(format!("{key}: diff@{i} got {:?} want {:?}", got[i], want[i]));
+				fails.push(format!(
+					"{key}: diff@{i} got {:?} want {:?}",
+					got[i], want[i]
+				));
 			}
 		}
 		assert!(fails.is_empty(), "{}", fails.join(" | "));
@@ -1025,7 +1167,11 @@ mod tests {
 		let list = a3f(1355461849185, 153621950650, 215153028234, 1435810233453);
 		assert_eq!(list.len(), 3672, "list length");
 		let got: Vec<i64> = list.iter().take(8).copied().collect();
-		assert_eq!(got, [1080, 4794, 432, 6631, 576, 1634, 6480, 309], "a3f first 8");
+		assert_eq!(
+			got,
+			[1080, 4794, 432, 6631, 576, 1634, 6480, 309],
+			"a3f first 8"
+		);
 	}
 
 	#[aidoku_test]
@@ -1036,5 +1182,21 @@ mod tests {
 		assert_eq!(order[0], "item/xhtml/p-cover.xhtml");
 		assert_eq!(order[1], "item/xhtml/p-001.xhtml");
 		assert_eq!(order[173], "item/xhtml/p-173.xhtml");
+		assert!(is_unscrambled_page(&json, "item/xhtml/p-cover.xhtml"));
+		assert!(!is_unscrambled_page(&json, "item/xhtml/p-001.xhtml"));
+		assert!(!is_unscrambled_page(&json, "item/xhtml/p-999.xhtml"));
+	}
+
+	#[aidoku_test]
+	fn every_listed_page_has_page_info() {
+		// The page list fails when a listed page cannot be read, so every page of a real
+		// book must parse, except the unscrambled cover, which the list leaves out.
+		let (json, _a, _z, _t) = crypto::decrypt_config(DATA_B64).expect("decrypt");
+		for xhtml in page_order(&json) {
+			assert!(
+				parse_page_info(&json, &xhtml).is_some() || is_unscrambled_page(&json, &xhtml),
+				"{xhtml}"
+			);
+		}
 	}
 }

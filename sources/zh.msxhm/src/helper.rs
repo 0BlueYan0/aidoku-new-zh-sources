@@ -4,7 +4,7 @@ use aidoku::{
 	imports::{
 		defaults::defaults_get,
 		html::{Document, Element, ElementList},
-		net::Request,
+		net::{Request, Response},
 	},
 	prelude::*,
 	Chapter, ContentRating, Manga, MangaPageResult, MangaStatus, Page, PageContent, Result, Viewer,
@@ -62,8 +62,18 @@ pub fn request(url: &str) -> Result<Request> {
 	Ok(Request::get(url)?.header("User-Agent", USER_AGENT))
 }
 
+/// A non-2xx answer is an error, so an error page is never read as an empty list.
 pub fn fetch_html(url: &str) -> Result<Document> {
-	Ok(request(url)?.html()?)
+	read_html(request(url)?.send()?, url)
+}
+
+/// `fetch_html`'s status check, shared with the home's batched rows.
+pub fn read_html(response: Response, url: &str) -> Result<Document> {
+	let status = response.status_code();
+	if !(200..300).contains(&status) {
+		bail!("[msxhm] HTTP {status} for {url}");
+	}
+	Ok(response.get_html()?)
 }
 
 /// An image address moved onto `base`, so a reader who picked a mirror because the
@@ -120,7 +130,11 @@ impl Default for Browse {
 
 pub fn browse_url(base: &str, browse: &Browse, page: i32) -> String {
 	let mut url = format!("{base}/booklist?page={page}");
-	if let Some(tag) = browse.tag.as_deref().filter(|t: &&str| !t.trim().is_empty()) {
+	if let Some(tag) = browse
+		.tag
+		.as_deref()
+		.filter(|t: &&str| !t.trim().is_empty())
+	{
 		url.push_str(&format!("&tag={}", encode_uri_component(tag.trim())));
 	}
 	if browse.area != "-1" {
@@ -134,19 +148,27 @@ pub fn browse_url(base: &str, browse: &Browse, page: i32) -> String {
 
 /// The search answers 20 works by relevance and has no further pages.
 pub fn search_url(base: &str, query: &str) -> String {
-	format!("{base}/search?keyword={}", encode_uri_component(query.trim()))
+	format!(
+		"{base}/search?keyword={}",
+		encode_uri_component(query.trim())
+	)
 }
 
 /// The number after `/<kind>/` in a link: `/book/1224` → `1224`.
 pub fn id_after(href: &str, kind: &str) -> Option<String> {
 	let (_, rest) = href.split_once(&format!("/{kind}/"))?;
-	let id: String = rest.chars().take_while(|c: &char| c.is_ascii_digit()).collect();
+	let id: String = rest
+		.chars()
+		.take_while(|c: &char| c.is_ascii_digit())
+		.collect();
 	let next = rest[id.len()..].chars().next();
 	(!id.is_empty() && matches!(next, None | Some('/' | '?' | '#'))).then_some(id)
 }
 
 fn text_of(el: &Element) -> String {
-	el.text().map(|t: String| String::from(t.trim())).unwrap_or_default()
+	el.text()
+		.map(|t: String| String::from(t.trim()))
+		.unwrap_or_default()
 }
 
 /// `background-image: url(<address>)`.
@@ -172,7 +194,10 @@ fn collect(links: Option<ElementList>, covers: Option<ElementList>, base: &str) 
 		.collect();
 	let mut entries: Vec<Manga> = Vec::new();
 	for link in links.into_iter().flatten() {
-		let Some(key) = link.attr("href").and_then(|href: String| id_after(&href, "book")) else {
+		let Some(key) = link
+			.attr("href")
+			.and_then(|href: String| id_after(&href, "book"))
+		else {
 			continue;
 		};
 		let title = link
@@ -213,27 +238,35 @@ pub fn parse_manga_list(html: &Document, base: &str) -> MangaPageResult {
 	}
 }
 
-/// One board of the rank page, found by its heading.
-pub fn parse_rank(html: &Document, heading: &str, base: &str) -> MangaPageResult {
-	let board = html.select("ul.top-cat > li").and_then(|boards: ElementList| {
-		boards
-			.into_iter()
-			.find(|li: &Element| li.select_first("div.title").map(|t: Element| text_of(&t)).as_deref() == Some(heading))
-	});
-	let entries = board
-		.map(|li: Element| collect(li.select("a[title]"), li.select(".mh-cover"), base))
-		.unwrap_or_default();
-	MangaPageResult {
-		entries,
+/// One board of the rank page, found by its heading. A page without that board is an
+/// error rather than an empty board: the site renamed it or answered another page.
+pub fn parse_rank(html: &Document, heading: &str, base: &str) -> Result<MangaPageResult> {
+	let board = html
+		.select("ul.top-cat > li")
+		.and_then(|boards: ElementList| {
+			boards.into_iter().find(|li: &Element| {
+				li.select_first("div.title")
+					.map(|t: Element| text_of(&t))
+					.as_deref() == Some(heading)
+			})
+		});
+	let Some(board) = board else {
+		bail!("[msxhm] no rank board {heading}");
+	};
+	Ok(MangaPageResult {
+		entries: collect(board.select("a[title]"), board.select(".mh-cover"), base),
 		has_next_page: false,
-	}
+	})
 }
 
 /// The value of a `<label>：<value>` line among the details page's subtitles and tips.
 fn labelled(html: &Document, selector: &str, label: &str) -> Option<String> {
 	html.select(selector)?.find_map(|el: Element| {
 		let text = text_of(&el);
-		let value = text.strip_prefix(label)?.trim_start_matches(['：', ':']).trim();
+		let value = text
+			.strip_prefix(label)?
+			.trim_start_matches(['：', ':'])
+			.trim();
 		(!value.is_empty()).then(|| String::from(value))
 	})
 }
@@ -262,7 +295,11 @@ pub fn parse_details(html: &Document, key: &str, base: &str) -> Option<Manga> {
 		_ => MangaStatus::Unknown,
 	};
 	let mut tags: Vec<String> = Vec::new();
-	for link in html.select(".banner_detail_form p.tip a[href*=\"tag=\"]").into_iter().flatten() {
+	for link in html
+		.select(".banner_detail_form p.tip a[href*=\"tag=\"]")
+		.into_iter()
+		.flatten()
+	{
 		let name = text_of(&link);
 		if !name.is_empty() && !tags.contains(&name) {
 			tags.push(name);
@@ -296,11 +333,16 @@ pub fn chapter_number(title: &str) -> Option<f32> {
 }
 
 /// The details page lists every chapter, oldest first; the app wants newest first.
+/// A link that is not a chapter gives an empty list, which the caller treats as unreadable,
+/// so the library is not handed a list with chapters missing.
 pub fn parse_chapters(html: &Document, base: &str) -> Vec<Chapter> {
 	let mut chapters: Vec<Chapter> = Vec::new();
 	for link in html.select("#detail-list-select a").into_iter().flatten() {
-		let Some(key) = link.attr("href").and_then(|href: String| id_after(&href, "chapter")) else {
-			continue;
+		let Some(key) = link
+			.attr("href")
+			.and_then(|href: String| id_after(&href, "chapter"))
+		else {
+			return Vec::new();
 		};
 		if chapters.iter().any(|c: &Chapter| c.key == key) {
 			continue;
@@ -356,8 +398,14 @@ mod test {
 			listing_url(BASE_URL, "completed", 2).as_deref(),
 			Some("https://www.jjmhw9.top/booklist?end=1&page=2")
 		);
-		assert_eq!(listing_url(BASE_URL, "update", 1).as_deref(), Some("https://www.jjmhw9.top/update?page=1"));
-		assert_eq!(listing_url(BASE_URL, "rank_hot", 1).as_deref(), Some("https://www.jjmhw9.top/rank"));
+		assert_eq!(
+			listing_url(BASE_URL, "update", 1).as_deref(),
+			Some("https://www.jjmhw9.top/update?page=1")
+		);
+		assert_eq!(
+			listing_url(BASE_URL, "rank_hot", 1).as_deref(),
+			Some("https://www.jjmhw9.top/rank")
+		);
 		assert_eq!(listing_url(BASE_URL, "rank_hot", 2), None);
 		assert_eq!(listing_url(BASE_URL, "hot", 1), None);
 		let browse = Browse {
@@ -369,29 +417,47 @@ mod test {
 			browse_url(BASE_URL, &browse, 3),
 			"https://www.jjmhw9.top/booklist?page=3&tag=%E5%B7%A8%E4%B9%B3&end=1"
 		);
-		assert_eq!(browse_url(MIRROR, &Browse::default(), 1), "https://www.mxs13.cc/booklist?page=1");
+		assert_eq!(
+			browse_url(MIRROR, &Browse::default(), 1),
+			"https://www.mxs13.cc/booklist?page=1"
+		);
 		assert_eq!(
 			search_url(BASE_URL, " 秘密 "),
 			"https://www.jjmhw9.top/search?keyword=%E7%A7%98%E5%AF%86"
 		);
-		assert_eq!(normalize_base_url(" www.mxs13.cc/ ").as_deref(), Some(MIRROR));
+		assert_eq!(
+			normalize_base_url(" www.mxs13.cc/ ").as_deref(),
+			Some(MIRROR)
+		);
 		assert_eq!(normalize_base_url("  "), None);
 	}
 
 	#[aidoku_test]
 	fn reads_ids_and_moves_images() {
 		assert_eq!(id_after("/book/1224", "book").as_deref(), Some("1224"));
-		assert_eq!(id_after("https://www.mxs13.cc/chapter/57217?x", "chapter").as_deref(), Some("57217"));
+		assert_eq!(
+			id_after("https://www.mxs13.cc/chapter/57217?x", "chapter").as_deref(),
+			Some("57217")
+		);
 		assert_eq!(id_after("/booklist?tag=都市", "book"), None);
 		assert_eq!(id_after("/book/12a", "book"), None);
 		assert_eq!(
-			rehost("https://www.jjmhw9.top/static/upload/book/1224/cover.jpg", MIRROR),
+			rehost(
+				"https://www.jjmhw9.top/static/upload/book/1224/cover.jpg",
+				MIRROR
+			),
 			"https://www.mxs13.cc/static/upload/book/1224/cover.jpg"
 		);
-		assert_eq!(rehost("/static/images/logo.png", MIRROR), "/static/images/logo.png");
+		assert_eq!(
+			rehost("/static/images/logo.png", MIRROR),
+			"/static/images/logo.png"
+		);
 		// A library cover saved under one mirror ends up on the mirror in use.
 		let cover = "https://www.jjmhw9.top/static/upload/book/1224/cover.jpg";
-		assert_eq!(rehost(&rehost(cover, "https://www.jjmhw8.top"), MIRROR), rehost(cover, MIRROR));
+		assert_eq!(
+			rehost(&rehost(cover, "https://www.jjmhw8.top"), MIRROR),
+			rehost(cover, MIRROR)
+		);
 	}
 
 	#[aidoku_test]
@@ -409,7 +475,10 @@ mod test {
 			for manga in &result.entries {
 				assert_eq!(
 					manga.cover,
-					Some(format!("https://www.jjmhw9.top/static/upload/book/{}/cover.jpg", manga.key)),
+					Some(format!(
+						"https://www.jjmhw9.top/static/upload/book/{}/cover.jpg",
+						manga.key
+					)),
 					"{}",
 					manga.title
 				);
@@ -418,7 +487,10 @@ mod test {
 		let search = parse_manga_list(&doc(include_str!("fixtures/search.html")), MIRROR);
 		assert_eq!(search.entries[0].key, "44");
 		assert_eq!(search.entries[0].title, "秘密Story第二季");
-		assert_eq!(search.entries[0].url.as_deref(), Some("https://www.mxs13.cc/book/44"));
+		assert_eq!(
+			search.entries[0].url.as_deref(),
+			Some("https://www.mxs13.cc/book/44")
+		);
 		assert_eq!(
 			search.entries[0].cover.as_deref(),
 			Some("https://www.mxs13.cc/static/upload/book/44/cover.jpg")
@@ -430,19 +502,35 @@ mod test {
 		let html = doc(include_str!("fixtures/rank.html"));
 		// The site numbers 10 works on three boards and 14 on the last.
 		for ((_, heading), count) in RANKS.into_iter().zip([10, 10, 10, 14]) {
-			let board = parse_rank(&html, heading, BASE_URL);
+			let board = parse_rank(&html, heading, BASE_URL).expect("board");
 			assert_eq!(board.entries.len(), count, "{heading}");
-			assert!(board.entries.iter().all(|m: &Manga| m.cover.is_some()), "{heading}");
+			assert!(
+				board.entries.iter().all(|m: &Manga| m.cover.is_some()),
+				"{heading}"
+			);
 		}
-		let new = parse_rank(&html, "新书榜", BASE_URL);
+		let new = parse_rank(&html, "新书榜", BASE_URL).expect("board");
 		assert_eq!(new.entries[0].title, "衣冠禽獸");
 		assert_eq!(new.entries[1].title, "我的in援團");
-		assert!(parse_rank(&html, "日榜", BASE_URL).entries.is_empty());
+		assert!(parse_rank(&html, "日榜", BASE_URL).is_err());
+	}
+
+	#[aidoku_test]
+	fn a_link_that_is_not_a_chapter_rejects_the_list() {
+		let html = r#"<ul id="detail-list-select"><li><a href="/chapter/12">第1話</a></li><li><a href="/book/3">更多</a></li></ul>"#;
+		assert!(parse_chapters(&doc(html), BASE_URL).is_empty());
+		let html = r#"<ul id="detail-list-select"><li><a href="/chapter/12">第1話</a></li><li><a href="/chapter/13">第2話</a></li></ul>"#;
+		let keys: Vec<String> = parse_chapters(&doc(html), BASE_URL)
+			.into_iter()
+			.map(|c| c.key)
+			.collect();
+		assert_eq!(keys, ["13", "12"]);
 	}
 
 	#[aidoku_test]
 	fn reads_the_details_page() {
-		let manga = parse_details(&doc(include_str!("fixtures/manga.html")), "1224", MIRROR).expect("details");
+		let manga = parse_details(&doc(include_str!("fixtures/manga.html")), "1224", MIRROR)
+			.expect("details");
 		assert_eq!(manga.title, "衣冠禽獸");
 		assert_eq!(
 			manga.authors,
@@ -450,13 +538,22 @@ mod test {
 		);
 		assert_eq!(manga.status, MangaStatus::Ongoing);
 		assert_eq!(manga.tags, Some(Vec::from([String::from("都市")])));
-		assert!(manga.description.as_deref().unwrap_or_default().starts_with("在女人面前總是笨手笨腳的鈺祥"));
+		assert!(manga
+			.description
+			.as_deref()
+			.unwrap_or_default()
+			.starts_with("在女人面前總是笨手笨腳的鈺祥"));
 		assert_eq!(
 			manga.cover.as_deref(),
 			Some("https://www.mxs13.cc/static/upload/book/1224/cover.jpg")
 		);
 
-		let done = parse_details(&doc(include_str!("fixtures/manga_done.html")), "815", BASE_URL).expect("details");
+		let done = parse_details(
+			&doc(include_str!("fixtures/manga_done.html")),
+			"815",
+			BASE_URL,
+		)
+		.expect("details");
 		assert_eq!(done.title, "患得患失的愛戀/這難道是命中註定?");
 		assert_eq!(done.authors, Some(Vec::from([String::from("MOGABI")])));
 		assert_eq!(done.status, MangaStatus::Completed);
@@ -470,7 +567,10 @@ mod test {
 		assert_eq!(chapters[0].key, "58324");
 		assert_eq!(chapters[0].chapter_number, Some(322.0));
 		assert_eq!(chapters[321].title.as_deref(), Some("第1話-門縫傳出呻吟聲"));
-		assert_eq!(chapters[0].url.as_deref(), Some("https://www.jjmhw9.top/chapter/58324"));
+		assert_eq!(
+			chapters[0].url.as_deref(),
+			Some("https://www.jjmhw9.top/chapter/58324")
+		);
 		assert_eq!(chapter_number("第10話-妳下面這麼敏感啊?"), Some(10.0));
 		assert_eq!(chapter_number("最終話"), None);
 	}

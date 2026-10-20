@@ -81,7 +81,10 @@ impl Source for LinovelibSource {
 			Some(query) => search::search(&query, page),
 			None => {
 				let base = base_url();
-				Ok(parse_manga_list(&fetch_html(&browse_url(base, &browse, page))?, base))
+				Ok(parse_manga_list(
+					&fetch_html(&browse_url(base, &browse, page))?,
+					base,
+				))
 			}
 		}
 	}
@@ -95,30 +98,22 @@ impl Source for LinovelibSource {
 		let base = base_url();
 		if needs_details {
 			let html = fetch_html(&manga_url(base, &manga.key))?;
-			match parse_details(&html, &manga.key, base) {
-				Some(details) => {
-					let chapters = manga.chapters.take();
-					manga = details;
-					manga.chapters = chapters;
-					send_partial_result(&manga);
-				}
-				None => println!("[linovelib] ERROR no details on the page of {}", manga.key),
+			if let Some(details) = parse_details(&html, &manga.key, base) {
+				let chapters = manga.chapters.take();
+				manga = details;
+				manga.chapters = chapters;
+				send_partial_result(&manga);
 			}
 		}
 
 		if needs_chapters {
 			// A failed catalogue must not abort a whole library refresh, nor empty the
 			// chapters the app already has.
-			match fetch_html(&catalog_url(base, &manga.key)) {
-				Ok(html) => {
-					let chapters = parse_catalog(&html, &manga.key, base);
-					if chapters.is_empty() {
-						println!("[linovelib] ERROR no chapters in the catalogue of {}", manga.key);
-					} else {
-						manga.chapters = Some(chapters);
-					}
+			if let Ok(html) = fetch_html(&catalog_url(base, &manga.key)) {
+				let chapters = parse_catalog(&html, &manga.key, base);
+				if !chapters.is_empty() {
+					manga.chapters = Some(chapters);
 				}
-				Err(err) => println!("[linovelib] ERROR catalogue of {}: {err:?}", manga.key),
 			}
 		}
 
@@ -130,8 +125,11 @@ impl Source for LinovelibSource {
 		let book = manga.key;
 		let chapter_id = match parse_placeholder_key(&chapter.key) {
 			// A chapter the catalogue lists without a link: its volume page has it.
-			Some((volume, index)) => volume_chapter(&fetch_html(&volume_url(base, &book, volume))?, index)
-				.ok_or_else(|| error!("[linovelib] no chapter {index} on volume {volume} of {book}"))?,
+			Some((volume, index)) => {
+				volume_chapter(&fetch_html(&volume_url(base, &book, volume))?, index).ok_or_else(
+					|| error!("[linovelib] no chapter {index} on volume {volume} of {book}"),
+				)?
+			}
 			None => chapter.key,
 		};
 		let seed: u64 = chapter_id
@@ -147,10 +145,15 @@ impl Source for LinovelibSource {
 			if content::is_withheld(&raw) {
 				bail!("[linovelib] {url}: the site withheld paragraphs");
 			}
+			if content::is_locked(&raw) {
+				bail!("[linovelib] {url}: the site does not let this chapter be read");
+			}
 			let html = Html::parse_with_url(&raw, &url)?;
 			content::append_page(&html, seed, &mut segments);
 			match next_page_url(&raw) {
-				Some(next) if is_same_chapter(next, &book, &chapter_id) => url = format!("{base}{next}"),
+				Some(next) if is_same_chapter(next, &book, &chapter_id) => {
+					url = format!("{base}{next}")
+				}
 				_ => break,
 			}
 		}
@@ -199,10 +202,7 @@ impl Home for LinovelibSource {
 			// A row that fails stays empty; the others still load.
 			let entries = match listing_url(base, id, 1).map(|url: String| fetch_html(&url)) {
 				Some(Ok(html)) => parse_manga_list(&html, base).entries,
-				_ => {
-					println!("[linovelib] ERROR loading the {id} row");
-					continue;
-				}
+				_ => continue,
 			};
 			if entries.is_empty() {
 				continue;
@@ -241,7 +241,13 @@ impl ImageRequestProvider for LinovelibSource {
 	}
 }
 
-register_source!(LinovelibSource, ListingProvider, Home, DeepLinkHandler, ImageRequestProvider);
+register_source!(
+	LinovelibSource,
+	ListingProvider,
+	Home,
+	DeepLinkHandler,
+	ImageRequestProvider
+);
 
 #[cfg(test)]
 mod test {
@@ -251,8 +257,14 @@ mod test {
 	#[aidoku_test]
 	fn listing_names_match_source_json() {
 		let json = include_str!("../res/source.json");
-		for (title, id) in HOME_ROWS.into_iter().chain(IMPRINTS.into_iter().map(|(id, title)| (title, id))) {
-			assert!(json.contains(&format!("\"id\": \"{id}\",\n\t\t\t\"name\": \"{title}\"")), "{id}");
+		for (title, id) in HOME_ROWS
+			.into_iter()
+			.chain(IMPRINTS.into_iter().map(|(id, title)| (title, id)))
+		{
+			assert!(
+				json.contains(&format!("\"id\": \"{id}\",\n\t\t\t\"name\": \"{title}\"")),
+				"{id}"
+			);
 			assert!(listing_url(TW_URL, id, 1).is_some(), "{id}");
 		}
 		assert_eq!(
@@ -265,18 +277,27 @@ mod test {
 	fn opens_links() {
 		let source = LinovelibSource::new();
 		assert_eq!(
-			source.handle_deep_link(String::from("https://tw.linovelib.com/novel/2/catalog")).unwrap(),
-			Some(DeepLinkResult::Manga { key: String::from("2") })
+			source
+				.handle_deep_link(String::from("https://tw.linovelib.com/novel/2/catalog"))
+				.unwrap(),
+			Some(DeepLinkResult::Manga {
+				key: String::from("2")
+			})
 		);
 		assert_eq!(
-			source.handle_deep_link(String::from("https://www.bilinovel.com/novel/2/403_3.html")).unwrap(),
+			source
+				.handle_deep_link(String::from("https://www.bilinovel.com/novel/2/403_3.html"))
+				.unwrap(),
 			Some(DeepLinkResult::Chapter {
 				manga_key: String::from("2"),
 				key: String::from("403")
 			})
 		);
-		assert_eq!(source.handle_deep_link(String::from("https://tw.linovelib.com/top.html")).unwrap(), None);
+		assert_eq!(
+			source
+				.handle_deep_link(String::from("https://tw.linovelib.com/top.html"))
+				.unwrap(),
+			None
+		);
 	}
 }
-
-

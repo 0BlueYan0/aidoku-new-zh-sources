@@ -62,7 +62,10 @@ impl FontMap {
 		if chars.is_empty() || !chars.len().is_multiple_of(2) {
 			return None;
 		}
-		let pairs = chars.chunks(2).map(|p: &[char]| (p[0] as u16, p[1] as u16)).collect();
+		let pairs = chars
+			.chunks(2)
+			.map(|p: &[char]| (p[0] as u16, p[1] as u16))
+			.collect();
 		Some(Self(pairs))
 	}
 }
@@ -73,7 +76,13 @@ impl FontMap {
 /// chapters of a book download the font once.
 pub fn map_for(font_path: &str) -> Result<FontMap> {
 	let file = font_path.split(['?', '#']).next().unwrap_or("");
-	let id = file.rsplit('/').next().unwrap_or("").split('.').next().unwrap_or("");
+	let id = file
+		.rsplit('/')
+		.next()
+		.unwrap_or("")
+		.split('.')
+		.next()
+		.unwrap_or("");
 	if id.is_empty() || !id.bytes().all(|b: u8| b.is_ascii_alphanumeric()) {
 		bail!("[lightnovel] unexpected font path {font_path}");
 	}
@@ -84,19 +93,26 @@ pub fn map_for(font_path: &str) -> Result<FontMap> {
 		.map(String::from)
 		.collect();
 	if ids.iter().any(|cached: &String| cached == id) {
-		if let Some(map) = defaults_get::<String>(&format!("{CACHE_MAP_PREFIX}{id}")).and_then(|s: String| FontMap::from_stored(&s)) {
+		if let Some(map) = defaults_get::<String>(&format!("{CACHE_MAP_PREFIX}{id}"))
+			.and_then(|s: String| FontMap::from_stored(&s))
+		{
 			return Ok(map);
 		}
 	}
 	// The same hash is served uncompressed as .ttf, which spares a WOFF2 decoder.
-	let data = Request::get(format!("{}/font/{id}.ttf", crate::hub::api_base()))?.timeout(60.0).data()?;
+	let data = Request::get(format!("{}/font/{id}.ttf", crate::hub::api_base()))?
+		.timeout(60.0)
+		.data()?;
 	let map = build_map(&data)?;
 	ids.retain(|cached: &String| cached != id);
 	while ids.len() >= CACHE_FONTS {
 		let evicted = ids.remove(0);
 		defaults_set(&format!("{CACHE_MAP_PREFIX}{evicted}"), DefaultValue::Null);
 	}
-	defaults_set(&format!("{CACHE_MAP_PREFIX}{id}"), DefaultValue::String(map.to_stored()));
+	defaults_set(
+		&format!("{CACHE_MAP_PREFIX}{id}"),
+		DefaultValue::String(map.to_stored()),
+	);
 	ids.push(String::from(id));
 	defaults_set(CACHE_IDS_KEY, DefaultValue::String(ids.join(",")));
 	Ok(map)
@@ -105,20 +121,17 @@ pub fn map_for(font_path: &str) -> Result<FontMap> {
 pub fn build_map(ttf: &[u8]) -> Result<FontMap> {
 	let font = Font::parse(ttf).ok_or_else(|| error!("[lightnovel] unreadable font"))?;
 	let mut pairs = Vec::with_capacity(POOL.len());
-	let mut unknown = 0;
+	// A glyph missing from the table means the site changed its base font or its pool.
+	// Nothing reports it: the unmapped characters stay in the text as they came. To check,
+	// count the misses in a diagnostic build and rerun tools/build_glyph_table.py.
 	for &fake in POOL.iter() {
 		let real = font
 			.glyph_id(fake)
 			.and_then(|gid: u16| font.outline(gid, 0))
 			.and_then(|outline: Outline| lookup(&outline));
-		match real {
-			Some(real) => pairs.push((fake, real)),
-			None => unknown += 1,
+		if let Some(real) = real {
+			pairs.push((fake, real));
 		}
-	}
-	if unknown > 0 {
-		// The site changed its base font or its pool: rerun tools/build_glyph_table.py.
-		println!("[lightnovel] {unknown} obfuscated glyphs not in the table");
 	}
 	if pairs.is_empty() {
 		bail!("[lightnovel] font matches no known glyph");
@@ -159,7 +172,11 @@ fn lookup(outline: &Outline) -> Option<u16> {
 	}
 	let h = sig_hash(&outline.ends);
 	let start = SIGS.partition_point(|row: &(u32, u16, u16)| row.0 < h);
-	let rows = &SIGS[start..SIGS[start..].iter().position(|r: &(u32, u16, u16)| r.0 != h).map_or(SIGS.len(), |p| start + p)];
+	let rows = &SIGS[start
+		..SIGS[start..]
+			.iter()
+			.position(|r: &(u32, u16, u16)| r.0 != h)
+			.map_or(SIGS.len(), |p| start + p)];
 	match rows {
 		[] => None,
 		[only] => Some(only.1),
@@ -179,7 +196,9 @@ fn lookup(outline: &Outline) -> Option<u16> {
 						.sum();
 					(distance, row.1)
 				})
-				.min_by(|a: &(f32, u16), b: &(f32, u16)| a.0.partial_cmp(&b.0).unwrap_or(core::cmp::Ordering::Equal))
+				.min_by(|a: &(f32, u16), b: &(f32, u16)| {
+					a.0.partial_cmp(&b.0).unwrap_or(core::cmp::Ordering::Equal)
+				})
 				.map(|(_, real)| real)
 		}
 	}
@@ -198,7 +217,12 @@ fn i16_at(data: &[u8], off: usize) -> Option<i16> {
 }
 
 fn u32_at(data: &[u8], off: usize) -> Option<u32> {
-	Some(u32::from_be_bytes([*data.get(off)?, *data.get(off + 1)?, *data.get(off + 2)?, *data.get(off + 3)?]))
+	Some(u32::from_be_bytes([
+		*data.get(off)?,
+		*data.get(off + 1)?,
+		*data.get(off + 2)?,
+		*data.get(off + 3)?,
+	]))
 }
 
 struct Font<'a> {
@@ -289,7 +313,10 @@ impl<'a> Font<'a> {
 	fn glyph_range(&self, gid: u16) -> Option<(usize, usize)> {
 		let g = usize::from(gid);
 		let (a, b) = if self.long_loca {
-			(u32_at(self.data, self.loca + g * 4)? as usize, u32_at(self.data, self.loca + g * 4 + 4)? as usize)
+			(
+				u32_at(self.data, self.loca + g * 4)? as usize,
+				u32_at(self.data, self.loca + g * 4 + 4)? as usize,
+			)
 		} else {
 			(
 				usize::from(u16_at(self.data, self.loca + g * 2)?) * 2,
@@ -304,7 +331,10 @@ impl<'a> Font<'a> {
 	fn outline(&self, gid: u16, depth: u8) -> Option<Outline> {
 		let (start, end) = self.glyph_range(gid)?;
 		if start == end {
-			return Some(Outline { ends: Vec::new(), points: Vec::new() });
+			return Some(Outline {
+				ends: Vec::new(),
+				points: Vec::new(),
+			});
 		}
 		let d = self.data;
 		let contours = i16_at(d, start)?;
@@ -314,7 +344,10 @@ impl<'a> Font<'a> {
 		if depth > 4 {
 			return None;
 		}
-		let mut out = Outline { ends: Vec::new(), points: Vec::new() };
+		let mut out = Outline {
+			ends: Vec::new(),
+			points: Vec::new(),
+		};
 		let mut p = start + 10;
 		loop {
 			let flags = u16_at(d, p)?;
@@ -329,7 +362,8 @@ impl<'a> Font<'a> {
 				p += 2;
 				v
 			};
-			let f2dot14 = |off: usize| -> Option<f32> { Some(f32::from(i16_at(d, off)?) / 16384.0) };
+			let f2dot14 =
+				|off: usize| -> Option<f32> { Some(f32::from(i16_at(d, off)?) / 16384.0) };
 			let (mut a, mut b, mut c, mut e) = (1.0, 0.0, 0.0, 1.0);
 			if flags & 0x0008 != 0 {
 				a = f2dot14(p)?;
@@ -348,9 +382,13 @@ impl<'a> Font<'a> {
 			}
 			let part = self.outline(child, depth + 1)?;
 			let base = out.points.len() as u16;
-			out.ends.extend(part.ends.iter().map(|end: &u16| end + base));
-			out.points
-				.extend(part.points.iter().map(|&(x, y)| (x * a + y * c + dx, x * b + y * e + dy)));
+			out.ends
+				.extend(part.ends.iter().map(|end: &u16| end + base));
+			out.points.extend(
+				part.points
+					.iter()
+					.map(|&(x, y)| (x * a + y * c + dx, x * b + y * e + dy)),
+			);
 			if flags & 0x0020 == 0 {
 				break;
 			}
@@ -418,7 +456,9 @@ mod tests {
 		// tools/build_glyph_table.py sig_hash((5, 9, 13, 42, 56)), the layout of 的.
 		let ends = [5u16, 9, 13, 42, 56];
 		let h = sig_hash(&ends);
-		assert!(SIGS.iter().any(|row: &(u32, u16, u16)| row.0 == h && row.1 == '的' as u16));
+		assert!(SIGS
+			.iter()
+			.any(|row: &(u32, u16, u16)| row.0 == h && row.1 == '的' as u16));
 	}
 
 	#[aidoku_test]

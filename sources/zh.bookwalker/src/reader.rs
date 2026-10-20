@@ -37,14 +37,23 @@ use aidoku::{
 };
 
 use crate::crypto::decrypt_config;
-use crate::descramble::{page_file_and_tiles_from_info, page_file_name, page_order, parse_page_info};
+use crate::descramble::{
+	content_keys, is_unscrambled_page, page_file_name, page_order, page_tiles, parse_page_info,
+};
 use crate::helper::{BASE_URL, USER_AGENT};
 
 const READER_BASE: &str = "https://pcreader.bookwalker.com.tw";
 const READSTORAGE_HOST: &str = "readstorage.bookwalker.com.tw";
 /// The auth_info fields, in the order the viewer sends them as query parameters.
 const AUTH_FIELDS: [&str; 8] = [
-	"hti", "cfg", "bid", "uuid", "pfCd", "Policy", "Signature", "Key-Pair-Id",
+	"hti",
+	"cfg",
+	"bid",
+	"uuid",
+	"pfCd",
+	"Policy",
+	"Signature",
+	"Key-Pair-Id",
 ];
 
 /// Captures the viewer's own `c` request URL and response body onto separate window
@@ -69,7 +78,8 @@ pub fn get_pages(pid: &str) -> Result<Vec<Page>> {
 		return Ok(pages);
 	}
 	let cap = open_and_capture(pid)?;
-	let c = parse_c(&cap.req, &cap.res).ok_or_else(|| error!("could not read the reader authorisation"))?;
+	let c = parse_c(&cap.req, &cap.res)
+		.ok_or_else(|| error!("could not read the reader authorisation"))?;
 	if c.status != "200" || c.auth_query.is_empty() {
 		// The reader refuses the book. Observed on device 2026-09-23:
 		//   991 = the book is archived on the site (封存), or a just-closed reading
@@ -80,7 +90,6 @@ pub fn get_pages(pid: &str) -> Result<Vec<Page>> {
 		bail!("reader returned status {}", c.status);
 	}
 	store_session(pid, &c, &cap.session);
-	println!("[bookwalker] reader opened through the viewer");
 	load_pages(pid, &c.url, &c.auth_query)
 }
 
@@ -93,16 +102,7 @@ fn reuse_session(pid: &str) -> Option<Vec<Page>> {
 	let url = defaults_get::<String>(&key(pid, "url")).filter(|url| !url.is_empty())?;
 	let position = defaults_get::<String>(&key(pid, "pos"));
 	let auth = refresh_auth(pid, position.as_deref())?;
-	match load_pages(pid, &url, &auth) {
-		Ok(pages) => {
-			println!("[bookwalker] reader reused the stored session, pages={}", pages.len());
-			Some(pages)
-		}
-		Err(error) => {
-			println!("[bookwalker] reader reuse failed after pb, opening the viewer: {error:?}");
-			None
-		}
-	}
+	load_pages(pid, &url, &auth).ok()
 }
 
 /// Fetches and decrypts the configuration under `base_url` with `auth`, and lists the
@@ -113,10 +113,10 @@ fn load_pages(pid: &str, base_url: &str, auth: &str) -> Result<Vec<Page>> {
 		.header("User-Agent", USER_AGENT)
 		.string()?;
 	let data = json_field(&body, "data").ok_or_else(|| error!("configuration_pack had no data"))?;
-	let (json, a, z, t) = decrypt_config(&data).ok_or_else(|| error!("could not decrypt the configuration"))?;
+	let (json, a, z, t) =
+		decrypt_config(&data).ok_or_else(|| error!("could not decrypt the configuration"))?;
 
 	let order = page_order(&json);
-	println!("[bookwalker] reader configuration decoded, pages={}", order.len());
 	// A reopen refreshes through `pb`, which writes the site bookmark at the position it
 	// is given. Until an image request records a real one, the first page stands in, so
 	// that position is at least a page of this book.
@@ -125,19 +125,26 @@ fn load_pages(pid: &str, base_url: &str, auth: &str) -> Result<Vec<Page>> {
 			defaults_set(&key(pid, "pos"), DefaultValue::String(first.clone()));
 		}
 	}
+	let ck = content_keys(&a, &z, &t);
+	let (a_hex, z_hex, t_hex) = (hex(&a), hex(&z), hex(&t));
 	let mut pages: Vec<Page> = Vec::new();
 	for xhtml in order {
 		let Some(info) = parse_page_info(&json, &xhtml) else {
-			continue;
+			// The cover has no tile data and has never been listed. Any other page left out
+			// would read as a shorter book, with the reader's place off from there on.
+			if is_unscrambled_page(&json, &xhtml) {
+				continue;
+			}
+			bail!("no page info for {xhtml}");
 		};
-		let file = page_file_name(&info, &xhtml, &a, &z, &t);
+		let file = page_file_name(&info, &xhtml, &ck);
 		let image_url = format!("{base_url}{xhtml}/{file}.jpeg");
 		let mut ctx = PageContext::new();
 		ctx.insert("pid".into(), pid.into());
-		ctx.insert("xhtml".into(), xhtml.clone());
-		ctx.insert("a".into(), hex(&a));
-		ctx.insert("z".into(), hex(&z));
-		ctx.insert("t".into(), hex(&t));
+		ctx.insert("xhtml".into(), xhtml);
+		ctx.insert("a".into(), a_hex.clone());
+		ctx.insert("z".into(), z_hex.clone());
+		ctx.insert("t".into(), t_hex.clone());
 		ctx.insert("no".into(), info.no.to_string());
 		ctx.insert("sw".into(), info.size_width.to_string());
 		ctx.insert("sh".into(), info.size_height.to_string());
@@ -191,8 +198,8 @@ pub fn image_request(url: String, ctx: Option<&PageContext>) -> Result<Request> 
 // Descramble (called from PageImageProcessor)
 // ---------------------------------------------------------------------------
 
-/// Unscrambles one page from its 32px tiles. Returns `None` if the bytes are not a
-/// JPEG (an expired-auth error body, say) or the context is incomplete.
+/// Unscrambles one page from its 32px tiles. Returns `None` if the body is too small to
+/// be a page (an expired-auth error body, say) or the context is incomplete.
 pub fn descramble(scrambled_bytes: &[u8], ctx: &PageContext) -> Option<ImageRef> {
 	// An expired-auth response is a small XML/HTML error (~1.7 KB); a real page is
 	// far larger. Size, not magic bytes, decides — the app decodes the JPEG and hands
@@ -206,7 +213,7 @@ pub fn descramble(scrambled_bytes: &[u8], ctx: &PageContext) -> Option<ImageRef>
 	let z = unhex(ctx.get("z")?)?;
 	let t = unhex(ctx.get("t")?)?;
 
-	let (_file, tiles) = page_file_and_tiles_from_info(&info, xhtml, &a, &z, &t);
+	let tiles = page_tiles(&info, xhtml, &a, &z, &t);
 	let scrambled = ImageRef::new(scrambled_bytes);
 	let mut canvas = Canvas::new(info.size_width as f32, info.size_height as f32);
 	for tile in tiles {
@@ -214,8 +221,18 @@ pub fn descramble(scrambled_bytes: &[u8], ctx: &PageContext) -> Option<ImageRef>
 		// output, so read src_rect = dest, write dst_rect = src.
 		canvas.copy_image(
 			&scrambled,
-			Rect::new(tile.dest_x as f32, tile.dest_y as f32, tile.width as f32, tile.height as f32),
-			Rect::new(tile.src_x as f32, tile.src_y as f32, tile.width as f32, tile.height as f32),
+			Rect::new(
+				tile.dest_x as f32,
+				tile.dest_y as f32,
+				tile.width as f32,
+				tile.height as f32,
+			),
+			Rect::new(
+				tile.src_x as f32,
+				tile.src_y as f32,
+				tile.width as f32,
+				tile.height as f32,
+			),
 		);
 	}
 	Some(canvas.get_image())
@@ -350,21 +367,20 @@ fn refresh_if_stale(pid: &str, position: Option<&str>) {
 fn refresh_auth(pid: &str, position: Option<&str>) -> Option<String> {
 	set_at(pid, current_date());
 
+	// Sessions stored before 2026-10-20 may hold empty fields, which `pb` cannot use.
+	let stored = |name: &str| defaults_get::<String>(&key(pid, name)).filter(|v| !v.is_empty());
 	let (Some(cid), Some(u1), Some(bid), Some(uuid), Some(session)) = (
-		defaults_get::<String>(&key(pid, "cid")),
-		defaults_get::<String>(&key(pid, "u1")),
-		defaults_get::<String>(&key(pid, "bid")),
-		defaults_get::<String>(&key(pid, "uuid")),
-		defaults_get::<String>(&key(pid, "ses")),
+		stored("cid"),
+		stored("u1"),
+		stored("bid"),
+		stored("uuid"),
+		stored("ses"),
 	) else {
-		println!("[bookwalker] reader auth refresh: no stored session");
 		return None;
 	};
 
 	let position = position.unwrap_or("item/xhtml/p-001.xhtml");
-	let bookmark = format!(
-		"{{\"position\":\"{position}\",\"type\":\"epub\",\"bookmarks\":[]}}"
-	);
+	let bookmark = format!("{{\"position\":\"{position}\",\"type\":\"epub\",\"bookmarks\":[]}}");
 	let body = format!(
 		"cid={cid}&u1={u1}&bookmark={}&timestamp=&BID={bid}",
 		encode_uri_component(&bookmark)
@@ -374,7 +390,10 @@ fn refresh_auth(pid: &str, position: Option<&str>) -> Option<String> {
 	let pb_url = format!("{READER_BASE}/browserWebApi/pb");
 	let response = Request::post(&pb_url).map_err(|_| ()).and_then(|request| {
 		request
-			.header("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+			.header(
+				"Content-Type",
+				"application/x-www-form-urlencoded; charset=UTF-8",
+			)
 			.header("Referer", referer.as_str())
 			.header("Cookie", cookie.as_str())
 			.header("User-Agent", USER_AGENT)
@@ -386,20 +405,12 @@ fn refresh_auth(pid: &str, position: Option<&str>) -> Option<String> {
 		Ok(json) => {
 			let auth = build_auth_query(&json, Some(&uuid));
 			if auth.is_empty() {
-				println!(
-					"[bookwalker] reader auth refresh: pb returned no auth_info, status {}",
-					json_field(&json, "status").unwrap_or_default()
-				);
 				return None;
 			}
 			defaults_set(&key(pid, "auth"), DefaultValue::String(auth.clone()));
-			println!("[bookwalker] reader auth refreshed, authlen={}", auth.len());
 			Some(auth)
 		}
-		Err(_) => {
-			println!("[bookwalker] reader auth refresh: pb request failed");
-			None
-		}
+		Err(_) => None,
 	}
 }
 
@@ -411,7 +422,9 @@ fn refresh_auth(pid: &str, position: Option<&str>) -> Option<String> {
 const PIDS_KEY: &str = "rd_pids";
 /// Every per-book key name written by `store_session`, `set_at`, `load_pages` and
 /// `image_request`.
-const SESSION_FIELDS: [&str; 9] = ["auth", "cid", "u1", "bid", "uuid", "ses", "at", "url", "pos"];
+const SESSION_FIELDS: [&str; 9] = [
+	"auth", "cid", "u1", "bid", "uuid", "ses", "at", "url", "pos",
+];
 
 fn key(pid: &str, name: &str) -> String {
 	format!("rd_{name}_{pid}")
@@ -422,12 +435,30 @@ fn set_at(pid: &str, at: i64) {
 }
 
 fn store_session(pid: &str, c: &CInfo, session: &str) {
-	defaults_set(&key(pid, "auth"), DefaultValue::String(c.auth_query.clone()));
-	defaults_set(&key(pid, "cid"), DefaultValue::String(c.cid.clone()));
-	defaults_set(&key(pid, "u1"), DefaultValue::String(c.u1.clone()));
-	defaults_set(&key(pid, "bid"), DefaultValue::String(c.bid.clone()));
-	defaults_set(&key(pid, "uuid"), DefaultValue::String(c.uuid.clone()));
-	defaults_set(&key(pid, "ses"), DefaultValue::String(session.to_string()));
+	// The images of this open need the auth whatever else was captured.
+	defaults_set(
+		&key(pid, "auth"),
+		DefaultValue::String(c.auth_query.clone()),
+	);
+	// `pb` needs every one of these. A capture missing one leaves none behind, so a
+	// reopen goes through the viewer instead of sending `pb` with an empty field, and an
+	// older session's values are not mixed with this one's.
+	let pb_fields = [
+		("cid", c.cid.as_str()),
+		("u1", c.u1.as_str()),
+		("bid", c.bid.as_str()),
+		("uuid", c.uuid.as_str()),
+		("ses", session),
+	];
+	let complete = pb_fields.iter().all(|(_, value)| !value.is_empty());
+	for (name, value) in pb_fields {
+		let value = if complete {
+			DefaultValue::String(value.to_string())
+		} else {
+			DefaultValue::Null
+		};
+		defaults_set(&key(pid, name), value);
+	}
 	// The signed base URL of the book folder; `reuse_session` needs it to read the
 	// configuration without a second `c`.
 	defaults_set(&key(pid, "url"), DefaultValue::String(c.url.clone()));
@@ -451,15 +482,12 @@ fn remember_pid(pid: &str) {
 /// the previous account (the pcreader `SESSION` cookie above all) survives it.
 pub fn clear_sessions() {
 	let pids = defaults_get::<String>(PIDS_KEY).unwrap_or_default();
-	let mut count = 0;
 	for pid in pids.split(',').filter(|pid| !pid.is_empty()) {
 		for field in SESSION_FIELDS {
 			defaults_set(&key(pid, field), DefaultValue::Null);
 		}
-		count += 1;
 	}
 	defaults_set(PIDS_KEY, DefaultValue::Null);
-	println!("[bookwalker] cleared reader sessions for {count} books");
 }
 
 // ---------------------------------------------------------------------------

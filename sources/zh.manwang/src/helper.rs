@@ -3,7 +3,7 @@ use aidoku::{
 	helpers::uri::encode_uri_component,
 	imports::{
 		html::{Document, Element},
-		net::Request,
+		net::{Request, Response},
 	},
 	prelude::*,
 	Chapter, ContentRating, Manga, MangaPageResult, MangaStatus, Result, Viewer,
@@ -28,8 +28,23 @@ pub fn request(url: &str) -> Result<Request> {
 	Ok(Request::get(url)?)
 }
 
+/// A non-2xx answer is an error, so an error page is never read as an empty list.
 pub fn fetch_html(url: &str) -> Result<Document> {
-	Ok(request(url)?.html()?)
+	read_html(request(url)?.send()?, url)
+}
+
+/// `fetch_html`'s status check, shared with the home's batched rows.
+pub fn read_html(response: Response, url: &str) -> Result<Document> {
+	check_status(&response, url)?;
+	Ok(response.get_html()?)
+}
+
+fn check_status(response: &Response, url: &str) -> Result<()> {
+	let status = response.status_code();
+	if !(200..300).contains(&status) {
+		bail!("[manwang] HTTP {status} for {url}");
+	}
+	Ok(())
 }
 
 /// Where the site sends a removed work: `/book/<id>` answers 302 to this page, which
@@ -38,12 +53,19 @@ pub const DELISTED_PATH: &str = "/err/comic";
 
 /// The details page, or `None` when the site has removed the work.
 pub fn fetch_details_page(key: &str) -> Result<Option<Document>> {
-	let response = Request::get(manga_url(key))?.send()?;
-	let removed = response
+	let url = manga_url(key);
+	let response = Request::get(&url)?.send()?;
+	// The removal address is decided before the status, so a removal page that stops
+	// answering 200 still marks the work removed instead of failing every removed work.
+	if response
 		.get_url()
-		.is_some_and(|url: String| url.contains(DELISTED_PATH));
+		.is_some_and(|url: String| url.contains(DELISTED_PATH))
+	{
+		return Ok(None);
+	}
+	check_status(&response, &url)?;
 	let html = response.get_html()?;
-	Ok((!removed && !is_delisted_page(&html)).then_some(html))
+	Ok((!is_delisted_page(&html)).then_some(html))
 }
 
 /// The removal page, recognised by its text in case the final address is not reported.
@@ -56,7 +78,9 @@ pub fn is_delisted_page(html: &Document) -> bool {
 }
 
 pub fn fetch_text(url: &str) -> Result<String> {
-	Request::get(url)?.string()
+	let response = Request::get(url)?.send()?;
+	check_status(&response, url)?;
+	response.get_string()
 }
 
 pub fn manga_url(key: &str) -> String {
@@ -91,13 +115,19 @@ pub fn browse_url(tag: Option<&str>, by_update: bool, page: i32) -> String {
 
 /// The search has no usable further pages: its pager links carry no page number.
 pub fn search_url(query: &str) -> String {
-	format!("{BASE_URL}/index.php/search?key={}", encode_uri_component(query.trim()))
+	format!(
+		"{BASE_URL}/index.php/search?key={}",
+		encode_uri_component(query.trim())
+	)
 }
 
 /// The number after `/<kind>/` in a link: `/book/503735` → `503735`.
 pub fn id_after(href: &str, kind: &str) -> Option<String> {
 	let (_, rest) = href.split_once(&format!("/{kind}/"))?;
-	let id: String = rest.chars().take_while(|c: &char| c.is_ascii_digit()).collect();
+	let id: String = rest
+		.chars()
+		.take_while(|c: &char| c.is_ascii_digit())
+		.collect();
 	let next = rest[id.len()..].chars().next();
 	(!id.is_empty() && matches!(next, None | Some('/' | '?' | '#'))).then_some(id)
 }
@@ -106,7 +136,10 @@ pub fn id_after(href: &str, kind: &str) -> Option<String> {
 pub fn chapter_keys(href: &str) -> Option<(String, String)> {
 	let (_, rest) = href.split_once("/chapter/")?;
 	let (manga, rest) = rest.split_once('-')?;
-	let chapter: String = rest.chars().take_while(|c: &char| c.is_ascii_digit()).collect();
+	let chapter: String = rest
+		.chars()
+		.take_while(|c: &char| c.is_ascii_digit())
+		.collect();
 	let next = rest[chapter.len()..].chars().next();
 	let valid = !manga.is_empty()
 		&& manga.chars().all(|c: char| c.is_ascii_digit())
@@ -116,7 +149,9 @@ pub fn chapter_keys(href: &str) -> Option<(String, String)> {
 }
 
 fn text_of(el: &Element) -> String {
-	el.text().map(|t: String| String::from(t.trim())).unwrap_or_default()
+	el.text()
+		.map(|t: String| String::from(t.trim()))
+		.unwrap_or_default()
 }
 
 /// The site writes a few covers as `http://www.manwang.net/...`, which only redirects.
@@ -131,12 +166,24 @@ fn cover_url(src: String) -> String {
 /// only evidence; a work without one of them is `Safe`. The lists follow zh.komiic2 and
 /// were chosen by the user (2026-10-09). Each name is in `tags::TAGS`.
 pub const NSFW_TAGS: [&str; 4] = ["本子", "限制", "伦理", "人妻"];
-pub const SUGGESTIVE_TAGS: [&str; 8] = ["橘里橘气", "轻橘", "橘味", "后宫", "耽美", "百合", "血腥", "猎奇"];
+pub const SUGGESTIVE_TAGS: [&str; 8] = [
+	"橘里橘气",
+	"轻橘",
+	"橘味",
+	"后宫",
+	"耽美",
+	"百合",
+	"血腥",
+	"猎奇",
+];
 
 pub fn content_rating<S: AsRef<str>>(tags: &[S]) -> ContentRating {
 	if tags.iter().any(|t: &S| NSFW_TAGS.contains(&t.as_ref())) {
 		ContentRating::NSFW
-	} else if tags.iter().any(|t: &S| SUGGESTIVE_TAGS.contains(&t.as_ref())) {
+	} else if tags
+		.iter()
+		.any(|t: &S| SUGGESTIVE_TAGS.contains(&t.as_ref()))
+	{
 		ContentRating::Suggestive
 	} else {
 		ContentRating::Safe
@@ -161,10 +208,16 @@ fn last_page(html: &Document) -> i32 {
 pub fn parse_manga_list(html: &Document, page: i32) -> MangaPageResult {
 	let mut entries: Vec<Manga> = Vec::new();
 	for card in html.select("a.comic-item").into_iter().flatten() {
-		let Some(key) = card.attr("href").and_then(|href: String| id_after(&href, "book")) else {
+		let Some(key) = card
+			.attr("href")
+			.and_then(|href: String| id_after(&href, "book"))
+		else {
 			continue;
 		};
-		let title = card.select_first("h2").map(|el: Element| text_of(&el)).unwrap_or_default();
+		let title = card
+			.select_first("h2")
+			.map(|el: Element| text_of(&el))
+			.unwrap_or_default();
 		if title.is_empty() || entries.iter().any(|m: &Manga| m.key == key) {
 			continue;
 		}
@@ -233,7 +286,11 @@ pub fn parse_details(html: &Document, key: &str) -> Option<Manga> {
 		_ => MangaStatus::Unknown,
 	};
 	let mut tags: Vec<String> = Vec::new();
-	for link in html.select(".detail-info .tag-list a").into_iter().flatten() {
+	for link in html
+		.select(".detail-info .tag-list a")
+		.into_iter()
+		.flatten()
+	{
 		let name = text_of(&link);
 		if !name.is_empty() && !tags.contains(&name) {
 			tags.push(name);
@@ -269,14 +326,20 @@ pub fn chapter_number(title: &str) -> Option<f32> {
 }
 
 /// The details page lists every chapter, oldest first; the app wants newest first.
+/// An entry without a usable id gives an empty list, which the caller treats as unreadable,
+/// so the library is not handed a list with chapters missing.
 pub fn parse_chapters(html: &Document, manga_key: &str) -> Vec<Chapter> {
 	let mut chapters: Vec<Chapter> = Vec::new();
-	for item in html.select("#j_chapter_list li[data-chapter]").into_iter().flatten() {
+	for item in html
+		.select("#j_chapter_list li[data-chapter]")
+		.into_iter()
+		.flatten()
+	{
 		let Some(key) = item
 			.attr("data-chapter")
 			.filter(|k: &String| !k.is_empty() && k.chars().all(|c: char| c.is_ascii_digit()))
 		else {
-			continue;
+			return Vec::new();
 		};
 		if chapters.iter().any(|c: &Chapter| c.key == key) {
 			continue;
@@ -310,18 +373,27 @@ mod test {
 
 	#[aidoku_test]
 	fn builds_addresses() {
-		assert_eq!(browse_url(None, false, 1), "https://www.manwang.net/category/page/1");
+		assert_eq!(
+			browse_url(None, false, 1),
+			"https://www.manwang.net/category/page/1"
+		);
 		assert_eq!(
 			browse_url(Some("2571"), true, 3),
 			"https://www.manwang.net/category/tags/2571/order/addtime/page/3"
 		);
-		assert_eq!(board_url("week").as_deref(), Some("https://www.manwang.net/custom/week"));
+		assert_eq!(
+			board_url("week").as_deref(),
+			Some("https://www.manwang.net/custom/week")
+		);
 		assert_eq!(board_url("rank"), None);
 		assert_eq!(
 			search_url(" 妖神记 "),
 			"https://www.manwang.net/index.php/search?key=%E5%A6%96%E7%A5%9E%E8%AE%B0"
 		);
-		assert_eq!(chapter_url("503735", "185808"), "https://www.manwang.net/chapter/503735-185808");
+		assert_eq!(
+			chapter_url("503735", "185808"),
+			"https://www.manwang.net/chapter/503735-185808"
+		);
 	}
 
 	#[aidoku_test]
@@ -335,7 +407,10 @@ mod test {
 		);
 		assert_eq!(chapter_keys("/chapter/503735"), None);
 		assert_eq!(chapter_keys("/chapter/abc-1"), None);
-		assert_eq!(cover_url(String::from("http://www.manwang.net/a.jpg")), "https://www.manwang.net/a.jpg");
+		assert_eq!(
+			cover_url(String::from("http://www.manwang.net/a.jpg")),
+			"https://www.manwang.net/a.jpg"
+		);
 	}
 
 	#[aidoku_test]
@@ -350,10 +425,10 @@ mod test {
 		] {
 			let result = parse_manga_list(&doc(fixture), page);
 			assert_eq!((result.entries.len(), result.has_next_page), (count, next));
-			assert!(result
-				.entries
-				.iter()
-				.all(|m: &Manga| m.cover.as_deref().is_some_and(|c: &str| c.starts_with("https://"))));
+			assert!(result.entries.iter().all(|m: &Manga| m
+				.cover
+				.as_deref()
+				.is_some_and(|c: &str| c.starts_with("https://"))));
 		}
 		let first = &parse_manga_list(&doc(include_str!("fixtures/tag_update.html")), 2).entries[0];
 		assert_eq!(first.key, "540213");
@@ -366,8 +441,12 @@ mod test {
 
 	#[aidoku_test]
 	fn recognises_the_removal_page() {
-		assert!(is_delisted_page(&doc(include_str!("fixtures/delisted.html"))));
-		assert!(!is_delisted_page(&doc(include_str!("fixtures/manga_tags.html"))));
+		assert!(is_delisted_page(&doc(include_str!(
+			"fixtures/delisted.html"
+		))));
+		assert!(!is_delisted_page(&doc(include_str!(
+			"fixtures/manga_tags.html"
+		))));
 	}
 
 	#[aidoku_test]
@@ -385,30 +464,45 @@ mod test {
 
 	#[aidoku_test]
 	fn reads_the_details_page() {
-		let done = parse_details(&doc(include_str!("fixtures/manga_done.html")), "515141").expect("details");
+		let done = parse_details(&doc(include_str!("fixtures/manga_done.html")), "515141")
+			.expect("details");
 		assert_eq!(done.title, "此刻全球进入恐怖时代");
 		assert_eq!(done.authors, Some(Vec::from([String::from("黑白茶")])));
 		assert_eq!(done.status, MangaStatus::Completed);
-		assert!(done.description.as_deref().unwrap_or_default().starts_with("诡异复苏一百年"));
-		assert!(done.cover.as_deref().unwrap_or_default().starts_with("https://p6.ecombdimg.com/"));
+		assert!(done
+			.description
+			.as_deref()
+			.unwrap_or_default()
+			.starts_with("诡异复苏一百年"));
+		assert!(done
+			.cover
+			.as_deref()
+			.unwrap_or_default()
+			.starts_with("https://p6.ecombdimg.com/"));
 
 		// Many works have no tags.
 		assert_eq!(done.tags, None);
 
-		let pair = parse_details(&doc(include_str!("fixtures/manga.html")), "516819").expect("details");
+		let pair =
+			parse_details(&doc(include_str!("fixtures/manga.html")), "516819").expect("details");
 		assert_eq!(
 			pair.authors,
 			Some(Vec::from([String::from("尹坤志"), String::from("高孫志")]))
 		);
 
-		let tagged = parse_details(&doc(include_str!("fixtures/manga_tags.html")), "503735").expect("details");
+		let tagged = parse_details(&doc(include_str!("fixtures/manga_tags.html")), "503735")
+			.expect("details");
 		assert_eq!(tagged.title, "妖神记");
 		assert_eq!(tagged.authors, Some(Vec::from([String::from("踏雪动漫")])));
 		assert_eq!(tagged.status, MangaStatus::Ongoing);
 		assert_eq!(tagged.content_rating, ContentRating::Safe);
 		assert_eq!(
 			tagged.tags,
-			Some(Vec::from([String::from("重生"), String::from("逆袭"), String::from("少年")]))
+			Some(Vec::from([
+				String::from("重生"),
+				String::from("逆袭"),
+				String::from("少年")
+			]))
 		);
 		for tag in tagged.tags.unwrap_or_default() {
 			assert!(crate::tags::tag_id(&tag).is_some(), "{tag}");
@@ -424,7 +518,10 @@ mod test {
 		assert_eq!(chapters[1].chapter_number, Some(530.0));
 		assert_eq!(chapters[970].title.as_deref(), Some("致歉信~"));
 		assert_eq!(chapters[967].title.as_deref(), Some("第1回 重生"));
-		assert_eq!(chapters[967].url.as_deref(), Some("https://www.manwang.net/chapter/503735-185808"));
+		assert_eq!(
+			chapters[967].url.as_deref(),
+			Some("https://www.manwang.net/chapter/503735-185808")
+		);
 
 		let chapters = parse_chapters(&doc(include_str!("fixtures/manga_done.html")), "515141");
 		assert!(chapters.len() > 500);
@@ -437,5 +534,17 @@ mod test {
 		assert_eq!(chapter_number("第529话 巨手（下）"), Some(529.0));
 		assert_eq!(chapter_number("第1回 重生"), Some(1.0));
 		assert_eq!(chapter_number("致歉信~"), None);
+	}
+
+	#[aidoku_test]
+	fn a_bad_chapter_id_rejects_the_list() {
+		let html = r#"<ul id="j_chapter_list"><li data-chapter="12"><a title="第1话">第1话</a></li><li data-chapter="x"><a>第2话</a></li></ul>"#;
+		assert!(parse_chapters(&doc(html), "1").is_empty());
+		let html = r#"<ul id="j_chapter_list"><li data-chapter="12"><a title="第1话">第1话</a></li><li data-chapter="13"><a>第2话</a></li></ul>"#;
+		let keys: Vec<String> = parse_chapters(&doc(html), "1")
+			.into_iter()
+			.map(|c| c.key)
+			.collect();
+		assert_eq!(keys, ["13", "12"]);
 	}
 }

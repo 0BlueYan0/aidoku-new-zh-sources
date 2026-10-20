@@ -100,8 +100,9 @@ impl Source for FavComicSource {
 			match filter {
 				FilterValue::Select { id, value } => match id.as_str() {
 					"section" => path = section_path(&value),
-					// "0" is the site's own "all" option, which it expects to be omitted.
-					"tag" | "origin" | "finished" | "free" | "sort" if value != "0" => {
+					// "0", the site's own "all" option, is each select's default, and the app
+					// leaves a filter out while it is at its default.
+					"tag" | "origin" | "finished" | "free" | "sort" => {
 						params.push_str(&format!("&{id}={value}"));
 					}
 					_ => {}
@@ -135,6 +136,10 @@ impl Source for FavComicSource {
 		let base = base_url();
 		// Details and chapters both live on the detail page, so one request covers both.
 		let document = fetch_html(&format!("{base}/comic/detail/{}", manga.key))?;
+		// Any other page would overwrite the stored rating and empty the chapter list.
+		if document.select_first(".info_box h1").is_none() {
+			bail!("[favcomic] {} is not a detail page", manga.key);
+		}
 
 		if needs_details {
 			manga.url = Some(format!("{base}/comic/detail/{}", manga.key));
@@ -142,7 +147,10 @@ impl Source for FavComicSource {
 		}
 
 		if needs_chapters {
-			manga.chapters = Some(parse_chapters(&document, &base));
+			// An empty or partial list keeps the chapters the library already has.
+			if let Some(chapters) = parse_chapters(&document, &base).filter(|c| !c.is_empty()) {
+				manga.chapters = Some(chapters);
+			}
 		}
 
 		Ok(manga)
@@ -210,7 +218,6 @@ impl Home for FavComicSource {
 				section_url(path, 1, "")
 			};
 			let Ok(request) = request(&url) else {
-				println!("[favcomic] home row {id} has a bad url: {url}");
 				continue;
 			};
 			rows.push((id, name));
@@ -235,18 +242,11 @@ impl Home for FavComicSource {
 
 			// One dead section must not blank the whole home screen.
 			let document = match responses.next() {
-				Some(Ok(response)) => match response.get_html() {
+				Some(Ok(response)) => match read_html(response, id) {
 					Ok(document) => document,
-					Err(error) => {
-						println!("[favcomic] home row {id} failed to parse: {error:?}");
-						continue;
-					}
+					Err(_) => continue,
 				},
-				Some(Err(error)) => {
-					println!("[favcomic] home row {id} failed: {error:?}");
-					continue;
-				}
-				None => continue,
+				_ => continue,
 			};
 			let result = if id == "rank" {
 				parse_rank(&document)
@@ -368,7 +368,8 @@ impl NotificationHandler for FavComicSource {
 }
 
 impl DynamicSettings for FavComicSource {
-	/// Adds an account summary under the login setting once someone is signed in.
+	/// Adds the account group under the login setting: the account summary once someone is
+	/// signed in, a hint otherwise.
 	///
 	/// The balance and quota numbers only exist on the site, and a reader who cannot see them
 	/// has no way to tell a working session from a lapsed one.

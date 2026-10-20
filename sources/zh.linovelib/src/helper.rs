@@ -3,7 +3,7 @@ use aidoku::{
 	imports::{
 		defaults::defaults_get,
 		html::{Document, Element, Html},
-		net::Request,
+		net::{Request, Response},
 	},
 	prelude::*,
 	Chapter, Manga, MangaPageResult, MangaStatus, Result, Viewer,
@@ -46,7 +46,11 @@ const USER_AGENT: &str = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)
 /// and an `Accept-Language`, a chapter page holds back most of its paragraphs. The
 /// language must match the site: tw sends a `zh-cn` reader to the Simplified site.
 pub fn request(url: &str) -> Result<Request> {
-	let language = if url.starts_with(CN_URL) { "zh-CN" } else { "zh-TW" };
+	let language = if url.starts_with(CN_URL) {
+		"zh-CN"
+	} else {
+		"zh-TW"
+	};
 	Ok(Request::get(url)?
 		.header("User-Agent", USER_AGENT)
 		.header("Cookie", "night=0")
@@ -59,16 +63,20 @@ pub fn request(url: &str) -> Result<Request> {
 /// answer must not be read as a book with no chapters.
 pub fn fetch_text(url: &str) -> Result<String> {
 	let response = request(url)?.send()?;
+	check_status(&response, url)?;
+	response.get_string()
+}
+
+/// `Err` for anything but a page, so a rate-limit or error answer is never read as content.
+pub fn check_status(response: &Response, url: &str) -> Result<()> {
 	let status = response.status_code();
 	if status == 429 {
-		println!("[linovelib] rate limited: {url}");
-		bail!("[linovelib] rate limited");
+		bail!("[linovelib] rate limited for {url}");
 	}
 	if !(200..300).contains(&status) {
-		println!("[linovelib] HTTP {status}: {url}");
-		bail!("[linovelib] HTTP {status}");
+		bail!("[linovelib] HTTP {status} for {url}");
 	}
-	response.get_string()
+	Ok(())
 }
 
 pub fn fetch_html(url: &str) -> Result<Document> {
@@ -146,7 +154,8 @@ pub fn listing_url(base: &str, id: &str, page: i32) -> Option<String> {
 /// The catalogue's conditions, all combinable. `0` means any.
 pub struct Browse {
 	pub order: String,
-	/// Genre ids; the site takes up to four and lists the books that have all of them.
+	/// Genre ids; the site lists the books that have all of them. Its own page lets a reader
+	/// pick four, but every id the reader picked is sent (it answered five on 2026-10-20).
 	pub tags: Vec<String>,
 	pub isfull: String,
 	pub anime: String,
@@ -173,7 +182,7 @@ pub fn browse_url(base: &str, browse: &Browse, page: i32) -> String {
 	let tags = if browse.tags.is_empty() {
 		String::from("0")
 	} else {
-		browse.tags.iter().take(4).cloned().collect::<Vec<String>>().join("-")
+		browse.tags.join("-")
 	};
 	format!(
 		"{base}/wenku/{}_{tags}_{}_{}_{}_0_0_{}_{page}_0.html",
@@ -183,16 +192,9 @@ pub fn browse_url(base: &str, browse: &Browse, page: i32) -> String {
 
 /// The number in `/novel/<n>.html` (a book) or `/novel/<book>/<n>.html` (a chapter).
 fn number_before(text: &str, suffix: &str) -> Option<String> {
-	let end = text.find(suffix)?;
-	let digits: String = text[..end]
-		.chars()
-		.rev()
-		.take_while(|c: &char| c.is_ascii_digit())
-		.collect::<Vec<char>>()
-		.into_iter()
-		.rev()
-		.collect();
-	(!digits.is_empty()).then_some(digits)
+	let head = &text[..text.find(suffix)?];
+	let number = &head[head.trim_end_matches(|c: char| c.is_ascii_digit()).len()..];
+	(!number.is_empty()).then(|| String::from(number))
 }
 
 /// The book and chapter a link names: `/novel/2.html` → (2, None),
@@ -200,7 +202,10 @@ fn number_before(text: &str, suffix: &str) -> Option<String> {
 pub fn parse_link(url: &str) -> Option<(String, Option<String>)> {
 	let (_, rest) = url.split_once("/novel/")?;
 	let rest = rest.split(['?', '#']).next().unwrap_or(rest);
-	let book: String = rest.chars().take_while(|c: &char| c.is_ascii_digit()).collect();
+	let book: String = rest
+		.chars()
+		.take_while(|c: &char| c.is_ascii_digit())
+		.collect();
 	if book.is_empty() {
 		return None;
 	}
@@ -212,7 +217,10 @@ pub fn parse_link(url: &str) -> Option<(String, Option<String>)> {
 	if tail == "catalog" || tail.starts_with("vol_") {
 		return Some((book, None));
 	}
-	let chapter: String = tail.chars().take_while(|c: &char| c.is_ascii_digit()).collect();
+	let chapter: String = tail
+		.chars()
+		.take_while(|c: &char| c.is_ascii_digit())
+		.collect();
 	let rest = &tail[chapter.len()..];
 	let is_page = rest == ".html"
 		|| rest
@@ -223,7 +231,9 @@ pub fn parse_link(url: &str) -> Option<(String, Option<String>)> {
 }
 
 fn text_of(el: &Element) -> String {
-	el.text().map(|t: String| String::from(t.trim())).unwrap_or_default()
+	el.text()
+		.map(|t: String| String::from(t.trim()))
+		.unwrap_or_default()
 }
 
 fn meta(html: &Document, property: &str) -> Option<String> {
@@ -236,7 +246,11 @@ fn meta(html: &Document, property: &str) -> Option<String> {
 /// The list pages: catalogue, rank boards and search results share `li.book-li` cards.
 pub fn parse_manga_list(html: &Document, base: &str) -> MangaPageResult {
 	let mut entries: Vec<Manga> = Vec::new();
-	for card in html.select("li.book-li > a.book-layout").into_iter().flatten() {
+	for card in html
+		.select("li.book-li > a.book-layout")
+		.into_iter()
+		.flatten()
+	{
 		let Some((key, None)) = card.attr("href").and_then(|href: String| parse_link(&href)) else {
 			continue;
 		};
@@ -250,7 +264,10 @@ pub fn parse_manga_list(html: &Document, base: &str) -> MangaPageResult {
 			.and_then(|img: &Element| img.attr("alt"))
 			.map(|t: String| String::from(t.trim()))
 			.filter(|t: &String| !t.is_empty())
-			.or_else(|| card.select_first(".book-title").map(|el: Element| text_of(&el)))
+			.or_else(|| {
+				card.select_first(".book-title")
+					.map(|el: Element| text_of(&el))
+			})
 			.unwrap_or_default();
 		if title.is_empty() {
 			continue;
@@ -284,9 +301,14 @@ pub fn parse_manga_list(html: &Document, base: &str) -> MangaPageResult {
 /// `第1/10页`.
 fn has_next_page(html: &Document) -> bool {
 	if let Some(current) = html.select_first("#pagelink strong") {
-		return current.next().is_some_and(|el: Element| el.tag_name().as_deref() == Some("a"));
+		return current
+			.next()
+			.is_some_and(|el: Element| el.tag_name().as_deref() == Some("a"));
 	}
-	let text = html.select_first("#pagelink span").map(|el: Element| text_of(&el)).unwrap_or_default();
+	let text = html
+		.select_first("#pagelink span")
+		.map(|el: Element| text_of(&el))
+		.unwrap_or_default();
 	let numbers: Vec<i32> = text
 		.split(|c: char| !c.is_ascii_digit())
 		.filter_map(|n: &str| n.parse().ok())
@@ -352,6 +374,10 @@ pub fn parse_details(html: &Document, key: &str, base: &str) -> Option<Manga> {
 	})
 }
 
+/// Put in front of the title of a chapter the site does not let anyone read: the app shows
+/// one line of title and cuts the end off, so a note at the end could be lost.
+const LOCKED_NOTE: &str = "【站方未開放】";
+
 /// Key of a chapter the catalogue lists without a link (`javascript:cid(1)`, about one
 /// in twenty): its volume and place there. The volume page has the real link, so the
 /// id is looked up when the chapter is opened.
@@ -378,7 +404,10 @@ fn volume_label<'a>(name: &'a str, book: &str) -> &'a str {
 /// The catalogue replaces some characters in titles with capital letters (`臉S` for
 /// `臉色`); those are kept as the site gives them.
 pub fn parse_catalog(html: &Document, key: &str, base: &str) -> Vec<Chapter> {
-	let book = html.select_first("#chapterNav h1").map(|el: Element| text_of(&el)).unwrap_or_default();
+	let book = html
+		.select_first("#chapterNav h1")
+		.map(|el: Element| text_of(&el))
+		.unwrap_or_default();
 	let mut chapters: Vec<Chapter> = Vec::new();
 	for volume in html.select(".catalog-volume").into_iter().flatten() {
 		let bar = volume.select_first("li.chapter-bar");
@@ -386,10 +415,17 @@ pub fn parse_catalog(html: &Document, key: &str, base: &str) -> Vec<Chapter> {
 			.as_ref()
 			.and_then(|bar: &Element| bar.select_first("a"))
 			.and_then(|a: Element| a.attr("href"))
-			.and_then(|href: String| number_before(&href, ".html").filter(|_| href.contains("vol_")));
+			.and_then(|href: String| {
+				number_before(&href, ".html").filter(|_| href.contains("vol_"))
+			});
 		let name = bar.map(|bar: Element| text_of(&bar)).unwrap_or_default();
 		let label = volume_label(&name, &book);
-		for (index, link) in volume.select("li.jsChapter a").into_iter().flatten().enumerate() {
+		for (index, link) in volume
+			.select("li.jsChapter a")
+			.into_iter()
+			.flatten()
+			.enumerate()
+		{
 			let title = text_of(&link);
 			let href = link.attr("href").unwrap_or_default();
 			let (chapter_key, url) = match parse_link(&href) {
@@ -398,21 +434,42 @@ pub fn parse_catalog(html: &Document, key: &str, base: &str) -> Vec<Chapter> {
 					(chapter, url)
 				}
 				_ => match &volume_id {
-					Some(volume_id) => (placeholder_key(volume_id, index), volume_url(base, key, volume_id)),
-					None => continue,
+					Some(volume_id) => (
+						placeholder_key(volume_id, index),
+						volume_url(base, key, volume_id),
+					),
+					// A row with no link in a volume without its own page: the catalogue
+					// is not the shape this reads, so a shorter list must not replace the
+					// library's (an empty one is left alone by `get_manga_update`).
+					None => return Vec::new(),
 				},
 			};
-			let title = if label.is_empty() { title } else { format!("【{label}】{title}") };
+			// A link without text has no title rather than an empty one. The site marks the
+			// chapters it keeps from every reader with a heart (`不相容的異種族妻子們`, all four
+			// checked on 2026-10-20 said `沒有可閱讀的章節`), so the title says so before the
+			// reader opens one and takes the failure for the source's.
+			let title = Some(title)
+				.filter(|title: &String| !title.is_empty())
+				.map(|title| {
+					let note = if title.contains('❤') {
+						LOCKED_NOTE
+					} else {
+						""
+					};
+					if label.is_empty() {
+						format!("{note}{title}")
+					} else {
+						format!("{note}【{label}】{title}")
+					}
+				});
 			chapters.push(Chapter {
 				key: chapter_key,
-				title: Some(title),
+				title,
 				url: Some(url),
+				chapter_number: Some((chapters.len() + 1) as f32),
 				..Default::default()
 			});
 		}
-	}
-	for (number, chapter) in chapters.iter_mut().enumerate() {
-		chapter.chapter_number = Some((number + 1) as f32);
 	}
 	chapters.reverse();
 	chapters
@@ -448,6 +505,40 @@ mod test {
 	use aidoku::imports::html::Html;
 	use aidoku_test::aidoku_test;
 
+	#[aidoku_test]
+	fn a_hearted_chapter_says_the_site_keeps_it() {
+		let html = r#"<div id="chapterNav"><h1>書</h1></div>
+			<div class="catalog-volume"><ul>
+			<li class="chapter-bar"><a href="/novel/2/vol_9.html">書 番外篇</a></li>
+			<li class="chapter-li jsChapter"><a href="/novel/2/403.html">第240話 參戰（2）</a></li>
+			<li class="chapter-li jsChapter"><a href="/novel/2/404.html">❤️第241話 參戰（3）</a></li>
+			</ul></div>"#;
+		let doc = Html::parse_with_url(html, "https://tw.linovelib.com/novel/2/catalog").unwrap();
+		let titles: Vec<Option<String>> = parse_catalog(&doc, "2", TW_URL)
+			.into_iter()
+			.map(|chapter| chapter.title)
+			.collect();
+		assert_eq!(
+			titles,
+			[
+				Some(String::from("【站方未開放】【番外篇】❤️第241話 參戰（3）")),
+				Some(String::from("【番外篇】第240話 參戰（2）")),
+			]
+		);
+	}
+
+	#[aidoku_test]
+	fn an_unreachable_row_rejects_the_catalog() {
+		let html = r#"<div id="chapterNav"><h1>書</h1></div>
+			<div class="catalog-volume"><ul>
+			<li class="chapter-bar"><h3>書 1</h3></li>
+			<li class="chapter-li jsChapter"><a href="/novel/2/403.html">一</a></li>
+			<li class="chapter-li jsChapter"><a href="javascript:cid(1)">二</a></li>
+			</ul></div>"#;
+		let doc = Html::parse_with_url(html, "https://tw.linovelib.com/novel/2/catalog").unwrap();
+		assert!(parse_catalog(&doc, "2", TW_URL).is_empty());
+	}
+
 	fn doc(html: &str) -> Document {
 		Html::parse_with_url(html, TW_URL).expect("parse")
 	}
@@ -473,9 +564,12 @@ mod test {
 		};
 		assert_eq!(
 			browse_url(TW_URL, &browse, 3),
-			"https://tw.linovelib.com/wenku/words_64-48-63-27_5_1_2_0_0_3_3_0.html"
+			"https://tw.linovelib.com/wenku/words_64-48-63-27-26_5_1_2_0_0_3_3_0.html"
 		);
-		assert_eq!(chapter_url(TW_URL, "2", "403"), "https://tw.linovelib.com/novel/2/403.html");
+		assert_eq!(
+			chapter_url(TW_URL, "2", "403"),
+			"https://tw.linovelib.com/novel/2/403.html"
+		);
 	}
 
 	#[aidoku_test]
@@ -488,7 +582,10 @@ mod test {
 			attachment_url(CN_URL, "https://img3.readpai.com/5/5340/333607/321969.jpeg"),
 			"https://www.bilinovel.com/files/article/attachment/5/5340/333607/321969.jpeg"
 		);
-		assert_eq!(attachment_url(TW_URL, "https://example.com/a.jpg"), "https://example.com/a.jpg");
+		assert_eq!(
+			attachment_url(TW_URL, "https://example.com/a.jpg"),
+			"https://example.com/a.jpg"
+		);
 	}
 
 	#[aidoku_test]
@@ -500,7 +597,10 @@ mod test {
 		);
 		assert_eq!(onto_site(cover, CN_URL), cover);
 		assert_eq!(onto_site(&onto_site(cover, TW_URL), CN_URL), cover);
-		assert_eq!(onto_site("https://img3.readpai.com/0/2/1.jpg", TW_URL), "https://img3.readpai.com/0/2/1.jpg");
+		assert_eq!(
+			onto_site("https://img3.readpai.com/0/2/1.jpg", TW_URL),
+			"https://img3.readpai.com/0/2/1.jpg"
+		);
 		assert_eq!(
 			onto_site("https://tw.linovelib.com.evil/a.jpg", CN_URL),
 			"https://tw.linovelib.com.evil/a.jpg"
@@ -511,11 +611,17 @@ mod test {
 	fn reads_links() {
 		let book = |b: &str| Some((String::from(b), None));
 		let chapter = |b: &str, c: &str| Some((String::from(b), Some(String::from(c))));
-		assert_eq!(parse_link("https://tw.linovelib.com/novel/2.html"), book("2"));
+		assert_eq!(
+			parse_link("https://tw.linovelib.com/novel/2.html"),
+			book("2")
+		);
 		assert_eq!(parse_link("/novel/2/catalog"), book("2"));
 		assert_eq!(parse_link("/novel/2/vol_400.html"), book("2"));
 		assert_eq!(parse_link("/novel/2/403.html"), chapter("2", "403"));
-		assert_eq!(parse_link("https://www.bilinovel.com/novel/2/403_2.html?x"), chapter("2", "403"));
+		assert_eq!(
+			parse_link("https://www.bilinovel.com/novel/2/403_2.html?x"),
+			chapter("2", "403")
+		);
 		assert_eq!(parse_link("javascript:cid(1)"), None);
 		assert_eq!(parse_link("/novel/2/403_x.html"), None);
 		assert_eq!(parse_placeholder_key("v418-2"), Some(("418", 2)));
@@ -532,39 +638,63 @@ mod test {
 		] {
 			let result = parse_manga_list(&doc(fixture), TW_URL);
 			assert_eq!((result.entries.len(), result.has_next_page), (count, next));
-			assert!(result.entries.iter().all(|m: &Manga| m.cover.is_some() && m.authors.is_some()));
+			assert!(result
+				.entries
+				.iter()
+				.all(|m: &Manga| m.cover.is_some() && m.authors.is_some()));
 		}
 		let wenku = parse_manga_list(&doc(include_str!("fixtures/wenku.html")), TW_URL);
 		assert_eq!(wenku.entries[1].key, "5407");
 		// The whole title, not the heading cut short.
-		assert_eq!(wenku.entries[1].title, "牢籠中的囚鳥們 ～從【仙境】開始，向命運發起抗爭～");
+		assert_eq!(
+			wenku.entries[1].title,
+			"牢籠中的囚鳥們 ～從【仙境】開始，向命運發起抗爭～"
+		);
 		assert_eq!(
 			wenku.entries[1].cover.as_deref(),
 			Some("https://tw.linovelib.com/files/article/image/5/5407/5407s.jpg?1790926054")
 		);
 		let top = parse_manga_list(&doc(include_str!("fixtures/top.html")), TW_URL);
 		assert_eq!(top.entries[0].title, "無職轉生 ～到了異世界就拿出真本事～");
-		assert_eq!(top.entries[0].authors, Some(Vec::from([String::from("理不盡な孫の手")])));
+		assert_eq!(
+			top.entries[0].authors,
+			Some(Vec::from([String::from("理不盡な孫の手")]))
+		);
 		let search = parse_manga_list(&doc(include_str!("fixtures/search_bili.html")), TW_URL);
 		assert_eq!(search.entries[0].key, "2");
-		assert_eq!(search.entries[0].url.as_deref(), Some("https://tw.linovelib.com/novel/2.html"));
+		assert_eq!(
+			search.entries[0].url.as_deref(),
+			Some("https://tw.linovelib.com/novel/2.html")
+		);
 	}
 
 	#[aidoku_test]
 	fn reads_the_details_page() {
-		let manga = parse_details(&doc(include_str!("fixtures/novel_2.html")), "2", TW_URL).expect("details");
+		let manga = parse_details(&doc(include_str!("fixtures/novel_2.html")), "2", TW_URL)
+			.expect("details");
 		assert_eq!(manga.title, "果然我的青春戀愛喜劇搞錯了");
 		assert_eq!(manga.authors, Some(Vec::from([String::from("渡航")])));
 		assert_eq!(manga.artists, Some(Vec::from([String::from("ponkan⑧")])));
 		assert_eq!(manga.status, MangaStatus::Completed);
 		assert_eq!(
 			manga.tags,
-			Some(Vec::from(["校園", "青春", "戀愛", "歡樂向", "後宮", "妹妹"].map(String::from)))
+			Some(Vec::from(
+				["校園", "青春", "戀愛", "歡樂向", "後宮", "妹妹"].map(String::from)
+			))
 		);
-		assert_eq!(manga.cover.as_deref(), Some("https://tw.linovelib.com/files/article/image/0/2/2s.jpg"));
+		assert_eq!(
+			manga.cover.as_deref(),
+			Some("https://tw.linovelib.com/files/article/image/0/2/2s.jpg")
+		);
 		let description = manga.description.unwrap_or_default();
-		assert!(description.starts_with("「我的青春怎麼會變成這樣！」\n高中生八幡生性彆扭"), "{description}");
-		assert!(description.ends_with("\n\n別名：我的青春戀愛物語果然有問題。, 春物"), "{description}");
+		assert!(
+			description.starts_with("「我的青春怎麼會變成這樣！」\n高中生八幡生性彆扭"),
+			"{description}"
+		);
+		assert!(
+			description.ends_with("\n\n別名：我的青春戀愛物語果然有問題。, 春物"),
+			"{description}"
+		);
 	}
 
 	#[aidoku_test]
@@ -575,20 +705,45 @@ mod test {
 		assert_eq!(oldest.key, "109088");
 		assert_eq!(oldest.title.as_deref(), Some("【1】插圖"));
 		assert_eq!(oldest.chapter_number, Some(1.0));
-		assert_eq!(oldest.url.as_deref(), Some("https://tw.linovelib.com/novel/2/109088.html"));
+		assert_eq!(
+			oldest.url.as_deref(),
+			Some("https://tw.linovelib.com/novel/2/109088.html")
+		);
 		assert_eq!(chapters[0].chapter_number, Some(282.0));
 		// The unlinked third chapter of volume 418 points at its volume page.
-		let unlinked = chapters.iter().find(|c: &&Chapter| c.key == "v418-2").expect("placeholder");
-		assert_eq!(unlinked.title.as_deref(), Some("【3】① 於是平冢靜點燃新的戰火"));
-		assert_eq!(unlinked.url.as_deref(), Some("https://tw.linovelib.com/novel/2/vol_418.html"));
-		assert_eq!(chapters.iter().filter(|c: &&Chapter| c.key.starts_with('v')).count(), 12);
-		assert!(chapters.iter().any(|c: &Chapter| c.title.as_deref() == Some("【14.5】① 無論何時，比企谷小町都想要一個嫂子。")));
+		let unlinked = chapters
+			.iter()
+			.find(|c: &&Chapter| c.key == "v418-2")
+			.expect("placeholder");
+		assert_eq!(
+			unlinked.title.as_deref(),
+			Some("【3】① 於是平冢靜點燃新的戰火")
+		);
+		assert_eq!(
+			unlinked.url.as_deref(),
+			Some("https://tw.linovelib.com/novel/2/vol_418.html")
+		);
+		assert_eq!(
+			chapters
+				.iter()
+				.filter(|c: &&Chapter| c.key.starts_with('v'))
+				.count(),
+			12
+		);
+		assert!(chapters.iter().any(|c: &Chapter| c.title.as_deref()
+			== Some("【14.5】① 無論何時，比企谷小町都想要一個嫂子。")));
 	}
 
 	#[aidoku_test]
 	fn finds_a_chapter_on_its_volume_page() {
-		assert_eq!(volume_chapter(&doc(include_str!("fixtures/vol_418.html")), 2).as_deref(), Some("420"));
-		assert_eq!(volume_chapter(&doc(include_str!("fixtures/vol_418.html")), 99), None);
+		assert_eq!(
+			volume_chapter(&doc(include_str!("fixtures/vol_418.html")), 2).as_deref(),
+			Some("420")
+		);
+		assert_eq!(
+			volume_chapter(&doc(include_str!("fixtures/vol_418.html")), 99),
+			None
+		);
 	}
 
 	#[aidoku_test]
@@ -600,6 +755,9 @@ mod test {
 		assert_eq!(last, "/novel/2/404.html");
 		assert!(!is_same_chapter(last, "2", "403"));
 		assert!(!is_same_chapter("/novel/2/4030_2.html", "2", "403"));
-		assert_eq!(next_page_url(include_str!("fixtures/chapter_bili_403.html")), Some("/novel/2/403_2.html"));
+		assert_eq!(
+			next_page_url(include_str!("fixtures/chapter_bili_403.html")),
+			Some("/novel/2/403_2.html")
+		);
 	}
 }

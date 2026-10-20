@@ -163,7 +163,6 @@ pub fn login(email: &str, password: &str) -> LoginOutcome {
 		.body(body.as_bytes())
 		.send()
 	else {
-		println!("[komiic] login request failed to send");
 		return LoginOutcome::Unreachable;
 	};
 
@@ -185,10 +184,8 @@ pub fn login(email: &str, password: &str) -> LoginOutcome {
 
 	let challenged = response.get_header("www-authenticate").is_some();
 	if status == 200 || status == 401 || challenged {
-		println!("[komiic] login rejected (HTTP {status})");
 		LoginOutcome::Rejected
 	} else {
-		println!("[komiic] login failed with HTTP {status}");
 		LoginOutcome::Unreachable
 	}
 }
@@ -210,18 +207,15 @@ pub fn refresh_token() -> Option<String> {
 		LoginOutcome::Token(token) => {
 			set_token(&token);
 			mark_session_verified();
-			println!("[komiic] auth token renewed");
 			Some(token)
 		}
 		LoginOutcome::Rejected => {
-			println!("[komiic] stored password rejected, manual re-login required");
 			clear_auth();
 			set_needs_relogin();
 			None
 		}
 		LoginOutcome::Unreachable => {
 			set_timestamp(FAILED_AT_KEY, now);
-			println!("[komiic] silent re-login failed, will retry later");
 			None
 		}
 	}
@@ -236,7 +230,6 @@ pub fn recover_session() -> Option<String> {
 	}
 	// A token without credentials was stored by a version that did not keep
 	// them; nothing can renew it.
-	println!("[komiic] session expired and no credentials stored, manual re-login required");
 	clear_auth();
 	set_needs_relogin();
 	None
@@ -266,7 +259,6 @@ pub fn ensure_session() {
 	};
 
 	if is_auth_error(status, &body) {
-		println!("[komiic] session expired, recovering");
 		if recover_session().is_none() && self::token().is_some() {
 			// Renewal is backing off; do not probe on every request meanwhile.
 			set_timestamp(NEXT_CHECK_KEY, now + FAIL_BACKOFF);

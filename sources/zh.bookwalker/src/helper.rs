@@ -39,7 +39,7 @@ impl BookCard {
 		self.product_ids.last()
 	}
 
-	pub fn to_manga(&self) -> Option<Manga> {
+	pub fn into_manga(self) -> Option<Manga> {
 		let key = self.key()?;
 		let url = match &self.series_id {
 			Some(id) => format!("{BASE_URL}/bookcase/available_book_list/buy?s={id}"),
@@ -49,10 +49,10 @@ impl BookCard {
 			key,
 			title: series_title(&self.name),
 			cover: self.cover_product().map(|pid| cover_url(pid)),
-			authors: (!self.authors.is_empty()).then(|| self.authors.clone()),
-			url: Some(url),
-			tags: self.category.clone().map(|c| vec![c]),
 			viewer: viewer_for(self.category.as_deref()),
+			authors: (!self.authors.is_empty()).then_some(self.authors),
+			url: Some(url),
+			tags: self.category.map(|c| vec![c]),
 			..Default::default()
 		})
 	}
@@ -185,8 +185,14 @@ mod tests {
 
 	#[aidoku_test]
 	fn strips_volume_suffix() {
-		assert_eq!(series_title("ATRI -My Dear Moments- (4)"), "ATRI -My Dear Moments-");
-		assert_eq!(series_title("靠死亡遊戲混飯吃。 (12)"), "靠死亡遊戲混飯吃。");
+		assert_eq!(
+			series_title("ATRI -My Dear Moments- (4)"),
+			"ATRI -My Dear Moments-"
+		);
+		assert_eq!(
+			series_title("靠死亡遊戲混飯吃。 (12)"),
+			"靠死亡遊戲混飯吃。"
+		);
 		assert_eq!(series_title("沒有集數的書"), "沒有集數的書");
 		assert_eq!(series_title("書名 (上)"), "書名 (上)");
 		assert_eq!(volume_number("敗北女角太多了！@comic (3)"), Some(3.0));
@@ -196,10 +202,19 @@ mod tests {
 	#[aidoku_test]
 	fn reads_query_values() {
 		assert_eq!(
-			query_value("https://www.bookwalker.com.tw/bookcase/available_book_list?s=29604", "s"),
+			query_value(
+				"https://www.bookwalker.com.tw/bookcase/available_book_list?s=29604",
+				"s"
+			),
 			Some("29604".to_string())
 		);
-		assert_eq!(query_value("https://www.bookwalker.com.tw/browserViewer/266673/read", "s"), None);
+		assert_eq!(
+			query_value(
+				"https://www.bookwalker.com.tw/browserViewer/266673/read",
+				"s"
+			),
+			None
+		);
 	}
 
 	/// Structure copied from the live bookcase (`buy?sd=1`, 2026-09-23), names replaced.
@@ -249,14 +264,14 @@ mod tests {
 	fn parses_bookcase_cards() {
 		let html = aidoku::imports::html::Html::parse(BOOKCASE).unwrap();
 		assert!(is_bookcase(&html));
-		let cards = parse_bookcase(&html);
+		let mut cards = parse_bookcase(&html);
 		assert_eq!(cards.len(), 2);
 
 		let series = &cards[0];
 		assert_eq!(series.key(), Some("s29604".to_string()));
 		assert_eq!(series.product_ids, ["100", "200", "250", "300"]);
 		assert_eq!(series.authors, ["作者一", "作者二"]);
-		let manga = series.to_manga().unwrap();
+		let manga = cards.remove(0).into_manga().unwrap();
 		assert_eq!(manga.title, "系列甲");
 		assert_eq!(
 			manga.cover.as_deref(),
@@ -264,7 +279,7 @@ mod tests {
 		);
 		assert_eq!(manga.viewer, Viewer::RightToLeft);
 
-		let single = &cards[1];
+		let single = &cards[0];
 		assert_eq!(single.key(), Some("p266673".to_string()));
 		assert_eq!(single.category.as_deref(), Some("輕小說"));
 		let chapter = single.to_chapter().unwrap();
@@ -288,7 +303,10 @@ mod tests {
 
 	#[aidoku_test]
 	fn login_page_is_not_a_bookcase() {
-		let html = aidoku::imports::html::Html::parse("<html><body><form id=\"login\"></form></body></html>").unwrap();
+		let html = aidoku::imports::html::Html::parse(
+			"<html><body><form id=\"login\"></form></body></html>",
+		)
+		.unwrap();
 		assert!(!is_bookcase(&html));
 		assert!(parse_bookcase(&html).is_empty());
 	}

@@ -7,6 +7,7 @@
 //! invalidate each other. Wrong credentials still answer HTTP 200, with
 //! `Success: false` (`Status` 401 wrong password, 404 no such user).
 
+use crate::hub::api_base;
 use aidoku::{
 	alloc::{format, string::ToString, String},
 	imports::{
@@ -14,12 +15,9 @@ use aidoku::{
 		net::Request,
 		std::current_date,
 	},
-	prelude::*,
 };
-use crate::hub::api_base;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-
 
 const EMAIL_KEY: &str = "auth_email";
 const PASSWORD_HASH_KEY: &str = "auth_password_hash";
@@ -54,7 +52,9 @@ pub(crate) fn set_string(key: &str, value: &str) {
 
 /// Unix seconds stored as a string, so the value cannot overflow an i32.
 pub(crate) fn timestamp(key: &str) -> i64 {
-	get_string(key).and_then(|value: String| value.parse::<i64>().ok()).unwrap_or(0)
+	get_string(key)
+		.and_then(|value: String| value.parse::<i64>().ok())
+		.unwrap_or(0)
 }
 
 pub(crate) fn set_timestamp(key: &str, value: i64) {
@@ -140,7 +140,6 @@ fn post_json(url: &str, body: &Value) -> ApiReply {
 		.body(body.to_string().as_bytes())
 		.send()
 	else {
-		println!("[lightnovel] {url} could not be sent");
 		return ApiReply::Unreachable;
 	};
 	let status = response.status_code();
@@ -149,14 +148,19 @@ fn post_json(url: &str, body: &Value) -> ApiReply {
 		.ok()
 		.and_then(|text: String| serde_json::from_str::<Value>(&text).ok());
 	let Some(value) = value else {
-		println!("[lightnovel] {url} answered HTTP {status} without JSON");
-		return if status == 401 || status == 404 { ApiReply::Refused(i64::from(status)) } else { ApiReply::Unreachable };
+		return if status == 401 || status == 404 {
+			ApiReply::Refused(i64::from(status))
+		} else {
+			ApiReply::Unreachable
+		};
 	};
 	if value.get("Success").and_then(Value::as_bool) == Some(true) {
 		return ApiReply::Ok(value);
 	}
-	let site_status = value.get("Status").and_then(Value::as_i64).unwrap_or(i64::from(status));
-	println!("[lightnovel] {url} refused: HTTP {status}, Status {site_status}, {:?}", value.get("Msg"));
+	let site_status = value
+		.get("Status")
+		.and_then(Value::as_i64)
+		.unwrap_or(i64::from(status));
 	if status >= 500 || site_status >= 500 {
 		ApiReply::Unreachable
 	} else {
@@ -187,8 +191,10 @@ pub fn login(email: &str, password_hash: &str) -> LoginOutcome {
 	let body = serde_json::json!({ "email": email, "password": password_hash });
 	match post_json(&format!("{}/api/user/login", api_base()), &body) {
 		ApiReply::Ok(envelope) => {
-			let (Some(access), Some(refresh)) = (payload_str(&envelope, "Token"), payload_str(&envelope, "RefreshToken")) else {
-				println!("[lightnovel] login answered without tokens");
+			let (Some(access), Some(refresh)) = (
+				payload_str(&envelope, "Token"),
+				payload_str(&envelope, "RefreshToken"),
+			) else {
 				return LoginOutcome::Unreachable;
 			};
 			set_string(EMAIL_KEY, email);
@@ -237,7 +243,10 @@ pub fn access_token() -> Option<String> {
 	// the hub answers unauthorized, and the caller would refresh anyway after a wasted
 	// round trip. The cost is a few small POSTs when the login row's `refreshes` starts
 	// several entry points at once.
-	match post_json(&format!("{}/api/user/refresh_token", api_base()), &serde_json::json!({ "token": refresh })) {
+	match post_json(
+		&format!("{}/api/user/refresh_token", api_base()),
+		&serde_json::json!({ "token": refresh }),
+	) {
 		ApiReply::Ok(envelope) => {
 			// A bare string in `Response`, or `Token` there or at the top level.
 			let access = envelope
@@ -250,15 +259,12 @@ pub fn access_token() -> Option<String> {
 				store_access(&access);
 				return Some(access);
 			}
-			println!("[lightnovel] refresh answered without a token");
 			set_timestamp(FAILED_AT_KEY, now);
 			return None;
 		}
 		// The refresh token is dead only on these (Novella's client-core, and the site's
 		// own `ki` table); anything else keeps it for the next try.
-		ApiReply::Refused(401 | 404 | -100) => {
-			println!("[lightnovel] refresh token rejected, logging in again");
-		}
+		ApiReply::Refused(401 | 404 | -100) => {}
 		ApiReply::Refused(_) | ApiReply::Unreachable => {
 			set_timestamp(FAILED_AT_KEY, now);
 			return None;
@@ -266,18 +272,12 @@ pub fn access_token() -> Option<String> {
 	}
 
 	let (Some(email), Some(hash)) = (get_string(EMAIL_KEY), get_string(PASSWORD_HASH_KEY)) else {
-		println!("[lightnovel] no stored password, manual re-login required");
 		set_needs_relogin();
 		return None;
 	};
 	match login(&email, &hash) {
-		LoginOutcome::LoggedIn => {
-			println!("[lightnovel] logged in again with the stored password");
-			get_string(ACCESS_KEY)
-		}
+		LoginOutcome::LoggedIn => get_string(ACCESS_KEY),
 		LoginOutcome::Rejected => {
-			println!("[lightnovel] stored password rejected, manual re-login required");
-			let email = email.to_string();
 			clear_auth();
 			// Keep the email so the footer can still say which account it was.
 			set_string(EMAIL_KEY, &email);
@@ -285,7 +285,6 @@ pub fn access_token() -> Option<String> {
 			None
 		}
 		LoginOutcome::Unreachable => {
-			println!("[lightnovel] login again failed, will retry later");
 			set_timestamp(FAILED_AT_KEY, now);
 			None
 		}

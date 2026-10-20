@@ -17,7 +17,10 @@ use crate::font::FontMap;
 /// Characters Markdown would treat as syntax at the start of or inside a paragraph.
 fn escape(text: &str, out: &mut String) {
 	for ch in text.chars() {
-		if matches!(ch, '\\' | '`' | '*' | '_' | '[' | ']' | '#' | '<' | '>' | '|' | '~') {
+		if matches!(
+			ch,
+			'\\' | '`' | '*' | '_' | '[' | ']' | '#' | '<' | '>' | '|' | '~'
+		) {
 			out.push('\\');
 		}
 		out.push(ch);
@@ -55,7 +58,9 @@ fn decode_entities(text: &str) -> String {
 			"apos" => Some('\''),
 			"nbsp" => Some(' '),
 			_ if name.starts_with("#x") || name.starts_with("#X") => {
-				u32::from_str_radix(&name[2..], 16).ok().and_then(char::from_u32)
+				u32::from_str_radix(&name[2..], 16)
+					.ok()
+					.and_then(char::from_u32)
 			}
 			_ if name.starts_with('#') => name[1..].parse::<u32>().ok().and_then(char::from_u32),
 			_ => None,
@@ -95,7 +100,9 @@ fn attribute(tag: &str, attr: &str) -> Option<String> {
 		};
 		let end = match quoted {
 			Some(q) => body.find(q).unwrap_or(body.len()),
-			None => body.find(|c: char| c.is_ascii_whitespace() || c == '>').unwrap_or(body.len()),
+			None => body
+				.find(|c: char| c.is_ascii_whitespace() || c == '>')
+				.unwrap_or(body.len()),
 		};
 		return Some(decode_entities(&body[..end]));
 	}
@@ -185,7 +192,11 @@ fn render(html: &str, map: Option<&FontMap>, markdown: bool) -> String {
 			.find(|c: char| c.is_ascii_whitespace() || c == '/')
 			.unwrap_or(name_part.len());
 		let name = name_part[..name_end].to_ascii_lowercase();
-		let void = self_closing || matches!(name.as_str(), "img" | "image" | "br" | "hr" | "meta" | "link" | "input");
+		let void = self_closing
+			|| matches!(
+				name.as_str(),
+				"img" | "image" | "br" | "hr" | "meta" | "link" | "input"
+			);
 
 		if let Some((skip_name, depth)) = skipping.as_mut() {
 			if name == *skip_name && !void {
@@ -206,9 +217,17 @@ fn render(html: &str, map: Option<&FontMap>, markdown: bool) -> String {
 			}
 			continue;
 		}
-		let class = if closing { None } else { attribute(tag, "class") };
+		let class = if closing {
+			None
+		} else {
+			attribute(tag, "class")
+		};
 		match (name.as_str(), closing) {
-			("a", false) => footnote_link = class.as_deref().is_some_and(|c: &str| c.contains("duokan-footnote")),
+			("a", false) => {
+				footnote_link = class
+					.as_deref()
+					.is_some_and(|c: &str| c.contains("duokan-footnote"))
+			}
 			("a", true) => footnote_link = false,
 			("img" | "image", false) => {
 				let src = attribute(tag, "src").or_else(|| attribute(tag, "xlink:href"));
@@ -216,7 +235,12 @@ fn render(html: &str, map: Option<&FontMap>, markdown: bool) -> String {
 					continue;
 				};
 				// Footnote markers are a small note.png inside the reference link.
-				if footnote_link || src.split(['?', '#']).next().is_some_and(|p: &str| p.ends_with("/note.png")) {
+				if footnote_link
+					|| src
+						.split(['?', '#'])
+						.next()
+						.is_some_and(|p: &str| p.ends_with("/note.png"))
+				{
 					out.push_str("〔註〕");
 					continue;
 				}
@@ -245,8 +269,11 @@ fn render(html: &str, map: Option<&FontMap>, markdown: bool) -> String {
 					out.push_str("### ");
 				}
 			}
-			("p" | "div" | "li" | "blockquote" | "tr" | "hr" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6"
-			| "section" | "article" | "aside", _) => paragraph_break(&mut out),
+			(
+				"p" | "div" | "li" | "blockquote" | "tr" | "hr" | "h1" | "h2" | "h3" | "h4" | "h5"
+				| "h6" | "section" | "article" | "aside",
+				_,
+			) => paragraph_break(&mut out),
 			_ => {}
 		}
 	}
@@ -260,18 +287,26 @@ fn is_hidden(name: &str, tag: &str) -> bool {
 	if matches!(name, "style" | "script" | "rp" | "head" | "title") {
 		return true;
 	}
-	if attribute(tag, "hidden").is_some() || tag.split_ascii_whitespace().any(|w: &str| w == "hidden") {
+	if attribute(tag, "hidden").is_some()
+		|| tag.split_ascii_whitespace().any(|w: &str| w == "hidden")
+	{
 		return true;
 	}
 	attribute(tag, "style").is_some_and(|style: String| {
-		let compact: String = style.chars().filter(|c: &char| !c.is_whitespace()).collect::<String>().to_ascii_lowercase();
+		let compact: String = style
+			.chars()
+			.filter(|c: &char| !c.is_whitespace())
+			.collect::<String>()
+			.to_ascii_lowercase();
 		compact.contains("display:none") || compact.contains("visibility:hidden")
 	})
 }
 
 /// Heading classes of the site's EPUB imports: `pius1`, `pius2`, `ph4`.
 fn is_heading_class(class: &str) -> bool {
-	class.split_ascii_whitespace().any(|c: &str| matches!(c, "pius1" | "pius2" | "ph4"))
+	class
+		.split_ascii_whitespace()
+		.any(|c: &str| matches!(c, "pius1" | "pius2" | "ph4"))
 }
 
 /// Old covers and images carry an unencoded BlurHash in `placeholder`, which may
@@ -318,9 +353,15 @@ mod tests {
 	#[aidoku_test]
 	fn entities_next_to_multibyte_text() {
 		// A bare `&` followed by CJK text used to be sliced at byte 12, inside a character.
-		assert_eq!(decode_entities("第一&二三四五六七八九"), "第一&二三四五六七八九");
+		assert_eq!(
+			decode_entities("第一&二三四五六七八九"),
+			"第一&二三四五六七八九"
+		);
 		assert_eq!(decode_entities("A&B"), "A&B");
-		assert_eq!(decode_entities("&amp;二三&lt;四&#x4e00;&#20108;"), "&二三<四一二");
+		assert_eq!(
+			decode_entities("&amp;二三&lt;四&#x4e00;&#20108;"),
+			"&二三<四一二"
+		);
 		assert_eq!(decode_entities("尾巴&"), "尾巴&");
 		assert_eq!(decode_entities("&unknownentity;字"), "&unknownentity;字");
 	}
@@ -328,9 +369,13 @@ mod tests {
 	#[aidoku_test]
 	fn introduction_to_plain_text() {
 		let html = "<p>关于她们的命运与抗争的故事。</p><p>——“我并不是英雄”</p>";
-		assert_eq!(plain_text(html), "关于她们的命运与抗争的故事。\n\n——“我并不是英雄”");
+		assert_eq!(
+			plain_text(html),
+			"关于她们的命运与抗争的故事。\n\n——“我并不是英雄”"
+		);
 		// Text the author wrote keeps its backslashes and asterisks.
-		let html = "<p class=\"pius1\">C:\\書*名*</p><img src=\"https://img.lightnovel.life/a.jpg\">";
+		let html =
+			"<p class=\"pius1\">C:\\書*名*</p><img src=\"https://img.lightnovel.life/a.jpg\">";
 		assert_eq!(plain_text(html), "C:\\書*名*");
 	}
 }

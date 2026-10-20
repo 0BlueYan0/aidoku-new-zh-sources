@@ -44,7 +44,10 @@ fn page_of(entries: Vec<Manga>) -> MangaPageResult {
 }
 
 fn list_page(url: &str) -> Result<MangaPageResult> {
-	Ok(page_of(parse_manga_list(&fetch_checked(url, fetch_flight)?)))
+	Ok(page_of(parse_manga_list(&fetch_checked(
+		url,
+		fetch_flight,
+	)?)))
 }
 
 fn category_page(id: &str, page: i32) -> Result<MangaPageResult> {
@@ -68,8 +71,8 @@ fn home_row_url(id: &str) -> String {
 }
 
 /// The flight payloads of `urls` in order, fetched together. `None` for one that could
-/// not be sent or read, which `fetch_checked` would also have given up on without asking
-/// again.
+/// not be sent or read or was answered with a non-2xx status, which `fetch_checked` would
+/// also have given up on without asking again.
 fn send_flights(urls: &[String]) -> Vec<Option<String>> {
 	let mut built = Vec::new();
 	let mut requests: Vec<Request> = Vec::new();
@@ -79,10 +82,7 @@ fn send_flights(urls: &[String]) -> Vec<Option<String>> {
 				built.push(true);
 				requests.push(request);
 			}
-			Err(error) => {
-				println!("[vomicmh] ERROR building the request for {url}: {error:?}");
-				built.push(false);
-			}
+			Err(_) => built.push(false),
 		}
 	}
 	let mut responses = Vec::new();
@@ -93,26 +93,14 @@ fn send_flights(urls: &[String]) -> Vec<Option<String>> {
 	}
 
 	let mut responses = responses.into_iter();
-	urls.iter()
-		.zip(built)
-		.map(|(url, built)| {
+	built
+		.into_iter()
+		.zip(urls)
+		.map(|(built, url)| {
 			if !built {
 				return None;
 			}
-			match responses.next() {
-				Some(Ok(response)) => match response.get_string() {
-					Ok(payload) => Some(payload),
-					Err(error) => {
-						println!("[vomicmh] ERROR reading {url}: {error:?}");
-						None
-					}
-				},
-				Some(Err(error)) => {
-					println!("[vomicmh] ERROR fetching {url}: {error:?}");
-					None
-				}
-				None => None,
-			}
+			read_body(responses.next()?.ok()?, url).ok()
 		})
 		.collect()
 }
@@ -139,10 +127,12 @@ impl Source for VomicSource {
 				// `filters.json` supplies `ids`, so `value` is the category id.
 				FilterValue::Select { id, value } if id == "category" => category = value,
 				// A tapped tag: the category's name as the app shows it.
-				FilterValue::Select { id, value } if id == "genre" => match category_id(value.trim()) {
-					Some(id) => category = String::from(id),
-					None => return Ok(empty_page()),
-				},
+				FilterValue::Select { id, value } if id == "genre" => {
+					match category_id(value.trim()) {
+						Some(id) => category = String::from(id),
+						None => return Ok(empty_page()),
+					}
+				}
 				_ => {}
 			}
 		}
@@ -167,23 +157,24 @@ impl Source for VomicSource {
 		// A page the site failed to build leaves what the app has untouched, so a library
 		// refresh during a failure neither stops nor wipes a work's chapters.
 		if needs_details {
-			match fetch_checked(&url, fetch_html).map(|html: String| parse_details(&html, &manga.key)) {
-				Ok(Some(details)) => {
-					let chapters = manga.chapters.take();
-					manga = details;
-					manga.chapters = chapters;
-					send_partial_result(&manga);
-				}
-				Ok(None) => println!("[vomicmh] ERROR no details on the page of {}", manga.key),
-				Err(error) => println!("[vomicmh] ERROR details of {}: {error:?}", manga.key),
+			if let Ok(Some(details)) =
+				fetch_checked(&url, fetch_html).map(|html: String| parse_details(&html, &manga.key))
+			{
+				let chapters = manga.chapters.take();
+				manga = details;
+				manga.chapters = chapters;
+				send_partial_result(&manga);
 			}
 		}
 
 		if needs_chapters {
-			match fetch_checked(&url, fetch_flight) {
-				// An empty list is the site's answer for works it keeps to its own app.
-				Ok(payload) => manga.chapters = Some(parse_chapters(&payload, &manga.key)),
-				Err(error) => println!("[vomicmh] ERROR chapters of {}: {error:?}", manga.key),
+			// An empty list is the site's answer for works it keeps to its own app, so it
+			// is kept, but only when the payload is this work's details page.
+			if let Some(chapters) = fetch_checked(&url, fetch_flight)
+				.ok()
+				.and_then(|payload: String| parse_chapters(&payload, &manga.key))
+			{
+				manga.chapters = Some(chapters);
 			}
 		}
 
@@ -195,12 +186,11 @@ impl Source for VomicSource {
 			bail!("[vomicmh] reading needs a login");
 		};
 		let original = wants_original_images();
-		let mut pages = parse_pages(&fetch_reader(&manga.key, &chapter.key, &token)?, original);
+		let mut pages = parse_pages(&fetch_reader(&manga.key, &chapter.key, &token)?, original)?;
 		// Asked once more, as with category pages; an empty answer is also what a token
 		// the site no longer accepts gets, which the settings page reports.
 		if pages.is_empty() {
-			println!("[vomicmh] no images for chapter {}, asking again", chapter.key);
-			pages = parse_pages(&fetch_reader(&manga.key, &chapter.key, &token)?, original);
+			pages = parse_pages(&fetch_reader(&manga.key, &chapter.key, &token)?, original)?;
 		}
 		if pages.is_empty() {
 			bail!("[vomicmh] no images for chapter {}", chapter.key);
@@ -247,9 +237,6 @@ impl Home for VomicSource {
 			.collect();
 		if !retry.is_empty() {
 			let again: Vec<String> = retry.iter().map(|&index| urls[index].clone()).collect();
-			for url in &again {
-				println!("[vomicmh] the site failed to build {url}, asking again");
-			}
 			for (index, payload) in retry.into_iter().zip(send_flights(&again)) {
 				payloads[index] = payload;
 			}
@@ -262,7 +249,6 @@ impl Home for VomicSource {
 				_ => Vec::new(),
 			};
 			if entries.is_empty() {
-				println!("[vomicmh] ERROR loading the {id} row");
 				continue;
 			}
 			send_partial_result(&HomePartialResult::Component(HomeComponent {
@@ -286,7 +272,9 @@ impl Home for VomicSource {
 impl DeepLinkHandler for VomicSource {
 	fn handle_deep_link(&self, url: String) -> Result<Option<DeepLinkResult>> {
 		if let [key] = ids_after(&url, "detail")[..] {
-			return Ok(Some(DeepLinkResult::Manga { key: String::from(key) }));
+			return Ok(Some(DeepLinkResult::Manga {
+				key: String::from(key),
+			}));
 		}
 		if let [manga_key, key] = ids_after(&url, "chapter")[..] {
 			return Ok(Some(DeepLinkResult::Chapter {
@@ -331,7 +319,9 @@ impl DynamicSettings for VomicSource {
 			Some(token) => match auth::account(&token) {
 				auth::Account::Name(name) => format!("已登入：{name}"),
 				auth::Account::Rejected => String::from(INVALID_HINT),
-				auth::Account::Unreachable => String::from("已登入（暫時讀不到帳號資訊，請檢查網路）"),
+				auth::Account::Unreachable => {
+					String::from("已登入（暫時讀不到帳號資訊，請檢查網路）")
+				}
 			},
 		};
 		Ok(vec![GroupSetting {
@@ -364,7 +354,10 @@ mod test {
 	fn listing_names_match_source_json() {
 		let json = include_str!("../res/source.json");
 		for (title, id) in HOME_ROWS {
-			assert!(json.contains(&format!("\"id\": \"{id}\",\n\t\t\t\"name\": \"{title}\"")), "{id}");
+			assert!(
+				json.contains(&format!("\"id\": \"{id}\",\n\t\t\t\"name\": \"{title}\"")),
+				"{id}"
+			);
 		}
 	}
 

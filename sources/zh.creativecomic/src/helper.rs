@@ -290,8 +290,7 @@ pub fn encode_component(value: &str) -> String {
 	const HEX: &[u8; 16] = b"0123456789ABCDEF";
 	let mut out = String::new();
 	for byte in value.as_bytes() {
-		let unreserved = byte.is_ascii_alphanumeric()
-			|| matches!(byte, b'-' | b'_' | b'.' | b'~');
+		let unreserved = byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~');
 		if unreserved {
 			out.push(*byte as char);
 		} else {
@@ -325,9 +324,9 @@ fn status_for(completed: i32) -> MangaStatus {
 	}
 }
 
-fn names(list: &[Named]) -> Vec<String> {
-	list.iter()
-		.filter_map(|item| item.name.clone())
+fn names(list: Vec<Named>) -> Vec<String> {
+	list.into_iter()
+		.filter_map(|item| item.name)
 		.filter(|name| !name.is_empty())
 		.collect()
 }
@@ -335,22 +334,22 @@ fn names(list: &[Named]) -> Vec<String> {
 impl Book {
 	pub fn into_manga(self) -> Manga {
 		let key = format!("{}", self.id);
-		let authors = names(&self.author);
+		let authors = names(self.author);
 
 		// The genre doubles as a tag so it is searchable alongside the free-form ones.
 		let mut tags = Vec::new();
-		if let Some(name) = self.genre.as_ref().and_then(|genre| genre.name.clone()) {
+		if let Some(name) = self.genre.and_then(|genre| genre.name) {
 			tags.push(name);
 		}
-		tags.extend(names(&self.tags));
+		tags.extend(names(self.tags));
 
 		Manga {
-			key: key.clone(),
+			url: Some(manga_url(&key)),
+			key,
 			title: self.name.unwrap_or_default(),
 			cover: self.image1,
 			authors: (!authors.is_empty()).then_some(authors),
 			description: self.description,
-			url: Some(manga_url(&key)),
 			tags: (!tags.is_empty()).then_some(tags),
 			status: status_for(self.completed),
 			content_rating: ContentRating::Safe,
@@ -364,14 +363,14 @@ impl Book {
 impl RankEntry {
 	pub fn into_manga(self) -> Manga {
 		let key = format!("{}", self.book);
-		let authors = names(&self.author);
+		let authors = names(self.author);
 		Manga {
-			key: key.clone(),
+			url: Some(manga_url(&key)),
+			key,
 			title: self.name.unwrap_or_default(),
 			cover: self.image1,
 			authors: (!authors.is_empty()).then_some(authors),
 			description: self.description,
-			url: Some(manga_url(&key)),
 			status: status_for(self.completed),
 			content_rating: ContentRating::Safe,
 			viewer: viewer_for(self.class),
@@ -414,8 +413,7 @@ pub fn chapter_number(vol_name: Option<&str>) -> Option<f32> {
 			if character.is_ascii_digit() {
 				index += 1;
 			} else if character == '.'
-				&& !seen_dot
-				&& characters.get(index + 1).is_some_and(char::is_ascii_digit)
+				&& !seen_dot && characters.get(index + 1).is_some_and(char::is_ascii_digit)
 			{
 				seen_dot = true;
 				index += 1;

@@ -1,0 +1,235 @@
+name: Check PR
+on:
+  pull_request:
+    paths:
+      - "sources/**"
+      - "templates/**"
+      - "rustfmt.toml"
+      - ".github/actions/install-aidoku-cli/**"
+      - ".github/workflows/pr.yaml"
+      - ".github/workflows/supporting/**"
+      - "scripts/check-pr.sh"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+# The three jobs of Aidoku-Community/sources (.github/workflows/pr.yaml at 4f8922e), so a PR
+# that passes here passes there; scripts/check-pr.sh runs the same checks locally. Only
+# deviations: a PR that touches no source (workflow or rustfmt.toml only) skips verify
+# instead of failing on an unmatched glob, and directories without a Cargo.toml are skipped.
+jobs:
+  verify-sources:
+    name: Verify sources
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Get changed files
+        id: files
+        uses: Ana06/get-changed-files@v2.3.0
+        with:
+          format: json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.99.0"
+          targets: wasm32-unknown-unknown
+
+      - name: Cache rust stuff
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            sources/**/target
+            templates/**/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - uses: ./.github/actions/install-aidoku-cli
+
+      - name: Build sources
+        env:
+          CHANGED_FILES: ${{ steps.files.outputs.added_modified }}
+          RUSTFLAGS: -Dwarnings
+        run: |
+          set -euo pipefail
+
+          readarray -t sources < <(
+            jq -r '.[]' <<< "$CHANGED_FILES" |
+              awk -F/ 'NF >= 2 && $1 == "sources" { print $1 "/" $2 }' |
+              sort -u
+          )
+
+          for source in "${sources[@]}"; do
+            [[ -f "$source/Cargo.toml" ]] || continue
+            echo "::group::Packaging $source"
+            (
+              cd "$source"
+              aidoku package
+            )
+            echo "::endgroup::"
+          done
+
+      - name: Test if sources are valid
+        run: |
+          shopt -s nullglob
+          packages=(sources/*/package.aix)
+          (( ${#packages[@]} )) || { echo "No source changed."; exit 0; }
+          aidoku verify "${packages[@]}"
+
+      - name: Flatten packages directory
+        run: |
+          shopt -s nullglob
+          packages=(sources/*/package.aix)
+          (( ${#packages[@]} )) || exit 0
+          aidoku build "${packages[@]}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages
+          path: public/sources/*.aix
+          if-no-files-found: ignore
+
+  rust-lint:
+    name: Rust formatting and Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Get changed files
+        id: files
+        uses: Ana06/get-changed-files@v2.3.0
+        with:
+          format: json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.99.0"
+          components: clippy, rustfmt
+          targets: wasm32-unknown-unknown
+
+      - name: Cache rust stuff
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            sources/**/target
+            templates/**/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Lint changed crates
+        env:
+          CHANGED_FILES: ${{ steps.files.outputs.added_modified }}
+        run: |
+          set -uo pipefail
+
+          failed=0
+          readarray -t changed_files < <(jq -r '.[]' <<< "$CHANGED_FILES")
+          readarray -t crates < <(
+            printf '%s\n' "${changed_files[@]}" |
+              cut -d/ -f1-2 |
+              sort -u |
+              grep -E '^(sources|templates)/' || true
+          )
+
+          for crate in "${crates[@]}"; do
+            [[ -f "$crate/Cargo.toml" ]] || continue
+            echo "::group::Linting $crate"
+
+            if ! (
+              cd "$crate"
+              cargo fmt --check
+            ); then
+              failed=1
+              echo "::error file=$crate/Cargo.toml,title=Rust formatting::Run cargo fmt in $crate."
+            fi
+
+            annotations_file="$(mktemp "$RUNNER_TEMP/clippy.XXXXXX.json")"
+
+            if ! (
+              cd "$crate"
+              cargo clippy \
+                --target wasm32-unknown-unknown \
+                --message-format=json \
+                -- -D warnings
+            ) > "$annotations_file"; then
+              failed=1
+            fi
+
+            if ! jq \
+              --arg WORKING_DIRECTORY "$crate" \
+              -rsf "$GITHUB_WORKSPACE/.github/workflows/supporting/annotations.jq" \
+              "$annotations_file"; then
+              echo "::error file=$crate/Cargo.toml,title=Clippy annotation processing failed::Unable to process Clippy JSON output."
+              failed=1
+            fi
+
+            rm -f "$annotations_file"
+
+            echo "::endgroup::"
+          done
+
+          if (( failed )); then
+            exit 1
+          fi
+
+  json-format:
+    name: JSON formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Get changed files
+        id: files
+        uses: Ana06/get-changed-files@v2.3.0
+        with:
+          format: json
+
+      - name: Check JSON format
+        env:
+          CHANGED_FILES: ${{ steps.files.outputs.added_modified }}
+        run: |
+          set -uo pipefail
+
+          failed=0
+
+          readarray -t sources < <(
+            jq -r '.[]' <<< "$CHANGED_FILES" |
+              awk -F/ 'NF >= 2 && $1 == "sources" { print $1 "/" $2 }' |
+              sort -u
+          )
+
+          for source in "${sources[@]}"; do
+            [[ -d "$source/res" ]] || continue
+
+            echo "::group::Checking JSON in $source/res"
+
+            while IFS= read -r -d '' file; do
+              if [[ -s "$file" && -n "$(tail -c 1 "$file")" ]]; then
+                line="$(awk 'END { print NR }' "$file")"
+                echo "::error file=$file,line=$line,title=Missing final newline::JSON files must end with a newline."
+                failed=1
+              fi
+
+              while IFS=: read -r line _; do
+                echo "::error file=$file,line=$line,title=Invalid JSON indentation::Use tabs for indentation; do not use spaces."
+                failed=1
+              done < <(grep -nE $'^\t* +' "$file" || true)
+            done < <(find "$source/res" -type f -name '*.json' -print0)
+
+            echo "::endgroup::"
+          done
+
+          if (( failed )); then
+            exit 1
+          fi

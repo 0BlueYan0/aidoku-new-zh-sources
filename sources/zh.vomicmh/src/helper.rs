@@ -4,7 +4,7 @@ use aidoku::{
 	imports::{
 		defaults::defaults_get,
 		html::{Element, Html},
-		net::Request,
+		net::{Request, Response},
 		std::parse_date,
 	},
 	prelude::*,
@@ -90,17 +90,31 @@ pub fn category_url(id: &str, page: i32) -> String {
 
 /// The search matches titles and authors loosely and does not say when it runs out.
 pub fn search_url(query: &str, page: i32) -> String {
-	format!("{BASE_URL}/so/key/{}/{page}", encode_uri_component(query.trim()))
+	format!(
+		"{BASE_URL}/so/key/{}/{page}",
+		encode_uri_component(query.trim())
+	)
 }
 
 pub fn fetch_html(url: &str) -> Result<String> {
-	Request::get(url)?.string()
+	read_body(Request::get(url)?.send()?, url)
+}
+
+/// The body of a response the site answered with 2xx. A 502 or 503 page has neither the
+/// site's own failure wording nor its works, so read as a page it would pass for an empty
+/// list or a work without chapters.
+pub fn read_body(response: Response, url: &str) -> Result<String> {
+	let status = response.status_code();
+	if !(200..300).contains(&status) {
+		bail!("[vomicmh] HTTP {status} for {url}");
+	}
+	response.get_string()
 }
 
 /// The React Server Components payload of a page: the same data the HTML is rendered
 /// from, as plain JSON rows instead of strings escaped inside `<script>` tags.
 pub fn fetch_flight(url: &str) -> Result<String> {
-	flight_request(url)?.string()
+	read_body(flight_request(url)?.send()?, url)
 }
 
 /// Build-only half of `fetch_flight`, so `get_home` can batch rows with `send_all`.
@@ -123,13 +137,13 @@ pub fn site_failed(payload: &str) -> bool {
 }
 
 /// A page fetched with `fetch`, asked once more when the site failed to build it. `Err`
-/// when it failed both times, so a failure is not shown as an empty result.
+/// when it failed both times, or when either request fails or is answered with a
+/// non-2xx status (not asked again), so a failure is not shown as an empty result.
 pub fn fetch_checked(url: &str, fetch: fn(&str) -> Result<String>) -> Result<String> {
 	let payload = fetch(url)?;
 	if !site_failed(&payload) {
 		return Ok(payload);
 	}
-	println!("[vomicmh] the site failed to build {url}, asking again");
 	let payload = fetch(url)?;
 	if site_failed(&payload) {
 		bail!("[vomicmh] the site failed to build {url}");
@@ -140,10 +154,12 @@ pub fn fetch_checked(url: &str, fetch: fn(&str) -> Result<String>) -> Result<Str
 /// A reader page's payload. The site renders the page list only for a request that
 /// carries the login token as the `_token` cookie; a bearer header is not read there.
 pub fn fetch_reader(manga_key: &str, key: &str, token: &str) -> Result<String> {
-	Request::get(chapter_url(manga_key, key))?
+	let url = chapter_url(manga_key, key);
+	let response = Request::get(&url)?
 		.header("RSC", "1")
 		.header("Cookie", &format!("_token={token}"))
-		.string()
+		.send()?;
+	read_body(response, &url)
 }
 
 /// `original` drops the site's resize-and-WebP suffix from page addresses.
@@ -158,7 +174,10 @@ pub fn ids_after<'a>(url: &'a str, kind: &str) -> Vec<&'a str> {
 	};
 	let rest = rest.split(['?', '#']).next().unwrap_or("");
 	let ids: Vec<&str> = rest.split('/').filter(|s: &&str| !s.is_empty()).collect();
-	if ids.iter().all(|s: &&str| s.bytes().all(|b: u8| b.is_ascii_digit())) {
+	if ids
+		.iter()
+		.all(|s: &&str| s.bytes().all(|b: u8| b.is_ascii_digit()))
+	{
 		ids
 	} else {
 		Vec::new()
@@ -405,7 +424,9 @@ fn parse_manga(obj: &str) -> Option<Manga> {
 		authors: json_string(obj, "author").map(|a: String| vec![String::from(a.trim())]),
 		description: json_string(obj, "intro").map(|d: String| String::from(d.trim())),
 		tags: (!tags.is_empty()).then_some(tags),
-		status: json_string(obj, "process").map(|p: String| status_of(&p)).unwrap_or_default(),
+		status: json_string(obj, "process")
+			.map(|p: String| status_of(&p))
+			.unwrap_or_default(),
 		content_rating: ContentRating::Safe,
 		viewer: match json_string(obj, "dis_type").as_deref() {
 			Some("页漫") => Viewer::RightToLeft,
@@ -426,7 +447,9 @@ pub fn parse_manga_list(payload: &str) -> Vec<Manga> {
 }
 
 fn text_of(el: &Element) -> String {
-	el.text().map(|t: String| String::from(t.trim())).unwrap_or_default()
+	el.text()
+		.map(|t: String| String::from(t.trim()))
+		.unwrap_or_default()
 }
 
 /// The status in the page's structured data, which the payload carries as
@@ -520,15 +543,29 @@ fn site_date(raw: &str) -> Option<i64> {
 }
 
 /// A work's chapters from its details page payload, newest first. The site lists them
-/// oldest first. Works the site keeps to its own app have none on the web.
-pub fn parse_chapters(payload: &str, manga_key: &str) -> Vec<Chapter> {
-	let mut chapters: Vec<Chapter> = objects_with(payload, &["car_id", "img_num", "group_name"])
+/// oldest first. Works the site keeps to its own app have none on the web, so an empty
+/// list is a real answer; `None` when the payload is not this work's details page (it
+/// lacks the work's chapter list entry) or when one of this work's chapters has no usable id, so
+/// the library keeps its chapters instead of a shortened list.
+pub fn parse_chapters(payload: &str, manga_key: &str) -> Option<Vec<Chapter>> {
+	if !payload.contains(&format!("\"id\":\"{manga_key}\",\"list\":")) {
+		return None;
+	}
+	let chapters = objects_with(payload, &["car_id", "img_num", "group_name"])
 		.into_iter()
+		.rev()
 		.filter(|obj: &&str| json_field(obj, "car_id") == Some(manga_key))
-		.filter_map(|obj: &str| {
-			let key = String::from(json_field(obj, "id")?);
+		.map(|obj: &str| {
+			// `objects_with` only yields objects with an `id`, so the failure to catch is
+			// one that is not a chapter id (`null`, a string), not a missing field.
+			let key = json_field(obj, "id")
+				.filter(|id: &&str| !id.is_empty() && id.bytes().all(|b: u8| b.is_ascii_digit()))
+				.map(String::from)?;
 			let title = json_string(obj, "name").map(|t: String| String::from(t.trim()));
-			let (chapter, volume) = title.as_deref().map(chapter_numbers).unwrap_or((None, None));
+			let (chapter, volume) = title
+				.as_deref()
+				.map(chapter_numbers)
+				.unwrap_or((None, None));
 			// Only the `单行本` group holds volumes; elsewhere `第3卷` would number an extra.
 			let is_volume = json_string(obj, "group_name").as_deref() == Some("单行本");
 			Some(Chapter {
@@ -543,9 +580,8 @@ pub fn parse_chapters(payload: &str, manga_key: &str) -> Vec<Chapter> {
 				..Default::default()
 			})
 		})
-		.collect();
-	chapters.reverse();
-	chapters
+		.collect::<Option<Vec<Chapter>>>()?;
+	Some(chapters)
 }
 
 // ---------------------------------------------------------------------------
@@ -560,20 +596,27 @@ pub fn original_image(url: &str) -> &str {
 
 /// The page images of a reader page. Empty when the page was rendered without a valid
 /// login: the site then sends `"chapterData":{}`, even for a token it does not accept.
-pub fn parse_pages(payload: &str, original: bool) -> Vec<Page> {
+/// `Err` when an entry has no usable address, which would otherwise shorten the chapter.
+pub fn parse_pages(payload: &str, original: bool) -> Result<Vec<Page>> {
 	let Some((_, rest)) = payload.split_once("\"chapterData\":") else {
-		return Vec::new();
+		return Ok(Vec::new());
 	};
 	let data = &rest[..value_end(rest.as_bytes(), 0)];
 	json_field(data, "img_list")
 		.map(json_items)
 		.unwrap_or_default()
 		.into_iter()
-		.filter_map(|img: &str| json_string(img, "url"))
-		.filter(|url: &String| url.starts_with("http"))
-		.map(|url: String| Page {
-			content: PageContent::url(if original { String::from(original_image(&url)) } else { url }),
-			..Default::default()
+		.enumerate()
+		.map(|(index, img)| match json_string(img, "url") {
+			Some(url) if url.starts_with("http") => Ok(Page {
+				content: PageContent::url(if original {
+					String::from(original_image(&url))
+				} else {
+					url
+				}),
+				..Default::default()
+			}),
+			_ => Err(error!("[vomicmh] page {} has no image address", index + 1)),
 		})
 		.collect()
 }
@@ -590,8 +633,14 @@ mod test {
 			search_url(" 哪咤 ", 1),
 			"https://www.vomicmh.com/so/key/%E5%93%AA%E5%92%A4/1"
 		);
-		assert_eq!(chapter_url("27035", "25743"), "https://www.vomicmh.com/chapter/27035/25743");
-		assert_eq!(ids_after("https://www.vomicmh.com/detail/27035", "detail"), vec!["27035"]);
+		assert_eq!(
+			chapter_url("27035", "25743"),
+			"https://www.vomicmh.com/chapter/27035/25743"
+		);
+		assert_eq!(
+			ids_after("https://www.vomicmh.com/detail/27035", "detail"),
+			vec!["27035"]
+		);
 		assert_eq!(
 			ids_after("https://www.vomicmh.com/chapter/27035/25743?x=1", "chapter"),
 			vec!["27035", "25743"]
@@ -638,7 +687,14 @@ mod test {
 			let entries = parse_manga_list(fixture);
 			assert_eq!(entries.len(), count);
 			for manga in &entries {
-				assert!(manga.cover.as_deref().is_some_and(|c: &str| c.contains("sign=")), "{}", manga.title);
+				assert!(
+					manga
+						.cover
+						.as_deref()
+						.is_some_and(|c: &str| c.contains("sign=")),
+					"{}",
+					manga.title
+				);
 				assert_eq!(manga.url, Some(manga_url(&manga.key)));
 			}
 		}
@@ -651,9 +707,16 @@ mod test {
 		assert_eq!(first.viewer, Viewer::Webtoon);
 		assert_eq!(
 			first.tags,
-			Some(vec![String::from("冒險"), String::from("動作"), String::from("奇幻")])
+			Some(vec![
+				String::from("冒險"),
+				String::from("動作"),
+				String::from("奇幻")
+			])
 		);
-		assert!(first.description.as_deref().is_some_and(|d: &str| d.starts_with("苍茫大地上")));
+		assert!(first
+			.description
+			.as_deref()
+			.is_some_and(|d: &str| d.starts_with("苍茫大地上")));
 		// A page-by-page work, and a nested `id` that is not a work.
 		let paged = parse_manga_list(
 			"x:{\"id\":12418,\"name\":\"你喜欢哪对情侣？\",\"cover\":\"https://c\",\"process\":\"已完结\",\"dis_type\":\"页漫\",\"cat\":[{\"id\":13,\"name\":\"百合\"}]}",
@@ -671,12 +734,25 @@ mod test {
 		assert_eq!(manga.authors, Some(vec![String::from("藤奇")]));
 		assert_eq!(
 			manga.tags,
-			Some(vec![String::from("冒險"), String::from("動作"), String::from("奇幻")])
+			Some(vec![
+				String::from("冒險"),
+				String::from("動作"),
+				String::from("奇幻")
+			])
 		);
 		assert_eq!(manga.status, MangaStatus::Ongoing);
-		assert!(manga.cover.as_deref().is_some_and(|c: &str| c.contains("-cover?sign=")));
-		assert!(manga.description.as_deref().is_some_and(|d: &str| d.starts_with("苍茫大地上")));
-		assert_eq!(manga.url.as_deref(), Some("https://www.vomicmh.com/detail/27035"));
+		assert!(manga
+			.cover
+			.as_deref()
+			.is_some_and(|c: &str| c.contains("-cover?sign=")));
+		assert!(manga
+			.description
+			.as_deref()
+			.is_some_and(|d: &str| d.starts_with("苍茫大地上")));
+		assert_eq!(
+			manga.url.as_deref(),
+			Some("https://www.vomicmh.com/detail/27035")
+		);
 	}
 
 	#[aidoku_test]
@@ -684,7 +760,7 @@ mod test {
 		assert!(site_failed(include_str!("fixtures/cate_failed.flight")));
 		assert!(site_failed(include_str!("fixtures/detail_failed.flight")));
 		assert!(parse_manga_list(include_str!("fixtures/cate_failed.flight")).is_empty());
-		assert!(parse_chapters(include_str!("fixtures/detail_failed.flight"), "27035").is_empty());
+		assert!(parse_chapters(include_str!("fixtures/detail_failed.flight"), "27035").is_none());
 		for fixture in [
 			include_str!("fixtures/home.flight"),
 			include_str!("fixtures/latest.flight"),
@@ -707,22 +783,32 @@ mod test {
 			PageContent::Url(url, _) => url.clone(),
 			_ => String::new(),
 		};
-		let pages = parse_pages(include_str!("fixtures/reader.flight"), false);
+		let pages = parse_pages(include_str!("fixtures/reader.flight"), false).expect("pages");
 		assert_eq!(pages.len(), 22);
-		assert!(url(&pages[0]).starts_with("https://cdm.vomicer.com/27035/68d4e911030bd140a0c6a72569da49ee-1?sign="));
+		assert!(url(&pages[0])
+			.starts_with("https://cdm.vomicer.com/27035/68d4e911030bd140a0c6a72569da49ee-1?sign="));
 		assert!(url(&pages[0]).ends_with("&imageMogr2/thumbnail/800x/format/webp/quality/75"));
 		assert!(url(&pages[21]).contains("-22?sign="));
-		let original = parse_pages(include_str!("fixtures/reader.flight"), true);
+		let original = parse_pages(include_str!("fixtures/reader.flight"), true).expect("pages");
 		assert_eq!(original.len(), 22);
 		assert!(!url(&original[0]).contains("imageMogr2"));
 		assert!(url(&original[0]).contains("&t="));
-		assert!(parse_pages(include_str!("fixtures/reader_bad_token.flight"), false).is_empty());
-		assert!(parse_pages(include_str!("fixtures/reader_logged_out.flight"), false).is_empty());
+		assert!(
+			parse_pages(include_str!("fixtures/reader_bad_token.flight"), false)
+				.is_ok_and(|p| p.is_empty())
+		);
+		assert!(
+			parse_pages(include_str!("fixtures/reader_logged_out.flight"), false)
+				.is_ok_and(|p| p.is_empty())
+		);
 		assert_eq!(
 			original_image("https://cdm.vomicer.com/x-1?sign=a&t=1&imageMogr2/thumbnail/800x"),
 			"https://cdm.vomicer.com/x-1?sign=a&t=1"
 		);
-		assert_eq!(original_image("https://cdm.vomicer.com/x-1?sign=a&t=1"), "https://cdm.vomicer.com/x-1?sign=a&t=1");
+		assert_eq!(
+			original_image("https://cdm.vomicer.com/x-1?sign=a&t=1"),
+			"https://cdm.vomicer.com/x-1?sign=a&t=1"
+		);
 	}
 
 	#[aidoku_test]
@@ -738,24 +824,64 @@ mod test {
 	}
 
 	#[aidoku_test]
+	fn a_chapter_without_an_id_rejects_the_list() {
+		let page = |second: &str| {
+			format!(
+				r#"{{"id":"27035","list":[]}}{{"id":1,"car_id":27035,"img_num":3,"group_name":"正篇","name":"1话"}}{second}"#
+			)
+		};
+		let good = page(r#"{"id":2,"car_id":27035,"img_num":3,"group_name":"正篇","name":"2话"}"#);
+		assert_eq!(parse_chapters(&good, "27035").map(|c| c.len()), Some(2));
+		let bad =
+			page(r#"{"id":null,"car_id":27035,"img_num":3,"group_name":"正篇","name":"2话"}"#);
+		assert!(parse_chapters(&bad, "27035").is_none());
+	}
+
+	#[aidoku_test]
 	fn parses_chapters() {
-		let chapters = parse_chapters(include_str!("fixtures/detail.flight"), "27035");
+		let chapters =
+			parse_chapters(include_str!("fixtures/detail.flight"), "27035").expect("details");
+		// Another work's key or a page that is not a details page yields no list.
+		assert!(parse_chapters(include_str!("fixtures/detail.flight"), "19701").is_none());
+		assert!(parse_chapters(include_str!("fixtures/latest.flight"), "81736").is_none());
 		let keys: Vec<&str> = chapters.iter().map(|c: &Chapter| c.key.as_str()).collect();
 		assert_eq!(keys, ["25740", "25741", "25742", "25743"]);
 		assert_eq!(chapters[0].title.as_deref(), Some("3.2话"));
 		assert_eq!(chapters[0].chapter_number, Some(3.2));
-		assert_eq!(chapters[3].url.as_deref(), Some("https://www.vomicmh.com/chapter/27035/25743"));
+		assert_eq!(
+			chapters[3].url.as_deref(),
+			Some("https://www.vomicmh.com/chapter/27035/25743")
+		);
 		// 2024-11-18 05:42:13 China time.
 		assert_eq!(chapters[3].date_uploaded, Some(1731879733));
 
-		let volumes = parse_chapters(include_str!("fixtures/detail_volumes.flight"), "56100");
+		let volumes = parse_chapters(include_str!("fixtures/detail_volumes.flight"), "56100")
+			.expect("details");
 		assert_eq!(volumes.len(), 36);
 		assert_eq!(volumes[0].title.as_deref(), Some("27话"));
-		let find = |title: &str| volumes.iter().find(|c: &&Chapter| c.title.as_deref() == Some(title)).unwrap();
-		assert_eq!((find("2卷").chapter_number, find("2卷").volume_number), (None, Some(2.0)));
-		assert_eq!((find("第3卷番外").chapter_number, find("第3卷番外").volume_number), (None, None));
+		let find = |title: &str| {
+			volumes
+				.iter()
+				.find(|c: &&Chapter| c.title.as_deref() == Some(title))
+				.unwrap()
+		};
+		assert_eq!(
+			(find("2卷").chapter_number, find("2卷").volume_number),
+			(None, Some(2.0))
+		);
+		assert_eq!(
+			(
+				find("第3卷番外").chapter_number,
+				find("第3卷番外").volume_number
+			),
+			(None, None)
+		);
 		assert_eq!(find("14话").chapter_number, Some(14.0));
 
-		assert!(parse_chapters(include_str!("fixtures/detail_app_only.flight"), "19701").is_empty());
+		assert_eq!(
+			parse_chapters(include_str!("fixtures/detail_app_only.flight"), "19701")
+				.map(|c| c.len()),
+			Some(0)
+		);
 	}
 }

@@ -18,7 +18,9 @@ use aidoku::{
 	MangaPageResult, Result,
 };
 
-use crate::helper::{base_url, parse_details, parse_link, parse_manga_list, request, CN_URL};
+use crate::helper::{
+	base_url, check_status, parse_details, parse_link, parse_manga_list, request, CN_URL,
+};
 
 /// `name=value` of the cookie `name` in a `Set-Cookie` header or a script.
 fn cookie(text: &str, name: &str) -> Option<String> {
@@ -40,14 +42,22 @@ fn set_cookie(url: &str, cookies: &str, name: &str) -> Result<String> {
 }
 
 fn ticket() -> Result<String> {
-	let css = set_cookie(&format!("{CN_URL}/search.html?search_guard=css"), "night=0", "jieqiSearchCss")?;
+	let css = set_cookie(
+		&format!("{CN_URL}/search.html?search_guard=css"),
+		"night=0",
+		"jieqiSearchCss",
+	)?;
 	let script = request(&format!("{CN_URL}/search.html?search_guard=js"))?
 		.header("Cookie", format!("night=0; {css}").as_str())
 		.string()?;
-	let js = cookie(&script, "jieqiSearchJs").ok_or_else(|| error!("[linovelib] search: no jieqiSearchJs"))?;
+	let js = cookie(&script, "jieqiSearchJs")
+		.ok_or_else(|| error!("[linovelib] search: no jieqiSearchJs"))?;
 	let cookies = format!("night=0; {css}; {js}");
 	let ticket = set_cookie(
-		&format!("{CN_URL}/search.html?search_guard=redeem&r={}000", current_date()),
+		&format!(
+			"{CN_URL}/search.html?search_guard=redeem&r={}000",
+			current_date()
+		),
 		&cookies,
 		"jieqiSearchTicket",
 	)?;
@@ -56,11 +66,14 @@ fn ticket() -> Result<String> {
 
 pub fn search(query: &str, page: i32) -> Result<MangaPageResult> {
 	let cookies = ticket()?;
-	let url = format!("{CN_URL}/search/{}_{page}.html", encode_uri_component(query.trim()));
-	let response = request(&url)?
-		.header("Cookie", cookies.as_str())
-		.send()?;
-	let final_url = response.get_url().unwrap_or_default();
+	let url = format!(
+		"{CN_URL}/search/{}_{page}.html",
+		encode_uri_component(query.trim())
+	);
+	let response = request(&url)?.header("Cookie", cookies.as_str()).send()?;
+	check_status(&response, &url)?;
+	// Without a final address the request's own stands in, so links still resolve.
+	let final_url = response.get_url().unwrap_or(url);
 	let body = response.get_string()?;
 	if body.trim().is_empty() {
 		bail!("[linovelib] search: ticket refused");
@@ -69,7 +82,9 @@ pub fn search(query: &str, page: i32) -> Result<MangaPageResult> {
 	let base = base_url();
 	// A search with one result answers with a redirect to that book.
 	if let Some((key, None)) = parse_link(&final_url) {
-		let entries = parse_details(&html, &key, base).into_iter().collect::<Vec<_>>();
+		let entries = parse_details(&html, &key, base)
+			.into_iter()
+			.collect::<Vec<_>>();
 		return Ok(MangaPageResult {
 			entries,
 			has_next_page: false,
@@ -85,8 +100,12 @@ mod test {
 
 	#[aidoku_test]
 	fn reads_cookies() {
-		let header = "jieqiSearchCss=497526.Bc3N-Zd0; Path=/; Max-Age=3600; SameSite=Lax; Secure; HttpOnly";
-		assert_eq!(cookie(header, "jieqiSearchCss").as_deref(), Some("jieqiSearchCss=497526.Bc3N-Zd0"));
+		let header =
+			"jieqiSearchCss=497526.Bc3N-Zd0; Path=/; Max-Age=3600; SameSite=Lax; Secure; HttpOnly";
+		assert_eq!(
+			cookie(header, "jieqiSearchCss").as_deref(),
+			Some("jieqiSearchCss=497526.Bc3N-Zd0")
+		);
 		let script = include_str!("fixtures/search_guard_js.txt");
 		let js = cookie(script, "jieqiSearchJs").expect("cookie");
 		assert!(js.starts_with("jieqiSearchJs=497526."), "{js}");

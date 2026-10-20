@@ -8,10 +8,9 @@ use aidoku::{
 	},
 	prelude::*,
 	BasicLoginHandler, Chapter, DeepLinkHandler, DeepLinkResult, DynamicSettings, FilterValue,
-	GroupSetting, Home, HomeComponent, HomeComponentValue, HomeLayout, HomePartialResult, Link,
-	ImageRequestProvider, Listing, ListingProvider, Manga, MangaPageResult, NotificationHandler,
-	Page, PageContext, Result, Setting,
-	HashMap, Source, WebLoginHandler,
+	GroupSetting, HashMap, Home, HomeComponent, HomeComponentValue, HomeLayout, HomePartialResult,
+	ImageRequestProvider, Link, Listing, ListingProvider, Manga, MangaPageResult,
+	NotificationHandler, Page, PageContext, Result, Setting, Source, WebLoginHandler,
 };
 
 mod auth;
@@ -55,7 +54,7 @@ impl Source for BakamhSource {
 					"match" => search.match_all = value == "all",
 					// A tapped tag. Categories can be searched with everything else; a tag
 					// has only its own page.
-					"genre" if !value.is_empty() => match category_slug(&value) {
+					"genre" => match category_slug(&value) {
 						Some(slug) => {
 							if !search.categories.contains(&slug) {
 								search.categories.push(slug);
@@ -105,14 +104,10 @@ impl Source for BakamhSource {
 		// One blocked work must not abort a whole library refresh; the app keeps what it has.
 		let html = match fetch_html(&manga_url(&manga.key)) {
 			Ok(html) => html,
-			Err(_) => {
-				println!("[bakamh] ERROR could not load the page of {}", manga.key);
-				return Ok(manga);
-			}
+			Err(_) => return Ok(manga),
 		};
 		// A block page must not empty the library entry.
 		if !is_details_page(&html) {
-			println!("[bakamh] ERROR not a details page for {}", manga.key);
 			return Ok(manga);
 		}
 
@@ -133,9 +128,7 @@ impl Source for BakamhSource {
 
 		if needs_chapters {
 			let chapters = parse_chapters(&html, &manga.key);
-			if chapters.is_empty() {
-				println!("[bakamh] ERROR no chapters on the page of {}", manga.key);
-			} else {
+			if !chapters.is_empty() {
 				manga.chapters = Some(chapters);
 			}
 		}
@@ -205,7 +198,7 @@ impl Home for BakamhSource {
 			match fetch_page(&url, None) {
 				Ok(Some(html)) => send_home_row(title, id, parse_manga_list(&html).entries),
 				Ok(None) => blocked.push((title, id, url)),
-				Err(_) => println!("[bakamh] ERROR loading the {id} row"),
+				Err(_) => {}
 			}
 		}
 
@@ -217,10 +210,8 @@ impl Home for BakamhSource {
 		if !blocked.is_empty() {
 			sleep(CHALLENGE_PAUSE);
 			for (title, id, url) in blocked {
-				match fetch_page(&url, None) {
-					Ok(Some(html)) => send_home_row(title, id, parse_manga_list(&html).entries),
-					Ok(None) => println!("[bakamh] ERROR the {id} row is still blocked after a retry"),
-					Err(_) => println!("[bakamh] ERROR loading the {id} row"),
+				if let Ok(Some(html)) = fetch_page(&url, None) {
+					send_home_row(title, id, parse_manga_list(&html).entries);
 				}
 			}
 		}
@@ -244,12 +235,9 @@ fn send_home_rows_together() {
 		let Some(url) = listing_url(id, 1) else {
 			continue;
 		};
-		match site_get(&url) {
-			Ok(request) => {
-				rows.push((title, id, url));
-				requests.push(request);
-			}
-			Err(_) => println!("[bakamh] ERROR loading the {id} row"),
+		if let Ok(request) = site_get(&url) {
+			rows.push((title, id, url));
+			requests.push(request);
 		}
 	}
 
@@ -271,10 +259,7 @@ fn send_home_rows_together() {
 		let entries = match page {
 			Ok(Some(html)) => parse_manga_list(&html).entries,
 			// A challenge page, which `fetch_html` turns into an error.
-			Ok(None) | Err(_) => {
-				println!("[bakamh] ERROR loading the {id} row");
-				continue;
-			}
+			Ok(None) | Err(_) => continue,
 		};
 		send_home_row(title, id, entries);
 	}
@@ -340,9 +325,9 @@ impl DynamicSettings for BakamhSource {
 					String::from("上次登入失敗：帳號或密碼錯誤，請重新登入。")
 				}
 				Some(_) => String::from("上次登入失敗：無法連線到巴卡漫畫，請稍後再登入一次。"),
-				None => String::from(
-					"尚未登入。登入後可閱讀標示「需登入」的章節，這裡會顯示帳號名稱。",
-				),
+				None => {
+					String::from("尚未登入。登入後可閱讀標示「需登入」的章節，這裡會顯示帳號名稱。")
+				}
 			}
 		};
 		Ok(vec![GroupSetting {
@@ -402,7 +387,10 @@ mod test {
 	fn listing_names_match_source_json() {
 		let json = include_str!("../res/source.json");
 		for (title, id) in HOME_ROWS {
-			assert!(json.contains(&format!("\"id\": \"{id}\",\n\t\t\t\"name\": \"{title}\"")), "{id}");
+			assert!(
+				json.contains(&format!("\"id\": \"{id}\",\n\t\t\t\"name\": \"{title}\"")),
+				"{id}"
+			);
 			assert!(listing_url(id, 1).is_some(), "{id}");
 		}
 	}
@@ -427,13 +415,19 @@ mod test {
 		let source = BakamhSource::new();
 		let mut cookies: HashMap<String, String> = HashMap::new();
 		for (key, _) in CLOUDFLARE_BUTTONS {
-			assert!(!source.handle_web_login(String::from(key), cookies.clone()).unwrap());
+			assert!(!source
+				.handle_web_login(String::from(key), cookies.clone())
+				.unwrap());
 		}
 		cookies.insert(String::from("cf_clearance"), String::from("token"));
 		for (key, _) in CLOUDFLARE_BUTTONS {
-			assert!(source.handle_web_login(String::from(key), cookies.clone()).unwrap());
+			assert!(source
+				.handle_web_login(String::from(key), cookies.clone())
+				.unwrap());
 		}
-		assert!(source.handle_web_login(String::from("login"), cookies).is_err());
+		assert!(source
+			.handle_web_login(String::from("login"), cookies)
+			.is_err());
 
 		// One button per domain of `urls`, in the same order, each opening its own domain.
 		let settings = include_str!("../res/settings.json");

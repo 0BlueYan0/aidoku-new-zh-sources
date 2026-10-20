@@ -6,7 +6,7 @@ use aidoku::{
 	prelude::*,
 	Chapter, DeepLinkHandler, DeepLinkResult, FilterValue, Home, HomeComponent, HomeComponentValue,
 	HomeLayout, HomePartialResult, Link, Listing, ListingProvider, Manga, MangaPageResult,
-	MangaStatus, Page, PageContent, Result, Source,
+	MangaStatus, Page, Result, Source,
 };
 
 mod helper;
@@ -16,7 +16,11 @@ use helper::*;
 
 /// The home page's rows: heading and the listing behind it. The names must match
 /// `res/source.json`; the streamed components are matched to the skeleton by title.
-const HOME_ROWS: [(&str, &str); 3] = [("最近更新", "update"), ("人氣排行", "hits"), ("最新上架", "new")];
+const HOME_ROWS: [(&str, &str); 3] = [
+	("最近更新", "update"),
+	("人氣排行", "hits"),
+	("最新上架", "new"),
+];
 
 /// Requests per `send_all`: the app runs at most 5 at once, and more in one call can hang (docs/aidoku-rs-api.md).
 const HOME_BATCH: usize = 5;
@@ -54,15 +58,15 @@ impl Source for Wmh1234Source {
 				// A tapped author. The site's search also matches author names.
 				FilterValue::Text { id, value } if id == "author" => author = Some(value),
 				FilterValue::Select { id, value } => match id.as_str() {
-					// `filters.json` supplies `ids`, so `value` is the site's value.
+					// `filters.json` supplies `ids`, so `value` is the site's value. The app
+					// only sends a select whose value is not the default ("0", "all").
 					"order" => order = Some(value),
-					"status" if value != "0" => status = Some(value),
-					"tag" if value != "all" => tag = Some(value),
+					"status" => status = Some(value),
+					"tag" => tag = Some(value),
 					// A tapped tag sends its name.
-					"genre" if !value.is_empty() => match tags::tag_id(value.trim()) {
+					"genre" => match tags::tag_id(value.trim()) {
 						Some(id) => tag = Some(String::from(id)),
 						None => {
-							println!("[wmh1234] unknown tag {value}");
 							unknown_tag = true;
 						}
 					},
@@ -99,7 +103,6 @@ impl Source for Wmh1234Source {
 		// Details and chapters are on the same page.
 		let Some(html) = fetch_details_page(&manga.key)? else {
 			// Keep any chapters the library already has.
-			println!("[wmh1234] {} has been removed by the site", manga.key);
 			if needs_details {
 				manga.status = MangaStatus::Cancelled;
 				manga.description = Some(String::from(DELISTED_NOTE));
@@ -109,14 +112,11 @@ impl Source for Wmh1234Source {
 		};
 
 		if needs_details {
-			match parse_details(&html, &manga.key) {
-				Some(details) => {
-					let chapters = manga.chapters.take();
-					manga = details;
-					manga.chapters = chapters;
-					send_partial_result(&manga);
-				}
-				None => println!("[wmh1234] ERROR no details on the page of {}", manga.key),
+			if let Some(details) = parse_details(&html, &manga.key) {
+				let chapters = manga.chapters.take();
+				manga = details;
+				manga.chapters = chapters;
+				send_partial_result(&manga);
 			}
 		}
 
@@ -124,9 +124,7 @@ impl Source for Wmh1234Source {
 			// Some works list no chapters at all; an empty list must not empty the
 			// chapters the library already has.
 			let chapters = parse_chapters(&html);
-			if chapters.is_empty() {
-				println!("[wmh1234] no chapters on the page of {}", manga.key);
-			} else {
+			if !chapters.is_empty() {
 				manga.chapters = Some(chapters);
 			}
 		}
@@ -136,17 +134,11 @@ impl Source for Wmh1234Source {
 
 	fn get_page_list(&self, _manga: Manga, chapter: Chapter) -> Result<Vec<Page>> {
 		// A chapter the site is still copying answers 503 "内容准备中"; `fetch_html` fails on it.
-		let pages = parse_pages(&fetch_html(&reader_url(&chapter.key))?);
+		let pages = parse_pages(&fetch_html(&reader_url(&chapter.key))?)?;
 		if pages.is_empty() {
 			bail!("[wmh1234] no images for chapter {}", chapter.key);
 		}
-		Ok(pages
-			.into_iter()
-			.map(|url: String| Page {
-				content: PageContent::url(url),
-				..Default::default()
-			})
-			.collect())
+		Ok(pages)
 	}
 }
 
@@ -182,7 +174,6 @@ impl Home for Wmh1234Source {
 				let request = request(&url);
 				(url, request)
 			}) else {
-				println!("[wmh1234] ERROR building the {id} row");
 				continue;
 			};
 			rows.push((title, id, url));
@@ -203,10 +194,7 @@ impl Home for Wmh1234Source {
 			// `fetch_html`'s non-2xx check, so an error page is not read as an empty row.
 			let entries = match responses.next().map(|response| read_html(response?, &url)) {
 				Some(Ok(html)) => parse_manga_list(&html).entries,
-				_ => {
-					println!("[wmh1234] ERROR loading the {id} row");
-					continue;
-				}
+				_ => continue,
 			};
 			if entries.is_empty() {
 				continue;
@@ -257,7 +245,10 @@ mod test {
 		// A Windows checkout may turn the file's line endings into CRLF.
 		let json = include_str!("../res/source.json").replace("\r\n", "\n");
 		for (title, id) in HOME_ROWS {
-			assert!(json.contains(&format!("\"id\": \"{id}\",\n\t\t\t\"name\": \"{title}\"")), "{id}");
+			assert!(
+				json.contains(&format!("\"id\": \"{id}\",\n\t\t\t\"name\": \"{title}\"")),
+				"{id}"
+			);
 			assert!(listing_url(id, 1).is_some(), "{id}");
 		}
 		assert_eq!(json.matches("\"id\": ").count(), HOME_ROWS.len() + 1);
@@ -274,7 +265,11 @@ mod test {
 			names.push_str(&format!(",\n\t\t\t\"{name}\""));
 			ids.push_str(&format!(",\n\t\t\t\"{id}\""));
 			assert_eq!(tags::tag_id(name), Some(id), "{name}");
-			assert_eq!(tags::TAGS.iter().filter(|(_, n)| *n == name).count(), 1, "{name}");
+			assert_eq!(
+				tags::TAGS.iter().filter(|(_, n)| *n == name).count(),
+				1,
+				"{name}"
+			);
 		}
 		assert!(json.contains(&format!("[\n\t\t\t{names}\n\t\t]")));
 		assert!(json.contains(&format!("[\n\t\t\t{ids}\n\t\t]")));

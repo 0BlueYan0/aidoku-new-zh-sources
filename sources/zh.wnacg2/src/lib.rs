@@ -2,7 +2,7 @@
 
 use aidoku::{
 	alloc::{String, Vec},
-	imports::{net::Request, std::send_partial_result},
+	imports::{html::Document, net::Request, std::send_partial_result},
 	prelude::*,
 	Chapter, DeepLinkHandler, DeepLinkResult, FilterValue, Home, HomeComponent, HomeComponentValue,
 	HomeLayout, HomePartialResult, ImageRequestProvider, Link, Listing, ListingProvider, Manga,
@@ -75,8 +75,8 @@ impl Source for WnacgSource {
 				// parameter value and needs no lookup table.
 				FilterValue::Select { id, value } => match id.as_str() {
 					"cate" => cate = value,
-					"sort" if !value.is_empty() => sort = value,
-					"scope" if !value.is_empty() => scope = value,
+					"sort" => sort = value,
+					"scope" => scope = value,
 					_ => {}
 				},
 				FilterValue::Text { id, value } if id == "tag" => tag = value,
@@ -111,19 +111,20 @@ impl Source for WnacgSource {
 		needs_details: bool,
 		needs_chapters: bool,
 	) -> Result<Manga> {
-		let mut date_uploaded: Option<i64> = None;
+		if !needs_details && !needs_chapters {
+			return Ok(manga);
+		}
 
-		if needs_details || needs_chapters {
-			// Swallow failures: one unreachable album must not abort a whole library
-			// refresh.
-			match fetch_html(&detail_url(&manga.key)) {
-				Ok(html) => date_uploaded = apply_detail(&html, &mut manga),
-				Err(_) => println!("[wnacg] ERROR fetching details for aid={}", manga.key),
-			}
+		// Swallow failures: one unreachable album must not abort a whole library
+		// refresh, and the library keeps the details and chapter it already had.
+		let Ok(date_uploaded) = fetch_html(&detail_url(&manga.key))
+			.and_then(|html: Document| apply_detail(&html, &mut manga))
+		else {
+			return Ok(manga);
+		};
 
-			if needs_details {
-				send_partial_result(&manga);
-			}
+		if needs_details {
+			send_partial_result(&manga);
 		}
 
 		if needs_chapters {
@@ -151,15 +152,13 @@ impl Source for WnacgSource {
 			bail!("找不到圖片，可能是網址已變更或伺服器暫時無法連線");
 		}
 
-		let mut pages: Vec<Page> = Vec::new();
-		for image in images {
-			pages.push(Page {
+		Ok(images
+			.into_iter()
+			.map(|image: String| Page {
 				content: PageContent::url(image),
 				..Default::default()
-			});
-		}
-
-		Ok(pages)
+			})
+			.collect())
 	}
 }
 
@@ -209,10 +208,9 @@ impl Home for WnacgSource {
 		let mut requests: Vec<Request> = Vec::new();
 		for (is_rank, url) in [(false, home_url()), (true, rank_list_url("week", 1))] {
 			let Ok(request) = request(&url) else {
-				println!("[wnacg] ERROR building the request for {url}");
 				continue;
 			};
-			rows.push(is_rank);
+			rows.push((is_rank, url));
 			requests.push(request);
 		}
 		let mut responses = Vec::new();
@@ -225,27 +223,23 @@ impl Home for WnacgSource {
 		// Drawn one at a time so a short response list leaves the trailing rows empty instead
 		// of shifting results onto the wrong rows.
 		let mut responses = responses.into_iter();
-		for is_rank in rows {
-			let html = responses.next().map(|response| response?.get_html());
+		for (is_rank, url) in rows {
+			let html = responses.next().map(|response| read_html(response?, &url));
 			if is_rank {
 				// Parsed as the `rank_week` listing's first page is.
-				match html {
-					Some(Ok(html)) => send_scroller(
+				if let Some(Ok(html)) = html {
+					send_scroller(
 						String::from(HOME_RANK_TITLE),
 						Some(String::from(HOME_RANK_LISTING)),
 						parse_list_page(&html, 1, false).entries,
-					),
-					_ => println!("[wnacg] ERROR fetching weekly ranking"),
+					);
 				}
 			} else {
-				match html {
-					Some(Ok(html)) => {
-						for section in parse_home_sections(&html) {
-							send_scroller(section.title, section.listing_id, section.entries);
-						}
+				// A failing row should not take the whole home screen down.
+				if let Some(Ok(html)) = html {
+					for section in parse_home_sections(&html) {
+						send_scroller(section.title, section.listing_id, section.entries);
 					}
-					// A failing row should not take the whole home screen down.
-					_ => println!("[wnacg] ERROR fetching home page"),
 				}
 			}
 		}

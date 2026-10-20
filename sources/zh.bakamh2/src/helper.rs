@@ -70,7 +70,14 @@ const PAGED_CATEGORIES: [&str; 2] = ["汉化日漫", "汉化同人志"];
 
 /// The listings' and the sort filter's `m_orderby` values. All six were checked to give a
 /// different order on 2026-10-09; without one the site sorts by `new-manga`.
-pub const ORDERS: [&str; 6] = ["latest", "trending", "views", "rating", "new-manga", "alphabet"];
+pub const ORDERS: [&str; 6] = [
+	"latest",
+	"trending",
+	"views",
+	"rating",
+	"new-manga",
+	"alphabet",
+];
 
 /// The `status[]` values that have works. `on-hold` and `upcoming` returned none.
 pub const STATUSES: [&str; 3] = ["on-going", "end", "canceled"];
@@ -132,7 +139,9 @@ pub fn relay_target(base: &str, url: &str) -> String {
 	let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
 	// The relay files cookies under `/r/<lowercase host>/`, so the host is lowercased and at
 	// least `/` follows it.
-	let (host, path) = rest.find(['/', '?']).map_or((rest, ""), |at| rest.split_at(at));
+	let (host, path) = rest
+		.find(['/', '?'])
+		.map_or((rest, ""), |at| rest.split_at(at));
 	let slash = if path.starts_with('/') { "" } else { "/" };
 	format!("{base}/r/{}{slash}{path}", host.to_lowercase())
 }
@@ -159,7 +168,6 @@ fn relay_request(request: Request) -> Request {
 pub fn check_relay_status(url: &str, response: &Response) -> Result<()> {
 	let status = response.status_code();
 	if !(200..400).contains(&status) {
-		println!("[bakamh] relay answered {status} for {url}");
 		bail!("[bakamh] relay answered {status} for {url}");
 	}
 	Ok(())
@@ -240,8 +248,10 @@ pub fn same_domain(url: &str, domain: &str) -> bool {
 ///
 /// A Cloudflare challenge page that still comes back after the app's own handling is an
 /// error, as zh.vomicmh's `fetch_checked` does (the reader chose an error they can retry
-/// over an empty list). The home page, `get_manga_update` and the account requests stop
-/// there; the reader, search and listings ask again through `fetch_html_retrying`.
+/// over an empty list). `get_manga_update`, the account requests and the blank first search
+/// page the app runs by itself stop there; the reader, the reader's own searches and listings
+/// ask again through `fetch_html_retrying`. The home page reads its rows through `fetch_page`
+/// and asks each challenged row once more after the others.
 pub fn fetch_html(url: &str) -> Result<Document> {
 	fetch_html_with(url, None)
 }
@@ -291,9 +301,6 @@ fn until_not_challenged<T>(
 			return Ok(page);
 		}
 		if tries < CHALLENGE_TRIES {
-			println!(
-				"[bakamh] Cloudflare still blocks {url} after try {tries} of {CHALLENGE_TRIES}, trying again in {CHALLENGE_PAUSE} s"
-			);
 			pause(CHALLENGE_PAUSE);
 		}
 	}
@@ -316,15 +323,22 @@ pub fn fetch_page(url: &str, timeout: Option<f64>) -> Result<Option<Document>> {
 pub fn read_page(url: &str, response: Response) -> Result<Option<Document>> {
 	// Through the relay the response's own address is the relay's, so the page is parsed
 	// against the site's address for links to resolve to the site.
-	let html = if relay_url(url).is_some() {
+	let relayed = relay_url(url).is_some();
+	let html = if relayed {
 		check_relay_status(url, &response)?;
 		Html::parse_with_url(&response.get_string()?, url)?
 	} else {
 		response.get_html()?
 	};
+	// The challenge is answered with 403, so it is recognised before the status is checked.
 	if is_challenge(&html) {
-		log_challenge(url, &response);
 		return Ok(None);
+	}
+	// Any other error page is not content: a 404 or 5xx page read as a list is an empty list.
+	// Measured 2026-10-20: sign-in and early-access locks, and an empty search, are all 200.
+	// Through the relay `check_relay_status` has already decided.
+	if !relayed {
+		check_status(url, response.status_code())?;
 	}
 	if is_site_page(&html) {
 		crate::auth::note_site_session(is_signed_in(&html));
@@ -332,38 +346,38 @@ pub fn read_page(url: &str, response: Response) -> Result<Option<Document>> {
 	Ok(Some(html))
 }
 
+/// A page other than 2xx is an error, not content. The app follows redirects, so a 3xx
+/// that reaches the source is not a page either.
+fn check_status(url: &str, status: i32) -> Result<()> {
+	if !(200..300).contains(&status) {
+		bail!("[bakamh] HTTP {status} for {url}");
+	}
+	Ok(())
+}
+
 /// The selector half of the app's challenge check. The app also requires `Server: cloudflare`
-/// and status 403 or 503 (docs/aidoku-rs-api.md 7.6); this looks at the selectors only, which
-/// is why `log_challenge` prints the status.
+/// and status 403 or 503 (docs/aidoku-rs-api.md 7.6); this looks at the selectors only.
 pub fn is_challenge(html: &Document) -> bool {
 	html.select_first("#challenge-error-title, #challenge-error-text")
 		.is_some()
 }
 
-/// What the site answered when the app's Cloudflare handling gave up, to line up with the
-/// app's own `Failed to handle CloudFlare` lines. Cookie names only, never values.
-fn log_challenge(url: &str, response: &Response) {
-	let set_cookie = response.get_header("set-cookie").unwrap_or_default();
-	let sets_clearance = set_cookie.contains("cf_clearance=");
-	let sets_bm = set_cookie.contains("__cf_bm=");
-	println!(
-		"[bakamh] Cloudflare page for {url}: status={} cf-ray={:?} cf-mitigated={:?} sets cf_clearance={sets_clearance} __cf_bm={sets_bm}",
-		response.status_code(),
-		response.get_header("cf-ray"),
-		response.get_header("cf-mitigated"),
-	);
-}
-
 /// `fetch_html` for callers that need the raw text.
 pub fn fetch_text(url: &str) -> Result<String> {
 	let response = site_get(url)?.send()?;
-	if relay_url(url).is_some() {
+	let relayed = relay_url(url).is_some();
+	if relayed {
 		check_relay_status(url, &response)?;
 	}
 	let text = response.get_string()?;
-	if Html::parse(&text).map(|doc| is_challenge(&doc)).unwrap_or(false) {
-		log_challenge(url, &response);
+	if Html::parse(&text)
+		.map(|doc| is_challenge(&doc))
+		.unwrap_or(false)
+	{
 		bail!("[bakamh] Cloudflare still blocks {url}");
+	}
+	if !relayed {
+		check_status(url, response.status_code())?;
 	}
 	Ok(text)
 }
@@ -405,7 +419,12 @@ pub fn listing_url(order: &str, page: i32) -> Option<String> {
 }
 
 pub fn tag_url(name: &str, page: i32) -> String {
-	format!("{}/manga-tag/{}/{}", base_url(), slug(name), page_path(page))
+	format!(
+		"{}/manga-tag/{}/{}",
+		base_url(),
+		slug(name),
+		page_path(page)
+	)
 }
 
 /// The slug of a category, by the site's name for it (a tapped tag; checked 2026-10-09 that
@@ -439,7 +458,11 @@ pub fn search_url(search: &Search, page: i32) -> String {
 		page_path(page),
 		encode_uri_component(search.query.trim())
 	);
-	if let Some(order) = search.order.as_deref().filter(|o: &&str| ORDERS.contains(o)) {
+	if let Some(order) = search
+		.order
+		.as_deref()
+		.filter(|o: &&str| ORDERS.contains(o))
+	{
 		url.push_str(&format!("&m_orderby={order}"));
 	}
 	for category in &search.categories {
@@ -453,7 +476,11 @@ pub fn search_url(search: &Search, page: i32) -> String {
 			url.push_str(&format!("&status%5B%5D={status}"));
 		}
 	}
-	if let Some(author) = search.author.as_deref().filter(|a: &&str| !a.trim().is_empty()) {
+	if let Some(author) = search
+		.author
+		.as_deref()
+		.filter(|a: &&str| !a.trim().is_empty())
+	{
 		url.push_str(&format!("&author={}", encode_uri_component(author.trim())));
 	}
 	url
@@ -482,7 +509,9 @@ pub fn work_keys(href: &str) -> Option<(String, Option<String>)> {
 }
 
 fn text_of(el: &Element) -> String {
-	el.text().map(|t: String| String::from(t.trim())).unwrap_or_default()
+	el.text()
+		.map(|t: String| String::from(t.trim()))
+		.unwrap_or_default()
 }
 
 fn rating_of(categories: &[String]) -> ContentRating {
@@ -553,12 +582,13 @@ pub fn parse_manga_list(html: &Document) -> MangaPageResult {
 
 /// The `.summary-content` under a details heading (`作者`, `分类`, `状态` …).
 fn detail_item(html: &Document, heading: &str) -> Option<Element> {
-	html.select(".post-content_item")?.find_map(|item: Element| {
-		let h5 = item.select_first(".summary-heading h5")?;
-		(text_of(&h5) == heading)
-			.then(|| item.select_first(".summary-content"))
-			.flatten()
-	})
+	html.select(".post-content_item")?
+		.find_map(|item: Element| {
+			let h5 = item.select_first(".summary-heading h5")?;
+			(text_of(&h5) == heading)
+				.then(|| item.select_first(".summary-content"))
+				.flatten()
+		})
 }
 
 fn link_names(item: Option<Element>) -> Vec<String> {
@@ -599,7 +629,9 @@ pub fn parse_details(html: &Document, key: &str) -> Option<Manga> {
 		.filter(|src: &String| src.starts_with("http"));
 	let authors = link_names(detail_item(html, "作者"));
 	let categories = link_names(detail_item(html, "分类"));
-	let mut tags = categories.clone();
+	let content_rating = rating_of(&categories);
+	let viewer = viewer_of(&categories);
+	let mut tags = categories;
 	for tag in link_names(detail_item(html, "标籤")) {
 		if !tags.contains(&tag) {
 			tags.push(tag);
@@ -623,8 +655,8 @@ pub fn parse_details(html: &Document, key: &str) -> Option<Manga> {
 		description,
 		tags: (!tags.is_empty()).then_some(tags),
 		status,
-		content_rating: rating_of(&categories),
-		viewer: viewer_of(&categories),
+		content_rating,
+		viewer,
 		..Default::default()
 	})
 }
@@ -641,7 +673,10 @@ pub fn release_date(text: &str, now: i64) -> Option<i64> {
 	let text = text.trim();
 	if let Some(ago) = text.strip_suffix('前') {
 		let ago = ago.trim();
-		let digits: String = ago.chars().take_while(|c: &char| c.is_ascii_digit()).collect();
+		let digits: String = ago
+			.chars()
+			.take_while(|c: &char| c.is_ascii_digit())
+			.collect();
 		let count = digits.parse::<i64>().ok()?;
 		let unit = ago[digits.len()..].trim();
 		let seconds = match unit {
@@ -686,7 +721,9 @@ pub fn badge_suffix(badge: &str) -> Option<String> {
 	Some(format!("{}/{} 解鎖", month.trim(), day.trim()))
 }
 
-/// The details page lists chapters newest first, as the app wants them.
+/// The details page lists chapters newest first, as the app wants them. Empty when a row
+/// cannot be read: a shorter list would replace the library's chapters, and the caller keeps
+/// those when this is empty.
 pub fn parse_chapters(html: &Document, manga_key: &str) -> Vec<Chapter> {
 	let now = current_date();
 	let mut chapters: Vec<Chapter> = Vec::new();
@@ -694,15 +731,23 @@ pub fn parse_chapters(html: &Document, manga_key: &str) -> Vec<Chapter> {
 		return chapters;
 	};
 	for item in items {
+		// Signed in, the list carries an empty reading-position row (the signed-in fixture).
+		if item.has_class("chapter-bookmark") {
+			continue;
+		}
 		let Some(link) = item.select_first("a") else {
-			continue;
+			return Vec::new();
 		};
-		let Some(key) = link
-			.attr("href")
-			.and_then(|href: String| work_keys(&href))
-			.and_then(|(work, chapter)| (work == manga_key).then_some(chapter).flatten())
+		let Some((work, chapter)) = link.attr("href").and_then(|href: String| work_keys(&href))
 		else {
+			return Vec::new();
+		};
+		// A link to another work is not one of this work's chapters.
+		if work != manga_key {
 			continue;
+		}
+		let Some(key) = chapter else {
+			return Vec::new();
 		};
 		if chapters.iter().any(|c: &Chapter| c.key == key) {
 			continue;
@@ -871,9 +916,15 @@ mod test {
 	#[aidoku_test]
 	fn matches_the_clearance_domain() {
 		assert!(same_domain("https://bakamh.com/", "https://bakamh.com"));
-		assert!(same_domain("https://bakamh.com/manga/x/", "https://bakamh.com"));
+		assert!(same_domain(
+			"https://bakamh.com/manga/x/",
+			"https://bakamh.com"
+		));
 		assert!(!same_domain("https://bakamh.ru/", "https://bakamh.com"));
-		assert!(!same_domain("https://bakamh.com.evil/", "https://bakamh.com"));
+		assert!(!same_domain(
+			"https://bakamh.com.evil/",
+			"https://bakamh.com"
+		));
 	}
 
 	#[aidoku_test]
@@ -891,7 +942,10 @@ mod test {
 			onto_base("https://my.mirror/wp-content/a.jpg", "https://my.mirror"),
 			"https://my.mirror/wp-content/a.jpg"
 		);
-		assert_eq!(onto_base(cover, "https://my.mirror"), "https://my.mirror/wp-content/uploads/2026/10/a.jpg?x=1");
+		assert_eq!(
+			onto_base(cover, "https://my.mirror"),
+			"https://my.mirror/wp-content/uploads/2026/10/a.jpg?x=1"
+		);
 		assert_eq!(
 			onto_base(&onto_base(cover, "https://bakamh.ru"), "https://baka1.cfd"),
 			onto_base(cover, "https://baka1.cfd")
@@ -909,8 +963,14 @@ mod test {
 	#[aidoku_test]
 	fn tidies_base_urls() {
 		assert_eq!(base_url(), BASE_URL);
-		assert_eq!(normalize_base_url(" baka9.cfd/ ").as_deref(), Some("https://baka9.cfd"));
-		assert_eq!(normalize_base_url("https://bakamh.ru").as_deref(), Some("https://bakamh.ru"));
+		assert_eq!(
+			normalize_base_url(" baka9.cfd/ ").as_deref(),
+			Some("https://baka9.cfd")
+		);
+		assert_eq!(
+			normalize_base_url("https://bakamh.ru").as_deref(),
+			Some("https://bakamh.ru")
+		);
 		assert_eq!(normalize_base_url("  "), None);
 		let json = include_str!("../res/source.json");
 		assert!(json.contains(&format!("\"urls\": [\n\t\t\t\"{BASE_URL}\"")));
@@ -930,7 +990,10 @@ mod test {
 		let search = Search {
 			query: String::from("魔法"),
 			order: Some(String::from("rating")),
-			categories: Vec::from([category_slug("BL").unwrap(), category_slug("全年龄").unwrap()]),
+			categories: Vec::from([
+				category_slug("BL").unwrap(),
+				category_slug("全年龄").unwrap(),
+			]),
 			match_all: true,
 			statuses: Vec::from([String::from("end"), String::from("on-hold")]),
 			..Default::default()
@@ -981,10 +1044,16 @@ mod test {
 		] {
 			let html = doc(page);
 			let mut checked = 0;
-			for link in html.select(".tags-content a, .genres-content a").expect("tags") {
+			for link in html
+				.select(".tags-content a, .genres-content a")
+				.expect("tags")
+			{
 				let href = link.attr("href").expect("href");
 				let name = text_of(&link);
-				assert!(href.ends_with(&format!("/{}/", slug(&name))), "{name} {href}");
+				assert!(
+					href.ends_with(&format!("/{}/", slug(&name))),
+					"{name} {href}"
+				);
 				checked += 1;
 			}
 			assert!(checked >= 4);
@@ -1045,15 +1114,63 @@ mod test {
 	}
 
 	#[aidoku_test]
+	fn an_unreadable_chapter_row_rejects_the_list() {
+		let row = |href: &str| format!(r#"<li><a href="{href}">第1话</a></li>"#);
+		let list = |rows: &[String]| {
+			doc(&format!(
+				r#"<ul class="version-chap">{}</ul>"#,
+				rows.concat()
+			))
+		};
+		let good = row("https://bakamh.com/manga/w/c-2/");
+		let keys: Vec<String> = parse_chapters(
+			&list(&[
+				good.clone(),
+				row("https://bakamh.com/manga/other/c-9/"),
+				row("https://bakamh.com/manga/w/c-1/"),
+			]),
+			"w",
+		)
+		.into_iter()
+		.map(|c| c.key)
+		.collect();
+		assert_eq!(keys, ["c-2", "c-1"]);
+		assert!(
+			parse_chapters(&list(&[good.clone(), String::from("<li>第1话</li>")]), "w").is_empty()
+		);
+		assert!(parse_chapters(
+			&list(&[good.clone(), row("https://bakamh.com/manga/w/")]),
+			"w"
+		)
+		.is_empty());
+		assert!(parse_chapters(&list(&[good.clone(), row("/about/")]), "w").is_empty());
+		let bookmark = String::from(r#"<li class="chapter-bookmark"><div></div></li>"#);
+		assert_eq!(parse_chapters(&list(&[bookmark, good]), "w").len(), 1);
+	}
+
+	#[aidoku_test]
+	fn error_statuses_are_not_pages() {
+		assert!(check_status("u", 200).is_ok());
+		assert!(check_status("u", 302).is_err());
+		assert!(check_status("u", 404).is_err());
+		assert!(check_status("u", 503).is_err());
+	}
+
+	#[aidoku_test]
 	fn reads_the_details_page() {
 		let html = doc(include_str!("fixtures/manga_locked.html"));
 		assert!(is_details_page(&html));
 		let manga = parse_details(&html, LOCKED).expect("details");
 		assert_eq!(manga.title, "魔法少女退役後");
-		assert_eq!(manga.authors, Some(Vec::from([String::from("HONGJJANGJJANG")])));
+		assert_eq!(
+			manga.authors,
+			Some(Vec::from([String::from("HONGJJANGJJANG")]))
+		);
 		assert_eq!(
 			manga.tags,
-			Some(Vec::from(["韩漫", "后宫", "奇幻", "无码"].map(String::from)))
+			Some(Vec::from(
+				["韩漫", "后宫", "奇幻", "无码"].map(String::from)
+			))
 		);
 		assert_eq!(manga.status, MangaStatus::Ongoing);
 		assert_eq!(manga.content_rating, ContentRating::NSFW);
@@ -1063,10 +1180,14 @@ mod test {
 			Some("https://bakamh.com/wp-content/uploads/2026/09/19563068206a9a3face25637.jpg")
 		);
 		let description = manga.description.expect("description");
-		assert!(description.starts_with("因为诅咒而一分为二的魔法少女"), "{description}");
+		assert!(
+			description.starts_with("因为诅咒而一分为二的魔法少女"),
+			"{description}"
+		);
 		assert!(description.contains('\n'));
 
-		let free = parse_details(&doc(include_str!("fixtures/manga_free.html")), FREE).expect("details");
+		let free =
+			parse_details(&doc(include_str!("fixtures/manga_free.html")), FREE).expect("details");
 		assert_eq!(free.status, MangaStatus::Completed);
 
 		assert!(!is_details_page(&doc(include_str!("fixtures/home.html"))));
@@ -1092,10 +1213,16 @@ mod test {
 		// Signed in, the sign-in badges are gone and only early access is marked.
 		let signed_in = parse_chapters(&doc(include_str!("fixtures/manga_signed_in.html")), LOCKED);
 		assert!(signed_in.len() >= 21);
-		assert!(signed_in
-			.iter()
-			.all(|c: &Chapter| !c.title.as_deref().unwrap_or("").contains("需登入")));
-		assert!(signed_in[0].title.as_deref().unwrap_or("").ends_with("解鎖"));
+		assert!(signed_in.iter().all(|c: &Chapter| !c
+			.title
+			.as_deref()
+			.unwrap_or("")
+			.contains("需登入")));
+		assert!(signed_in[0]
+			.title
+			.as_deref()
+			.unwrap_or("")
+			.ends_with("解鎖"));
 
 		let free = parse_chapters(&doc(include_str!("fixtures/manga_free.html")), FREE);
 		assert_eq!(free.len(), 103);
@@ -1116,7 +1243,10 @@ mod test {
 		assert_eq!(chapter_number("第1卷"), None);
 		assert_eq!(chapter_number("番外"), None);
 		assert_eq!(badge_suffix("🔒 需登录").as_deref(), Some("需登入"));
-		assert_eq!(badge_suffix("🔒 10月16日 13:00 解锁").as_deref(), Some("10/16 解鎖"));
+		assert_eq!(
+			badge_suffix("🔒 10月16日 13:00 解锁").as_deref(),
+			Some("10/16 解鎖")
+		);
 		assert_eq!(badge_suffix("热门"), None);
 		assert_eq!(parse_status("已取消"), MangaStatus::Cancelled);
 	}
@@ -1149,14 +1279,19 @@ mod test {
 	fn reads_the_session() {
 		let signed_out = doc(include_str!("fixtures/manga_locked.html"));
 		assert!(is_site_page(&signed_out));
-		assert!(!is_site_page(&doc("<html><body class=\"no-js\"></body></html>")));
+		assert!(!is_site_page(&doc(
+			"<html><body class=\"no-js\"></body></html>"
+		)));
 		assert!(!is_signed_in(&signed_out));
 		assert_eq!(logout_url(&signed_out), None);
 		let signed_in = doc(include_str!("fixtures/manga_signed_in.html"));
 		assert!(is_signed_in(&signed_in));
 		assert_eq!(user_name(&signed_in).as_deref(), Some("reader01"));
 		let logout = logout_url(&signed_in).expect("logout");
-		assert!(logout.starts_with("https://bakamh.com/bmpcc/?action=logout&"), "{logout}");
+		assert!(
+			logout.starts_with("https://bakamh.com/bmpcc/?action=logout&"),
+			"{logout}"
+		);
 		assert!(logout.ends_with("_wpnonce=0123456789"), "{logout}");
 
 		assert_eq!(
@@ -1169,7 +1304,10 @@ mod test {
 	#[aidoku_test]
 	fn maps_requests_onto_the_relay() {
 		assert_eq!(
-			relay_target("http://192.168.0.10:8191", "https://bakamh.com/manga/x/?a=1"),
+			relay_target(
+				"http://192.168.0.10:8191",
+				"https://bakamh.com/manga/x/?a=1"
+			),
 			"http://192.168.0.10:8191/r/bakamh.com/manga/x/?a=1"
 		);
 		assert_eq!(
@@ -1180,8 +1318,14 @@ mod test {
 			relay_target("http://r", "https://BakaMH.com/Manga?a=B"),
 			"http://r/r/bakamh.com/Manga?a=B"
 		);
-		assert_eq!(relay_target("http://r", "https://bakamh.com"), "http://r/r/bakamh.com/");
-		assert_eq!(relay_target("http://r", "https://bakamh.com?s=x"), "http://r/r/bakamh.com/?s=x");
+		assert_eq!(
+			relay_target("http://r", "https://bakamh.com"),
+			"http://r/r/bakamh.com/"
+		);
+		assert_eq!(
+			relay_target("http://r", "https://bakamh.com?s=x"),
+			"http://r/r/bakamh.com/?s=x"
+		);
 	}
 
 	#[aidoku_test]
@@ -1203,6 +1347,9 @@ mod test {
 		for key in ["\"key\": \"relayUrl\"", "\"key\": \"relayToken\""] {
 			assert!(settings.find(key).expect(key) < account, "{key}");
 		}
-		assert_eq!(settings[account..].matches("\"type\": \"group\"").count(), 0);
+		assert_eq!(
+			settings[account..].matches("\"type\": \"group\"").count(),
+			0
+		);
 	}
 }

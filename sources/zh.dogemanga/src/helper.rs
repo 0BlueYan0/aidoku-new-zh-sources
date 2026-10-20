@@ -19,7 +19,14 @@ pub const REFERER: &str = "https://dogemanga.com/";
 const SEARCH_PAGE_SIZE: i32 = 24;
 
 pub fn fetch_html(url: &str) -> Result<Document> {
-	Ok(Request::get(url)?.html()?)
+	let response = Request::get(url)?.send()?;
+	let status = response.status_code();
+	// The site rate-limits with a 429 notice page. Parsed as content it would read as an
+	// empty list, a title without chapters, or a chapter without pages.
+	if !(200..300).contains(&status) {
+		bail!("[dogemanga] HTTP {status} for {url}");
+	}
+	Ok(response.get_html()?)
 }
 
 pub fn manga_url(id: &str) -> String {
@@ -71,7 +78,9 @@ pub fn id_after(href: &str, marker: &str) -> Option<String> {
 }
 
 fn text_of(el: &Element) -> String {
-	el.text().map(|t: String| String::from(t.trim())).unwrap_or_default()
+	el.text()
+		.map(|t: String| String::from(t.trim()))
+		.unwrap_or_default()
 }
 
 /// `連載狀態：連載中` / `連載狀態：連載完結`, inside the card's small print.
@@ -82,7 +91,8 @@ fn parse_status(text: &str) -> MangaStatus {
 	let rest = rest.trim_start();
 	if rest.starts_with("連載中") {
 		MangaStatus::Ongoing
-	} else if rest.starts_with("連載完結") || rest.starts_with("已完結") || rest.starts_with("完結") {
+	} else if rest.starts_with("連載完結") || rest.starts_with("已完結") || rest.starts_with("完結")
+	{
 		MangaStatus::Completed
 	} else {
 		MangaStatus::Unknown
@@ -220,9 +230,14 @@ pub fn chapter_numbers(title: &str) -> (Option<f32>, Option<f32>) {
 /// The page ids listed under one of the details page's tabs.
 fn tab_keys(html: &Document, tab: &str) -> Vec<String> {
 	let mut keys: Vec<String> = Vec::new();
-	if let Some(links) = html.select(format!("#site-manga__tab-pane-{tab} a.site-manga-thumbnail__link")) {
+	if let Some(links) = html.select(format!(
+		"#site-manga__tab-pane-{tab} a.site-manga-thumbnail__link"
+	)) {
 		for link in links {
-			if let Some(key) = link.attr("href").and_then(|href: String| id_after(&href, "/p/")) {
+			if let Some(key) = link
+				.attr("href")
+				.and_then(|href: String| id_after(&href, "/p/"))
+			{
 				keys.push(key);
 			}
 		}
@@ -237,6 +252,9 @@ fn tab_keys(html: &Document, tab: &str) -> Vec<String> {
 /// Numbers come from the title but only within the tab the entry sits in: extras such
 /// as `第05卷特典` are under `番外篇`, and numbering them as volume 5 would show two
 /// volume 5s next to `單行本`'s `第05卷`.
+///
+/// Empty when a listed entry has no page id: the page shape broke, and a shorter list
+/// would replace the library's complete one.
 pub fn parse_chapters(html: &Document) -> Vec<Chapter> {
 	let volumes = tab_keys(html, "tankobon");
 	let extras = tab_keys(html, "bangaihen");
@@ -245,8 +263,11 @@ pub fn parse_chapters(html: &Document) -> Vec<Chapter> {
 		return chapters;
 	};
 	for link in links {
-		let Some(key) = link.attr("href").and_then(|href: String| id_after(&href, "/p/")) else {
-			continue;
+		let Some(key) = link
+			.attr("href")
+			.and_then(|href: String| id_after(&href, "/p/"))
+		else {
+			return Vec::new();
 		};
 		if chapters.iter().any(|c: &Chapter| c.key == key) {
 			continue;
@@ -261,7 +282,10 @@ pub fn parse_chapters(html: &Document) -> Vec<Chapter> {
 					.map(|el: Element| text_of(&el))
 					.filter(|t: &String| !t.is_empty())
 			});
-		let (chapter, volume) = title.as_deref().map(chapter_numbers).unwrap_or((None, None));
+		let (chapter, volume) = title
+			.as_deref()
+			.map(chapter_numbers)
+			.unwrap_or((None, None));
 		let (chapter_number, volume_number) = if volumes.contains(&key) {
 			(None, volume)
 		} else if extras.contains(&key) {
@@ -283,30 +307,40 @@ pub fn parse_chapters(html: &Document) -> Vec<Chapter> {
 
 /// Every page of the chapter is listed on any of its reader pages, in
 /// `data-page-index` order.
-fn reader_images(html: &Document) -> Vec<(i32, Element)> {
+///
+/// An image whose index does not parse is an error rather than skipped: without its
+/// index the order of the chapter is unknown.
+fn reader_images(html: &Document) -> Result<Vec<(i32, Element)>> {
 	let mut images: Vec<(i32, Element)> = Vec::new();
 	if let Some(els) = html.select("img.site-reader__image[data-page-index]") {
 		for el in els {
-			if let Some(index) = el
-				.attr("data-page-index")
-				.and_then(|i: String| i.trim().parse::<i32>().ok())
-			{
-				images.push((index, el));
-			}
+			let raw = el.attr("data-page-index").unwrap_or_default();
+			let Ok(index) = raw.trim().parse::<i32>() else {
+				bail!("[dogemanga] unreadable page index {raw:?}");
+			};
+			images.push((index, el));
 		}
 	}
 	images.sort_by_key(|(index, _)| *index);
-	images
+	Ok(images)
 }
 
-pub fn parse_pages(html: &Document) -> Vec<Page> {
-	reader_images(html)
+/// A page without a usable image url fails the whole chapter: dropping it would
+/// hand the reader a chapter with a page silently missing.
+pub fn parse_pages(html: &Document) -> Result<Vec<Page>> {
+	reader_images(html)?
 		.into_iter()
-		.filter_map(|(_, el)| el.attr("data-page-image-url"))
-		.filter(|url: &String| url.starts_with("http"))
-		.map(|url: String| Page {
-			content: PageContent::url(url),
-			..Default::default()
+		.map(|(index, el)| {
+			let Some(url) = el
+				.attr("data-page-image-url")
+				.filter(|url: &String| url.starts_with("http"))
+			else {
+				bail!("[dogemanga] page {index} has no image url");
+			};
+			Ok(Page {
+				content: PageContent::url(url),
+				..Default::default()
+			})
 		})
 		.collect()
 }
@@ -318,7 +352,7 @@ pub fn reader_keys(html: &Document) -> Option<(String, String)> {
 		.select_first("a[href*='/m/']")
 		.and_then(|a: Element| a.attr("href"))
 		.and_then(|href: String| id_after(&href, "/m/"))?;
-	let (_, first) = reader_images(html).into_iter().next()?;
+	let (_, first) = reader_images(html).ok()?.into_iter().next()?;
 	let chapter = first
 		.attr("data-page-id")
 		.map(|id: String| String::from(id.trim()))
@@ -338,16 +372,28 @@ mod test {
 
 	#[aidoku_test]
 	fn reads_ids_from_links() {
-		assert_eq!(id_after("https://dogemanga.com/m/zw7V_YJF", "/m/").as_deref(), Some("zw7V_YJF"));
-		assert_eq!(id_after("https://dogemanga.com/p/-ljHIJQj?x=1", "/p/").as_deref(), Some("-ljHIJQj"));
+		assert_eq!(
+			id_after("https://dogemanga.com/m/zw7V_YJF", "/m/").as_deref(),
+			Some("zw7V_YJF")
+		);
+		assert_eq!(
+			id_after("https://dogemanga.com/p/-ljHIJQj?x=1", "/p/").as_deref(),
+			Some("-ljHIJQj")
+		);
 		assert_eq!(id_after("https://dogemanga.com/?s=1", "/m/"), None);
 		assert_eq!(id_after("https://dogemanga.com/m/", "/m/"), None);
 	}
 
 	#[aidoku_test]
 	fn builds_search_addresses() {
-		assert_eq!(search_url("海賊", 1), "https://dogemanga.com/?q=%E6%B5%B7%E8%B3%8A");
-		assert_eq!(search_url("海賊", 3), "https://dogemanga.com/?q=%E6%B5%B7%E8%B3%8A&o=48");
+		assert_eq!(
+			search_url("海賊", 1),
+			"https://dogemanga.com/?q=%E6%B5%B7%E8%B3%8A"
+		);
+		assert_eq!(
+			search_url("海賊", 3),
+			"https://dogemanga.com/?q=%E6%B5%B7%E8%B3%8A&o=48"
+		);
 	}
 
 	#[aidoku_test]
@@ -360,10 +406,9 @@ mod test {
 		assert!(!result.entries.iter().any(|m: &Manga| m.key == "TXgjojpX"));
 		let first = &result.entries[0];
 		assert_eq!(first.key, "gt9rgUMw");
-		assert!(first
-			.cover
-			.as_deref()
-			.is_some_and(|c: &str| c == "https://dogemanga.com/images/manga-thumbnails/gt9rgUMw.jpg"));
+		assert!(first.cover.as_deref().is_some_and(
+			|c: &str| c == "https://dogemanga.com/images/manga-thumbnails/gt9rgUMw.jpg"
+		));
 		let shangri = result
 			.entries
 			.iter()
@@ -372,7 +417,10 @@ mod test {
 		assert_eq!(shangri.title, "香格里拉·弗陇提亚~屎作猎人向神作发起挑战~");
 		assert_eq!(
 			shangri.authors,
-			Some(Vec::from([String::from("不二凉介"), String::from("硬梨菜")]))
+			Some(Vec::from([
+				String::from("不二凉介"),
+				String::from("硬梨菜")
+			]))
 		);
 		assert_eq!(shangri.status, MangaStatus::Ongoing);
 	}
@@ -381,14 +429,20 @@ mod test {
 	fn the_second_hot_page_carries_the_next_cursor() {
 		let (result, next) = parse_manga_list(doc(include_str!("fixtures/hot_2.html")));
 		assert_eq!(result.entries.len(), 22);
-		assert_eq!(next.as_deref(), Some("https://dogemanga.com/?o=24&p=YVCaU30Y"));
+		assert_eq!(
+			next.as_deref(),
+			Some("https://dogemanga.com/?o=24&p=YVCaU30Y")
+		);
 	}
 
 	#[aidoku_test]
 	fn parses_the_latest_list() {
 		let (result, next) = parse_manga_list(doc(include_str!("fixtures/latest.html")));
 		assert_eq!(result.entries.len(), 24);
-		assert_eq!(next.as_deref(), Some("https://dogemanga.com/?p=thlLShZp&s=1"));
+		assert_eq!(
+			next.as_deref(),
+			Some("https://dogemanga.com/?p=thlLShZp&s=1")
+		);
 		assert!(result
 			.entries
 			.iter()
@@ -399,7 +453,10 @@ mod test {
 	fn search_pages_end_without_a_button() {
 		let (result, next) = parse_manga_list(doc(include_str!("fixtures/search.html")));
 		assert_eq!(result.entries.len(), 24);
-		assert_eq!(next.as_deref(), Some("https://dogemanga.com/?o=24&q=%E6%B5%B7%E8%B3%8A"));
+		assert_eq!(
+			next.as_deref(),
+			Some("https://dogemanga.com/?o=24&q=%E6%B5%B7%E8%B3%8A")
+		);
 		let (result, next) = parse_manga_list(doc(include_str!("fixtures/search_last.html")));
 		assert_eq!(result.entries.len(), 19);
 		assert_eq!(next, None);
@@ -413,9 +470,15 @@ mod test {
 		assert_eq!(manga.title, "香格里拉·弗陇提亚~屎作猎人向神作发起挑战~");
 		assert_eq!(
 			manga.authors,
-			Some(Vec::from([String::from("不二凉介"), String::from("硬梨菜")]))
+			Some(Vec::from([
+				String::from("不二凉介"),
+				String::from("硬梨菜")
+			]))
 		);
-		assert!(manga.description.as_deref().is_some_and(|d: &str| d.starts_with("BUG使人")));
+		assert!(manga
+			.description
+			.as_deref()
+			.is_some_and(|d: &str| d.starts_with("BUG使人")));
 		assert_eq!(manga.status, MangaStatus::Ongoing);
 		assert_eq!(
 			manga.cover.as_deref(),
@@ -430,10 +493,16 @@ mod test {
 		assert_eq!(chapters[0].key, "722O_Csr");
 		assert_eq!(chapters[0].title.as_deref(), Some("第281话试看"));
 		assert_eq!(chapters[0].chapter_number, Some(281.0));
-		assert_eq!(chapters[0].url.as_deref(), Some("https://dogemanga.com/p/722O_Csr"));
+		assert_eq!(
+			chapters[0].url.as_deref(),
+			Some("https://dogemanga.com/p/722O_Csr")
+		);
 		let last = chapters.last().expect("first chapter");
 		assert_eq!(last.chapter_number, Some(1.0));
-		let volumes = chapters.iter().filter(|c: &&Chapter| c.volume_number.is_some()).count();
+		let volumes = chapters
+			.iter()
+			.filter(|c: &&Chapter| c.volume_number.is_some())
+			.count();
 		assert_eq!(volumes, 6);
 		let side = chapters
 			.iter()
@@ -446,24 +515,39 @@ mod test {
 	fn extras_titled_as_volumes_get_no_volume_number() {
 		let chapters = parse_chapters(&doc(include_str!("fixtures/manga_extras.html")));
 		assert_eq!(chapters.len(), 483);
-		let volumes = chapters.iter().filter(|c: &&Chapter| c.volume_number.is_some()).count();
+		let volumes = chapters
+			.iter()
+			.filter(|c: &&Chapter| c.volume_number.is_some())
+			.count();
 		assert_eq!(volumes, 28);
 		for title in ["第05卷特典", "第07卷Animate特典"] {
 			let extra = chapters
 				.iter()
 				.find(|c: &&Chapter| c.title.as_deref() == Some(title))
 				.expect(title);
-			assert_eq!((extra.chapter_number, extra.volume_number), (None, None), "{title}");
+			assert_eq!(
+				(extra.chapter_number, extra.volume_number),
+				(None, None),
+				"{title}"
+			);
 		}
 		let volume = chapters
 			.iter()
 			.find(|c: &&Chapter| c.title.as_deref() == Some("第05卷"))
 			.expect("volume 5");
-		assert_eq!((volume.chapter_number, volume.volume_number), (None, Some(5.0)));
+		assert_eq!(
+			(volume.chapter_number, volume.volume_number),
+			(None, Some(5.0))
+		);
 		// The site's own order, oldest last: volumes 7, 8, 6, 1 from the bottom.
-		let tail: Vec<Option<f32>> =
-			chapters[chapters.len() - 4..].iter().map(|c: &Chapter| c.volume_number).collect();
-		assert_eq!(tail, Vec::from([Some(1.0), Some(6.0), Some(8.0), Some(7.0)]));
+		let tail: Vec<Option<f32>> = chapters[chapters.len() - 4..]
+			.iter()
+			.map(|c: &Chapter| c.volume_number)
+			.collect();
+		assert_eq!(
+			tail,
+			Vec::from([Some(1.0), Some(6.0), Some(8.0), Some(7.0)])
+		);
 	}
 
 	#[aidoku_test]
@@ -479,7 +563,7 @@ mod test {
 	#[aidoku_test]
 	fn reads_every_page_from_a_mid_chapter_reader_page() {
 		let html = doc(include_str!("fixtures/reader.html"));
-		let pages = parse_pages(&html);
+		let pages = parse_pages(&html).unwrap();
 		assert_eq!(pages.len(), 19);
 		assert_eq!(
 			pages[0].content,
@@ -496,9 +580,51 @@ mod test {
 	}
 
 	#[aidoku_test]
+	fn a_chapter_without_a_page_id_rejects_the_list() {
+		let html = doc(concat!(
+			r#"<div id="site-manga__tab-pane-all">"#,
+			r#"<a class="site-manga-thumbnail__link" href="/p/aaa"><img alt="第1話"></a>"#,
+			r#"<a class="site-manga-thumbnail__link" href="/p/bbb"><img alt="第2話"></a>"#,
+			r#"</div>"#,
+		));
+		assert_eq!(parse_chapters(&html).len(), 2);
+		let html = doc(concat!(
+			r#"<div id="site-manga__tab-pane-all">"#,
+			r#"<a class="site-manga-thumbnail__link" href="/p/aaa"><img alt="第1話"></a>"#,
+			r#"<a class="site-manga-thumbnail__link" href="/m/zzz"><img alt="第2話"></a>"#,
+			r#"</div>"#,
+		));
+		assert!(parse_chapters(&html).is_empty());
+	}
+
+	#[aidoku_test]
+	fn a_page_without_an_image_url_fails_the_chapter() {
+		let html = doc(concat!(
+			r#"<img class="site-reader__image" data-page-index="0" data-page-image-url="https://dogemanga.com/images/pages/a.jpg">"#,
+			r#"<img class="site-reader__image" data-page-index="1" data-page-image-url="">"#,
+		));
+		assert!(parse_pages(&html).is_err());
+	}
+
+	#[aidoku_test]
+	fn an_unreadable_page_index_fails_the_chapter() {
+		let html = doc(concat!(
+			r#"<img class="site-reader__image" data-page-index="0" data-page-image-url="https://dogemanga.com/images/pages/a.jpg">"#,
+			r#"<img class="site-reader__image" data-page-index="x" data-page-image-url="https://dogemanga.com/images/pages/b.jpg">"#,
+		));
+		assert!(parse_pages(&html).is_err());
+	}
+
+	#[aidoku_test]
 	fn reads_status_text() {
-		assert_eq!(parse_status("連載狀態：連載中最近更新：2 天前"), MangaStatus::Ongoing);
-		assert_eq!(parse_status("連載狀態：連載完結最近更新：昨天"), MangaStatus::Completed);
+		assert_eq!(
+			parse_status("連載狀態：連載中最近更新：2 天前"),
+			MangaStatus::Ongoing
+		);
+		assert_eq!(
+			parse_status("連載狀態：連載完結最近更新：昨天"),
+			MangaStatus::Completed
+		);
 		assert_eq!(parse_status("最近更新：昨天"), MangaStatus::Unknown);
 	}
 }

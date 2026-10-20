@@ -30,8 +30,8 @@ use base64::{
 
 /// The keys `all2.js` picks from by `data-id`, decoded from its base64 table.
 pub const KEYS: [&str; 10] = [
-	"smkhy258", "smkd95fv", "md496952", "cdcsdwq", "vbfsa256", "cawf151c", "cd56cvda",
-	"8kihnt9", "dso15tlo", "5ko6plhy",
+	"smkhy258", "smkd95fv", "md496952", "cdcsdwq", "vbfsa256", "cawf151c", "cd56cvda", "8kihnt9",
+	"dso15tlo", "5ko6plhy",
 ];
 
 /// The variable the packed script assigns.
@@ -156,7 +156,8 @@ mod test {
 
 	#[aidoku_test]
 	fn unpacks_words_by_index() {
-		let script = "eval(function(p,a,c,k,e,d){}('0 1=\"2+3\"',62,4,'var|x||Ab'.split('|'),0,{}))";
+		let script =
+			"eval(function(p,a,c,k,e,d){}('0 1=\"2+3\"',62,4,'var|x||Ab'.split('|'),0,{}))";
 		assert_eq!(unpack(script).as_deref(), Some("var x=\"2+Ab\""));
 		// Base 62: `10` is 62, `A` is 36; a leading zero is never a packed word.
 		assert_eq!(word_index("10", 62), Some(62));

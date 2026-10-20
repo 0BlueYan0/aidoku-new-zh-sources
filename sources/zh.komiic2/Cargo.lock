@@ -5,7 +5,7 @@ version = 4
 [[package]]
 name = "aidoku"
 version = "0.3.0"
-source = "git+https://github.com/Aidoku/aidoku-rs.git?branch=main#e1320b0a2e11afb59e4dee374883a2212d325699"
+source = "git+https://github.com/Aidoku/aidoku-rs.git?branch=main#ae6485e3c14ecd1fd5497d170eae884c68d04a87"
 dependencies = [
  "euclid",
  "hashbrown",
@@ -16,6 +16,15 @@ dependencies = [
  "serde",
  "talc",
  "thiserror",
+]
+
+[[package]]
+name = "aidoku-test"
+version = "1.0.0"
+source = "git+https://github.com/Aidoku/aidoku-rs.git?branch=main#ae6485e3c14ecd1fd5497d170eae884c68d04a87"
+dependencies = [
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -314,4 +323,5 @@ name = "zhkomiic"
 version = "0.1.0"
 dependencies = [
  "aidoku",
+ "aidoku-test",
 ]

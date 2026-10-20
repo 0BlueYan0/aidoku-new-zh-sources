@@ -25,9 +25,15 @@ pub const SEARCH_PAGE_SIZE: i32 = 30;
 // ---------------------------------------------------------------------------
 
 /// Fetch an API endpoint and return the `data` value of its `{code, message, data}`
-/// envelope. A non-200 `code` becomes an error carrying the server's message.
+/// envelope. A non-2xx status or a non-200 `code` becomes an error carrying the
+/// server's message.
 pub fn fetch_data(url: &str) -> Result<String> {
-	let body = Request::get(url)?.string()?;
+	let response = Request::get(url)?.send()?;
+	let status = response.status_code();
+	if !(200..300).contains(&status) {
+		bail!("[hipmh] {url}: HTTP {status}");
+	}
+	let body = response.get_string()?;
 	let code = json_i64(&body, "code");
 	if code != Some(200) {
 		bail!(
@@ -190,7 +196,10 @@ pub fn json_f64(obj: &str, key: &str) -> Option<f64> {
 
 /// The string elements of a top-level JSON array, e.g. the decoded image list.
 pub fn json_top_strings(array: &str) -> Vec<String> {
-	json_items(array).into_iter().filter_map(as_string).collect()
+	json_items(array)
+		.into_iter()
+		.filter_map(as_string)
+		.collect()
 }
 
 /// A field holding either `["a","b"]` or `[{"name":"a"},{"name":"b"}]`. The list and
@@ -481,9 +490,7 @@ pub fn parse_chapter(obj: &str) -> Option<Chapter> {
 	let reader_hid = json_string(obj, "hid")?;
 	let (_, key) = api_hid(&reader_hid)?;
 	let title = json_string(obj, "title");
-	let chapter_number = title
-		.as_deref()
-		.and_then(chapter_number_from_title);
+	let chapter_number = title.as_deref().and_then(chapter_number_from_title);
 	// `2026-02-07T18:24:45.755357Z`: the fraction varies in length, so parse the first
 	// 19 characters, which are UTC. The `T` becomes a space because aidoku-test-runner
 	// does not understand the quoted `'T'` literal the app's DateFormatter would accept.
@@ -501,6 +508,22 @@ pub fn parse_chapter(obj: &str) -> Option<Chapter> {
 	})
 }
 
+/// One page of `/v1/manga/chapters`, or `None` when it has no `items` or an entry cannot
+/// be read: either would silently drop chapters from the list.
+pub fn parse_chapter_page(data: &str) -> Option<Vec<Chapter>> {
+	json_field(data, "items")
+		.map(json_items)?
+		.into_iter()
+		.map(parse_chapter)
+		.collect()
+}
+
+/// The walked list, if the library should take it. A partial list would read as chapters
+/// having been removed, and an unknown mid answers an empty list (checked 2026-10-20).
+pub fn chapters_to_store(complete: bool, chapters: Vec<Chapter>) -> Option<Vec<Chapter>> {
+	(complete && !chapters.is_empty()).then_some(chapters)
+}
+
 #[cfg(test)]
 mod test {
 	use super::*;
@@ -509,7 +532,10 @@ mod test {
 	#[aidoku_test]
 	fn fields_are_read_from_the_top_level_only() {
 		let detail = r#"{"first_chapter":{"title":"第1话"},"id":8083,"title":"我！天命大反派"}"#;
-		assert_eq!(json_string(detail, "title").as_deref(), Some("我！天命大反派"));
+		assert_eq!(
+			json_string(detail, "title").as_deref(),
+			Some("我！天命大反派")
+		);
 		assert_eq!(json_i64(detail, "id"), Some(8083));
 	}
 
@@ -517,14 +543,23 @@ mod test {
 	fn brackets_inside_strings_do_not_end_values() {
 		let obj = r#"{"description":"【独家】 {x] \"q\"","title":"A"}"#;
 		assert_eq!(json_string(obj, "title").as_deref(), Some("A"));
-		assert_eq!(json_string(obj, "description").as_deref(), Some("【独家】 {x] \"q\""));
+		assert_eq!(
+			json_string(obj, "description").as_deref(),
+			Some("【独家】 {x] \"q\"")
+		);
 	}
 
 	#[aidoku_test]
 	fn names_read_both_shapes() {
-		assert_eq!(json_names(r#"{"genres":["古风","少年"]}"#, "genres"), ["古风", "少年"]);
 		assert_eq!(
-			json_names(r#"{"authors":[{"id":2178,"name":" Chira","role":null}]}"#, "authors"),
+			json_names(r#"{"genres":["古风","少年"]}"#, "genres"),
+			["古风", "少年"]
+		);
+		assert_eq!(
+			json_names(
+				r#"{"authors":[{"id":2178,"name":" Chira","role":null}]}"#,
+				"authors"
+			),
 			["Chira"]
 		);
 	}
@@ -538,21 +573,39 @@ mod test {
 	fn api_hid_is_derived_from_the_reader_hid() {
 		assert_eq!(
 			api_hid("bTo4MDgzLWM6OTIwMw-ODA4MzoxLjAw"),
-			Some((String::from("bTo4MDgz"), String::from("Yzo5MjAz-ODA4MzoxLjAw")))
+			Some((
+				String::from("bTo4MDgz"),
+				String::from("Yzo5MjAz-ODA4MzoxLjAw")
+			))
 		);
 		assert_eq!(
 			api_hid("bTo4MDgzLWM6MTkyMzc1-ODA4MzozNjEuMDA"),
-			Some((String::from("bTo4MDgz"), String::from("YzoxOTIzNzU-ODA4MzozNjEuMDA")))
+			Some((
+				String::from("bTo4MDgz"),
+				String::from("YzoxOTIzNzU-ODA4MzozNjEuMDA")
+			))
 		);
 		assert_eq!(api_hid("bTo4MDgz"), None);
 	}
 
 	#[aidoku_test]
 	fn content_rating_reads_numbers_and_strings() {
-		assert_eq!(content_rating(r#"{"content_rating":1}"#), ContentRating::Safe);
-		assert_eq!(content_rating(r#"{"content_rating":2}"#), ContentRating::NSFW);
-		assert_eq!(content_rating(r#"{"content_rating":"safe"}"#), ContentRating::Safe);
-		assert_eq!(content_rating(r#"{"content_rating":"adult"}"#), ContentRating::NSFW);
+		assert_eq!(
+			content_rating(r#"{"content_rating":1}"#),
+			ContentRating::Safe
+		);
+		assert_eq!(
+			content_rating(r#"{"content_rating":2}"#),
+			ContentRating::NSFW
+		);
+		assert_eq!(
+			content_rating(r#"{"content_rating":"safe"}"#),
+			ContentRating::Safe
+		);
+		assert_eq!(
+			content_rating(r#"{"content_rating":"adult"}"#),
+			ContentRating::NSFW
+		);
 		assert_eq!(content_rating(r#"{"title":"A"}"#), ContentRating::Unknown);
 	}
 
@@ -562,8 +615,14 @@ mod test {
 		let search = r#"[{"id":"bToyODU1MQ-dai-zun-mi-lu-dm-2827-21341","title":"怠尊秘录"},{"id":"bToyODU1MQ-dai-zun-mi-lu-dongman-2827-21341","title":"怠尊秘录"}]"#;
 		let from_list = parse_manga_list(list);
 		assert_eq!(from_list[0].key, "bToyODU1MQ");
-		assert_eq!(from_list[0].cover.as_deref(), Some("https://cover.s3imgs.top/dongman/vertical/x.webp"));
-		assert_eq!(from_list[0].url.as_deref(), Some("https://m.hipmh.com/works/bToyODU1MQ"));
+		assert_eq!(
+			from_list[0].cover.as_deref(),
+			Some("https://cover.s3imgs.top/dongman/vertical/x.webp")
+		);
+		assert_eq!(
+			from_list[0].url.as_deref(),
+			Some("https://m.hipmh.com/works/bToyODU1MQ")
+		);
 		let from_search = parse_manga_list(search);
 		assert_eq!(from_search.len(), 1);
 		assert_eq!(from_search[0].key, "bToyODU1MQ");
@@ -571,7 +630,10 @@ mod test {
 
 	#[aidoku_test]
 	fn chapter_numbers_come_from_the_title() {
-		assert_eq!(chapter_number_from_title("第359话 她一定很想我吧？"), Some(359.0));
+		assert_eq!(
+			chapter_number_from_title("第359话 她一定很想我吧？"),
+			Some(359.0)
+		);
 		assert_eq!(chapter_number_from_title("第三季 第2話"), Some(2.0));
 		assert_eq!(chapter_number_from_title("番外"), None);
 	}
@@ -587,5 +649,24 @@ mod test {
 			Some("https://m.hipmh.com/chapter/go?hid=bTo4MDgzLWM6OTIwMw-ODA4MzoxLjAw")
 		);
 		assert_eq!(chapter.date_uploaded, Some(1770488685));
+	}
+
+	#[aidoku_test]
+	fn a_bad_chapter_page_rejects_the_list() {
+		let good = r#"{"hid":"bTo4MDgzLWM6OTIwMw-ODA4MzoxLjAw","title":"第1话"}"#;
+		let page = format!(r#"{{"items":[{good}],"total_pages":1}}"#);
+		assert_eq!(parse_chapter_page(&page).map(|c| c.len()), Some(1));
+		// No `items` field.
+		assert!(parse_chapter_page(r#"{"total_pages":1}"#).is_none());
+		// One entry without a hid.
+		let page = format!(r#"{{"items":[{good},{{"title":"第2话"}}],"total_pages":1}}"#);
+		assert!(parse_chapter_page(&page).is_none());
+
+		let chapters = parse_chapter_page(r#"{"items":[],"total_pages":0}"#).expect("empty page");
+		assert!(chapters_to_store(true, chapters).is_none());
+		let chapters = parse_chapter_page(&format!(r#"{{"items":[{good}]}}"#)).expect("page");
+		assert!(chapters_to_store(false, chapters).is_none());
+		let chapters = parse_chapter_page(&format!(r#"{{"items":[{good}]}}"#)).expect("page");
+		assert_eq!(chapters_to_store(true, chapters).map(|c| c.len()), Some(1));
 	}
 }

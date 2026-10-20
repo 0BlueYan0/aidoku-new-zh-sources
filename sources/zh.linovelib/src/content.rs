@@ -19,6 +19,11 @@ use crate::reorder;
 /// for a bot. The served paragraphs are then a fraction of the page.
 const WITHHELD: [&str; 2] = ["內容加載失敗", "内容加载失败"];
 
+/// What a chapter the site keeps from readers shows instead of its text: the catalogue
+/// marks it with `❤️`, and the page says it failed review or needs more permission
+/// (`不相容的異種族妻子們` 第241話, 2026-10-20).
+const LOCKED: [&str; 2] = ["沒有可閱讀的章節", "没有可阅读的章节"];
+
 /// One child of `#acontent` worth keeping.
 enum Block {
 	/// Inner HTML of a non-empty `<p>`. Only these take part in the shuffle.
@@ -29,6 +34,11 @@ enum Block {
 /// Whether the page lost paragraphs to the site's bot check.
 pub fn is_withheld(html: &str) -> bool {
 	WITHHELD.iter().any(|marker: &&str| html.contains(marker))
+}
+
+/// Whether the page is the site's notice for a chapter nobody can read.
+pub fn is_locked(html: &str) -> bool {
+	LOCKED.iter().any(|marker: &&str| html.contains(marker))
 }
 
 /// The address of an `<img>`: lazy-loaded ones keep it in `data-src` behind a spinner.
@@ -78,19 +88,25 @@ fn blocks(html: &Document, chapter_id: u64) -> Vec<Block> {
 		}
 	}
 
-	let paragraphs: Vec<String> = served
-		.iter()
-		.filter_map(|block: &Block| match block {
-			Block::Paragraph(p) => Some(p.clone()),
-			Block::Image(_) => None,
-		})
-		.collect();
+	// The paragraphs are restored on their own; the images keep their places, marked by
+	// `Some` in `layout`.
+	let mut paragraphs: Vec<String> = Vec::new();
+	let mut layout: Vec<Option<String>> = Vec::new();
+	for block in served {
+		match block {
+			Block::Paragraph(p) => {
+				paragraphs.push(p);
+				layout.push(None);
+			}
+			Block::Image(src) => layout.push(Some(src)),
+		}
+	}
 	let mut restored = reorder::restore(paragraphs, chapter_id).into_iter();
-	served
+	layout
 		.into_iter()
-		.map(|block: Block| match block {
-			Block::Paragraph(_) => Block::Paragraph(restored.next().unwrap_or_default()),
-			image => image,
+		.map(|slot: Option<String>| match slot {
+			Some(src) => Block::Image(src),
+			None => Block::Paragraph(restored.next().unwrap_or_default()),
 		})
 		.collect()
 }
@@ -121,7 +137,10 @@ pub fn append_page(html: &Document, chapter_id: u64, out: &mut Vec<Segment>) {
 				}
 			}
 			Block::Image(src) => {
-				if !out.iter().any(|s: &Segment| matches!(s, Segment::Image(seen) if *seen == src)) {
+				if !out
+					.iter()
+					.any(|s: &Segment| matches!(s, Segment::Image(seen) if *seen == src))
+				{
 					out.push(Segment::Image(src));
 				}
 			}
@@ -138,7 +157,9 @@ pub fn markdown(segments: &[Segment], mut image: impl FnMut(&str) -> String) -> 
 		}
 		match segment {
 			Segment::Text(text) => out.push_str(text),
-			Segment::Image(src) => out.push_str(&format!("![](<{}>)", image(src).replace('>', "%3E"))),
+			Segment::Image(src) => {
+				out.push_str(&format!("![](<{}>)", image(src).replace('>', "%3E")))
+			}
 		}
 	}
 	out
@@ -156,7 +177,10 @@ fn inline_markdown(html: &str) -> String {
 /// Characters Markdown would treat as syntax at the start of or inside a paragraph.
 fn escape(text: &str, out: &mut String) {
 	for ch in text.chars() {
-		if matches!(ch, '\\' | '`' | '*' | '_' | '[' | ']' | '#' | '<' | '>' | '|' | '~') {
+		if matches!(
+			ch,
+			'\\' | '`' | '*' | '_' | '[' | ']' | '#' | '<' | '>' | '|' | '~'
+		) {
 			out.push('\\');
 		}
 		out.push(ch);
@@ -193,7 +217,9 @@ fn decode_entities(text: &str) -> String {
 			"apos" | "#039" => Some('\''),
 			"nbsp" => Some(' '),
 			_ if name.starts_with("#x") || name.starts_with("#X") => {
-				u32::from_str_radix(&name[2..], 16).ok().and_then(char::from_u32)
+				u32::from_str_radix(&name[2..], 16)
+					.ok()
+					.and_then(char::from_u32)
 			}
 			_ if name.starts_with('#') => name[1..].parse::<u32>().ok().and_then(char::from_u32),
 			_ => None,
@@ -321,7 +347,10 @@ mod test {
 	}
 
 	fn paragraphs(markdown: &str) -> Vec<&str> {
-		markdown.split("\n\n").filter(|p: &&str| !p.is_empty()).collect()
+		markdown
+			.split("\n\n")
+			.filter(|p: &&str| !p.is_empty())
+			.collect()
 	}
 
 	#[aidoku_test]
@@ -344,8 +373,14 @@ mod test {
 		let p = paragraphs(&out);
 		// 118 paragraphs and the one illustration the browser shows.
 		assert_eq!(p.len(), 119);
-		assert_eq!(p[20], "「不過啊，會說『女人味』這種話，更代表你是個蕩婦。」");
-		assert_eq!(p[50], "反觀雪之下，她的頭腦靈活又伶牙俐齒，胸前則像一塊洗衣板。");
+		assert_eq!(
+			p[20],
+			"「不過啊，會說『女人味』這種話，更代表你是個蕩婦。」"
+		);
+		assert_eq!(
+			p[50],
+			"反觀雪之下，她的頭腦靈活又伶牙俐齒，胸前則像一塊洗衣板。"
+		);
 		assert_eq!(p[118], "「就、就是說嘛，很奇怪呢～～」");
 		assert!(p.contains(&"![](<https://img3.readpai.com/0/2/109088/199061.jpg>)"));
 	}
@@ -375,7 +410,9 @@ mod test {
 			.collect();
 		// The six on the page and the eighteen hidden ones.
 		assert_eq!(images.len(), 24);
-		assert!(images.iter().all(|src: &&String| src.starts_with("https://img3.readpai.com/")));
+		assert!(images
+			.iter()
+			.all(|src: &&String| src.starts_with("https://img3.readpai.com/")));
 	}
 
 	#[aidoku_test]
@@ -386,9 +423,22 @@ mod test {
 	}
 
 	#[aidoku_test]
+	fn notices_locked_chapters() {
+		assert!(is_locked(include_str!("fixtures/chapter_locked.html")));
+		assert!(!is_locked(include_str!("fixtures/chapter_403.html")));
+		assert!(!is_locked(include_str!("fixtures/chapter_bili_403.html")));
+	}
+
+	#[aidoku_test]
 	fn inline_html_to_text() {
-		assert_eq!(inline_markdown("A&amp;B <ruby>漢<rp>(</rp><rt>かん</rt><rp>)</rp></ruby>*"), "A&B 漢（かん）\\*");
+		assert_eq!(
+			inline_markdown("A&amp;B <ruby>漢<rp>(</rp><rt>かん</rt><rp>)</rp></ruby>*"),
+			"A&B 漢（かん）\\*"
+		);
 		assert_eq!(inline_markdown("一<br>二"), "一  \n二");
-		assert_eq!(plain_text("「我的青春」<br />\n<br />\n高中生"), "「我的青春」\n高中生");
+		assert_eq!(
+			plain_text("「我的青春」<br />\n<br />\n高中生"),
+			"「我的青春」\n高中生"
+		);
 	}
 }

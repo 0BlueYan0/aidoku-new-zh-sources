@@ -3,7 +3,7 @@ use aidoku::{
 	helpers::uri::{decode_uri, encode_uri_component},
 	imports::{
 		html::{Document, Element},
-		net::Request,
+		net::{Request, Response},
 		std::parse_date,
 	},
 	prelude::*,
@@ -24,9 +24,36 @@ const TAG_BASE: &str = "h漫標籤";
 /// The `分類` terms, in `res/filters.json` order. Only these work as `genre[]` in a
 /// search; a tag slug there is ignored and the whole catalogue comes back.
 pub const CATEGORIES: [&str; 30] = [
-	"全彩", "巨乳", "痴女", "熟女", "變態", "多P", "母狗", "接吻", "肉感", "幻想", "M女", "可愛",
-	"學生", "深喉", "強姦", "亂倫", "NTR", "肛交", "正太", "母子", "M男", "催眠", "懷孕", "姐姐",
-	"貧乳", "女性向", "同人", "聖水", "女同", "韓漫",
+	"全彩",
+	"巨乳",
+	"痴女",
+	"熟女",
+	"變態",
+	"多P",
+	"母狗",
+	"接吻",
+	"肉感",
+	"幻想",
+	"M女",
+	"可愛",
+	"學生",
+	"深喉",
+	"強姦",
+	"亂倫",
+	"NTR",
+	"肛交",
+	"正太",
+	"母子",
+	"M男",
+	"催眠",
+	"懷孕",
+	"姐姐",
+	"貧乳",
+	"女性向",
+	"同人",
+	"聖水",
+	"女同",
+	"韓漫",
 ];
 
 /// The listings' `m_orderby` values; also the sort filter's ids.
@@ -38,7 +65,16 @@ pub fn request(url: &str) -> Result<Request> {
 }
 
 pub fn fetch_html(url: &str) -> Result<Document> {
-	Ok(request(url)?.html()?)
+	read_html(request(url)?.send()?, url)
+}
+
+/// An error page must not be parsed as an empty list or a work without chapters.
+pub fn read_html(response: Response, url: &str) -> Result<Document> {
+	let status = response.status_code();
+	if !(200..300).contains(&status) {
+		bail!("[ho5ho] HTTP {status} for {url}");
+	}
+	Ok(response.get_html()?)
 }
 
 /// A term's slug: the name percent-encoded with lowercase hex and letters (`M女` →
@@ -76,7 +112,12 @@ pub fn listing_url(order: &str, page: i32) -> Option<String> {
 }
 
 pub fn tag_url(name: &str, page: i32) -> String {
-	format!("{BASE_URL}/{}/{}/{}", slug(TAG_BASE), slug(name), page_path(page))
+	format!(
+		"{BASE_URL}/{}/{}/{}",
+		slug(TAG_BASE),
+		slug(name),
+		page_path(page)
+	)
 }
 
 #[derive(Default)]
@@ -95,7 +136,11 @@ pub fn search_url(search: &Search, page: i32) -> String {
 		page_path(page),
 		encode_uri_component(search.query.trim())
 	);
-	if let Some(order) = search.order.as_deref().filter(|o: &&str| ORDERS.contains(o)) {
+	if let Some(order) = search
+		.order
+		.as_deref()
+		.filter(|o: &&str| ORDERS.contains(o))
+	{
 		url.push_str(&format!("&m_orderby={order}"));
 	}
 	for name in &search.categories {
@@ -104,7 +149,11 @@ pub fn search_url(search: &Search, page: i32) -> String {
 	if search.match_all && search.categories.len() > 1 {
 		url.push_str("&op=1");
 	}
-	if let Some(author) = search.author.as_deref().filter(|a: &&str| !a.trim().is_empty()) {
+	if let Some(author) = search
+		.author
+		.as_deref()
+		.filter(|a: &&str| !a.trim().is_empty())
+	{
 		url.push_str(&format!("&author={}", encode_uri_component(author.trim())));
 	}
 	url
@@ -133,7 +182,9 @@ pub fn work_keys(href: &str) -> Option<(String, Option<String>)> {
 }
 
 fn text_of(el: &Element) -> String {
-	el.text().map(|t: String| String::from(t.trim())).unwrap_or_default()
+	el.text()
+		.map(|t: String| String::from(t.trim()))
+		.unwrap_or_default()
 }
 
 /// An `article.ho5ho-v2-card`: cover link, cover image and title link.
@@ -186,7 +237,12 @@ fn taxonomy(html: &Document, heading: &str) -> Vec<String> {
 		return names;
 	};
 	for group in groups {
-		if group.select_first("h3").map(|h: Element| text_of(&h)).as_deref() != Some(heading) {
+		if group
+			.select_first("h3")
+			.map(|h: Element| text_of(&h))
+			.as_deref()
+			!= Some(heading)
+		{
 			continue;
 		}
 		if let Some(links) = group.select("a") {
@@ -203,13 +259,14 @@ fn taxonomy(html: &Document, heading: &str) -> Vec<String> {
 
 /// `<dt>別名</dt><dd>...</dd>` in the details list.
 fn data_value(html: &Document, label: &str) -> Option<String> {
-	html.select("dl.ho5ho-v3-data-list > div")?.find_map(|row: Element| {
-		let dt = row.select_first("dt").map(|el: Element| text_of(&el))?;
-		(dt == label)
-			.then(|| row.select_first("dd").map(|el: Element| text_of(&el)))
-			.flatten()
-			.filter(|v: &String| !v.is_empty())
-	})
+	html.select("dl.ho5ho-v3-data-list > div")?
+		.find_map(|row: Element| {
+			let dt = row.select_first("dt").map(|el: Element| text_of(&el))?;
+			(dt == label)
+				.then(|| row.select_first("dd").map(|el: Element| text_of(&el)))
+				.flatten()
+				.filter(|v: &String| !v.is_empty())
+		})
 }
 
 /// The site has no synopsis and no status. The alternative title (usually the original
@@ -254,7 +311,9 @@ pub fn chapter_title(raw: &str) -> String {
 		let label = prefix.trim_end_matches(|c: char| c.is_ascii_digit());
 		if label.len() < prefix.len()
 			&& label.ends_with(' ')
-			&& label.chars().all(|c: char| c.is_ascii_alphabetic() || c == ' ')
+			&& label
+				.chars()
+				.all(|c: char| c.is_ascii_alphabetic() || c == ' ')
 			&& !rest.trim().is_empty()
 		{
 			return String::from(rest.trim());
@@ -291,8 +350,18 @@ pub fn chapter_number(title: &str) -> Option<f32> {
 /// test runner's date parser does not read month names.
 pub fn release_date(text: &str) -> Option<i64> {
 	const MONTHS: [&str; 12] = [
-		"January", "February", "March", "April", "May", "June", "July", "August", "September",
-		"October", "November", "December",
+		"January",
+		"February",
+		"March",
+		"April",
+		"May",
+		"June",
+		"July",
+		"August",
+		"September",
+		"October",
+		"November",
+		"December",
 	];
 	let (month, rest) = text.trim().split_once(' ')?;
 	let (day, year) = rest.split_once(',')?;
@@ -419,7 +488,10 @@ mod test {
 		}
 		assert_eq!(checked, 160);
 		for name in CATEGORIES {
-			assert!(panel.contains(&format!("h漫分類/{}/\">{name}<", slug(name))), "{name}");
+			assert!(
+				panel.contains(&format!("h漫分類/{}/\">{name}<", slug(name))),
+				"{name}"
+			);
 		}
 	}
 
@@ -464,7 +536,10 @@ mod test {
 			work_keys(decoded),
 			Some((String::from(WORK), Some(String::from("server-1_1"))))
 		);
-		let upper = format!("https://www.ho5ho.com/%E4%B8%AD%E5%AD%97H%E6%BC%AB/{}/", WORK.to_uppercase());
+		let upper = format!(
+			"https://www.ho5ho.com/%E4%B8%AD%E5%AD%97H%E6%BC%AB/{}/",
+			WORK.to_uppercase()
+		);
 		assert_eq!(work_keys(&upper), Some((String::from(WORK), None)));
 		assert_eq!(work_keys("https://www.ho5ho.com/h漫分類/ntr/"), None);
 		assert_eq!(work_keys("https://www.ho5ho.com/"), None);
@@ -501,22 +576,31 @@ mod test {
 			assert_eq!(result.has_next_page, next);
 		}
 		// Related works on a details page are not a listing.
-		assert!(parse_manga_list(&doc(include_str!("fixtures/manga.html"))).entries.is_empty());
+		assert!(parse_manga_list(&doc(include_str!("fixtures/manga.html")))
+			.entries
+			.is_empty());
 	}
 
 	#[aidoku_test]
 	fn reads_the_details_page() {
-		let manga = parse_details(&doc(include_str!("fixtures/manga.html")), WORK).expect("details");
+		let manga =
+			parse_details(&doc(include_str!("fixtures/manga.html")), WORK).expect("details");
 		assert_eq!(manga.title, "無人島遇難的三位辣妹後宮");
 		assert_eq!(
 			manga.authors,
-			Some(Vec::from([String::from("ホウホケキヨ"), String::from("ホケキヨカーニバル")]))
+			Some(Vec::from([
+				String::from("ホウホケキヨ"),
+				String::from("ホケキヨカーニバル")
+			]))
 		);
 		let tags = manga.tags.expect("tags");
 		assert_eq!(tags.len(), 20);
 		assert_eq!(tags[0], "全彩");
 		assert!(tags.contains(&String::from("無人島")));
-		assert_eq!(manga.description.as_deref(), Some("別名：無人島遭難ハーレム"));
+		assert_eq!(
+			manga.description.as_deref(),
+			Some("別名：無人島遭難ハーレム")
+		);
 		assert_eq!(
 			manga.cover.as_deref(),
 			Some("https://ho5hocdn1.b-cdn.net/wp-content/uploads/2024/07/001-216x300.x32686.jpg")
@@ -533,7 +617,9 @@ mod test {
 		assert_eq!(chapters[2].chapter_number, Some(1.0));
 		assert_eq!(
 			chapters[2].url,
-			Some(format!("https://www.ho5ho.com/%e4%b8%ad%e5%ad%97h%e6%bc%ab/{WORK}/server-1/"))
+			Some(format!(
+				"https://www.ho5ho.com/%e4%b8%ad%e5%ad%97h%e6%bc%ab/{WORK}/server-1/"
+			))
 		);
 		// July 6, 2024
 		assert_eq!(chapters[2].date_uploaded, Some(1720224000));
@@ -586,8 +672,11 @@ mod test {
 
 	#[aidoku_test]
 	fn falls_back_to_the_preloaded_list() {
-		let html = include_str!("fixtures/reader.html")
-			.replacen("id=\"ho5ho-reader-image-manifest\"", "id=\"gone\"", 1);
+		let html = include_str!("fixtures/reader.html").replacen(
+			"id=\"ho5ho-reader-image-manifest\"",
+			"id=\"gone\"",
+			1,
+		);
 		assert_eq!(parse_pages(&doc(&html)).len(), 114);
 	}
 }

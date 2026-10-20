@@ -88,14 +88,13 @@ pub fn login(account: &str, password: &str) -> Result<bool> {
 	match token_in(&answer) {
 		Some(token) => {
 			defaults_set(TOKEN_KEY, DefaultValue::String(token));
-			defaults_set(LOGGED_IN_AT_KEY, DefaultValue::String(format!("{}", current_date())));
-			println!("[vomicmh] login successful");
+			defaults_set(
+				LOGGED_IN_AT_KEY,
+				DefaultValue::String(format!("{}", current_date())),
+			);
 			Ok(true)
 		}
-		None => {
-			println!("[vomicmh] login refused: {}", answer.chars().take(120).collect::<String>());
-			Ok(false)
-		}
+		None => Ok(false),
 	}
 }
 
@@ -112,7 +111,10 @@ pub enum Account {
 /// site stopped accepting shows (the reader page just comes back empty).
 pub fn account(token: &str) -> Account {
 	let Ok(response) = Request::get(format!("{API_URL}/me"))
-		.map(|r: Request| r.header("Authorization", &format!("Bearer {token}")).header("Accept", "application/json"))
+		.map(|r: Request| {
+			r.header("Authorization", &format!("Bearer {token}"))
+				.header("Accept", "application/json")
+		})
 		.and_then(|r: Request| r.send())
 	else {
 		return Account::Unreachable;
@@ -137,10 +139,16 @@ mod test {
 	#[aidoku_test]
 	fn reads_login_answers() {
 		assert_eq!(
-			token_in(r#"{"code":200,"data":{"id":1,"name":"a","token":"nested"},"token":"eyJ.x.y","ttl":8640000}"#).as_deref(),
+			token_in(
+				r#"{"code":200,"data":{"id":1,"name":"a","token":"nested"},"token":"eyJ.x.y","ttl":8640000}"#
+			)
+			.as_deref(),
 			Some("eyJ.x.y")
 		);
-		assert_eq!(token_in(r#"{"code":400,"message":"用户名或密码错误"}"#), None);
+		assert_eq!(
+			token_in(r#"{"code":400,"message":"用户名或密码错误"}"#),
+			None
+		);
 		assert_eq!(token_in(""), None);
 		assert_eq!(json_escape("a\"b\\c"), "a\\\"b\\\\c");
 	}

@@ -2,25 +2,26 @@
 
 use aidoku::{
 	alloc::{String, Vec},
+	helpers::uri::encode_uri_component,
 	imports::{
 		html::Document,
-		net::Request,
+		net::{Request, Response},
 		std::{current_date, send_partial_result},
 	},
 	prelude::*,
 	Chapter, ContentRating, DeepLinkHandler, DeepLinkResult, DynamicSettings, FilterValue,
-	GroupSetting, HashMap, NotificationHandler, Setting, WebLoginHandler,
-	Home, HomeComponent, HomeComponentValue, HomeLayout, HomePartialResult,
-	ImageRequestProvider, Link, Listing, ListingProvider, Manga, MangaPageResult,
-	MangaStatus, Page, PageContent, PageContext, Result, Source, Viewer,
+	GroupSetting, HashMap, Home, HomeComponent, HomeComponentValue, HomeLayout, HomePartialResult,
+	ImageRequestProvider, Link, Listing, ListingProvider, Manga, MangaPageResult, MangaStatus,
+	NotificationHandler, Page, PageContent, PageContext, Result, Setting, Source, Viewer,
+	WebLoginHandler,
 };
 
-mod helper;
-mod models;
 mod api;
 mod auth;
+mod helper;
 #[cfg(all(test, feature = "live-tests"))]
 mod live_tests;
+mod models;
 use helper::*;
 
 const BASE_URL: &str = "https://www.webtoons.com";
@@ -47,23 +48,30 @@ fn with_cache_bust(url: &str) -> String {
 /// Build-only half of `fetch_manga_list`, so `get_home` can batch rows with `send_all`.
 fn manga_list_request(url: &str) -> Result<Request> {
 	let request_url = with_cache_bust(url);
-	Ok(auth::with_web_session(Request::get(&request_url)?
-		.header("Referer", BASE_URL)
-		.header("User-Agent", USER_AGENT)
-		.header("Cache-Control", "no-cache, no-store, must-revalidate")
-		.header("Pragma", "no-cache")))
+	Ok(auth::with_web_session(
+		Request::get(&request_url)?
+			.header("Referer", BASE_URL)
+			.header("User-Agent", USER_AGENT)
+			.header("Cache-Control", "no-cache, no-store, must-revalidate")
+			.header("Pragma", "no-cache"),
+	))
+}
+
+/// The page of a response answered with 2xx. An error or maintenance page parsed as a
+/// list or a details page would show as no results or overwrite a work's details.
+fn read_html(response: Response, url: &str) -> Result<Document> {
+	let status = response.status_code();
+	if !(200..300).contains(&status) {
+		bail!("WEBTOON HTTP {status} for {url}");
+	}
+	Ok(response.get_html()?)
 }
 
 fn parse_manga_list(html: &Document) -> (Vec<Manga>, bool) {
-	let mut entries: Vec<Manga> = Vec::new();
-
-	if let Some(list) = html.select("ul.webtoon_list li a.link") {
-		for item in list {
-			if let Some(manga) = parse_manga_item(&item) {
-				entries.push(manga);
-			}
-		}
-	}
+	let entries: Vec<Manga> = html
+		.select("ul.webtoon_list li a.link")
+		.map(|list| list.filter_map(|item| parse_manga_item(&item)).collect())
+		.unwrap_or_default();
 
 	let has_next_page = html.select_first(".pg_next").is_some();
 	(entries, has_next_page)
@@ -71,7 +79,7 @@ fn parse_manga_list(html: &Document) -> (Vec<Manga>, bool) {
 
 /// Helper: fetch a page and parse manga items.
 fn fetch_manga_list(url: &str) -> Result<(Vec<Manga>, bool)> {
-	let html = manga_list_request(url)?.html()?;
+	let html = read_html(manga_list_request(url)?.send()?, url)?;
 	Ok(parse_manga_list(&html))
 }
 
@@ -81,8 +89,8 @@ fn listing_url(id: &str, page: i32) -> Option<String> {
 		"popular" => Some(format!(
 			"{BASE_URL}{LANG_PATH}/ranking?sortOrder=MANA&page={page}"
 		)),
-		"monday" | "tuesday" | "wednesday" | "thursday"
-		| "friday" | "saturday" | "sunday" | "complete" => Some(format!(
+		"monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday" | "sunday"
+		| "complete" => Some(format!(
 			"{BASE_URL}{LANG_PATH}/originals/{id}?sortOrder=MANA"
 		)),
 		_ => None,
@@ -91,13 +99,21 @@ fn listing_url(id: &str, page: i32) -> Option<String> {
 
 /// The mobile web list is a compatibility map, never the authoritative App list.
 fn mobile_chapters(title_no: &str) -> Result<Vec<Chapter>> {
-	let title_no = title_no.parse::<i32>().map_err(|_| error!("無效的作品編號"))?;
+	let title_no = title_no
+		.parse::<i32>()
+		.map_err(|_| error!("無效的作品編號"))?;
 	let url = with_cache_bust(&format!("{MOBILE_API}/{title_no}/episodes?pageSize=99999"));
-	let request = Request::get(url)?.timeout(20.0)
-		.header("Referer", BASE_URL).header("User-Agent", USER_AGENT)
+	let request = Request::get(&url)?
+		.timeout(20.0)
+		.header("Referer", BASE_URL)
+		.header("User-Agent", USER_AGENT)
 		.header("Cache-Control", "no-cache, no-store, must-revalidate");
-	let body = auth::with_web_session(request).string()?;
-	parse_episodes_json(&body)
+	let response = auth::with_web_session(request).send()?;
+	let status = response.status_code();
+	if !(200..300).contains(&status) {
+		bail!("WEBTOON HTTP {status} for {url}");
+	}
+	parse_episodes_json(&response.get_string()?)
 }
 
 /// HTML details remain useful when optional App metadata is unavailable.
@@ -111,14 +127,15 @@ fn update_viewer(
 	let info = match info {
 		Ok(info) => info,
 		Err(err) if needs_chapters => return Err(err),
-		Err(_) => {
-			println!("[webtoons] optional App details unavailable; retaining web details");
-			return Ok(None);
-		}
+		Err(_) => return Ok(None),
 	};
 	manga.viewer = if info.is_manga() {
-		episode_info(&manga.key, info.first_episode_no).map(|episode| episode.viewer()).unwrap_or(manga.viewer)
-	} else { Viewer::Webtoon };
+		episode_info(&manga.key, info.first_episode_no)
+			.map(|episode| episode.viewer())
+			.unwrap_or(manga.viewer)
+	} else {
+		Viewer::Webtoon
+	};
 	Ok(Some(info))
 }
 
@@ -132,20 +149,34 @@ fn read_chapter(
 	app_pages: impl FnOnce(i32, bool) -> Result<Vec<Page>>,
 	web_pages: impl FnOnce(&str) -> Result<Vec<Page>>,
 ) -> Result<Vec<Page>> {
-	let public_url = chapter.url.as_deref().filter(|url| url.starts_with("https://www.webtoons.com/"))
-		.or_else(|| chapter.key.starts_with("https://www.webtoons.com/").then_some(chapter.key.as_str()));
+	let public_url = chapter
+		.url
+		.as_deref()
+		.filter(|url| url.starts_with("https://www.webtoons.com/"))
+		.or_else(|| {
+			chapter
+				.key
+				.starts_with("https://www.webtoons.com/")
+				.then_some(chapter.key.as_str())
+		});
 	if !logged_in && manga.viewer == Viewer::Webtoon {
-		if let Some(url) = public_url { return web_pages(url); }
+		if let Some(url) = public_url {
+			return web_pages(url);
+		}
 	}
 	let info = match title_info() {
 		Ok(info) => info,
-		Err(err) => return match public_url {
-			Some(url) => web_pages(url),
-			None => Err(err),
-		},
+		Err(err) => {
+			return match public_url {
+				Some(url) => web_pages(url),
+				None => Err(err),
+			}
+		}
 	};
 	if !info.is_manga() && !logged_in {
-		if let Some(url) = public_url { return web_pages(url); }
+		if let Some(url) = public_url {
+			return web_pages(url);
+		}
 	}
 	let app_result = (|| {
 		let episode = episode_no(&chapter.key).ok_or_else(|| error!("無效的章節編號"))?;
@@ -154,23 +185,21 @@ fn read_chapter(
 	match app_result {
 		Ok(pages) => Ok(pages),
 		Err(err) => match public_url {
-			Some(url) => {
-				println!("[webtoons] App reader unavailable; trying public viewer");
-				web_pages(url)
-			}
+			Some(url) => web_pages(url),
 			None => Err(err),
-		}
+		},
 	}
 }
 
 fn web_pages(viewer_url: &str) -> Result<Vec<Page>> {
-	let viewer_url = with_cache_bust(viewer_url);
-	let request = Request::get(&viewer_url)?.timeout(20.0)
+	let request_url = with_cache_bust(viewer_url);
+	let request = Request::get(&request_url)?
+		.timeout(20.0)
 		.header("Referer", BASE_URL)
 		.header("User-Agent", USER_AGENT)
 		.header("Cache-Control", "no-cache, no-store, must-revalidate")
 		.header("Pragma", "no-cache");
-	let html = auth::with_web_session(request).html()?;
+	let html = read_html(auth::with_web_session(request).send()?, viewer_url)?;
 
 	let mut pages: Vec<Page> = Vec::new();
 
@@ -182,9 +211,7 @@ fn web_pages(viewer_url: &str) -> Result<Vec<Page>> {
 
 	if let Some(images) = html.select(image_selector) {
 		for img in images {
-			let img_url: Option<String> = img
-				.attr("data-url")
-				.or_else(|| img.attr("src"));
+			let img_url: Option<String> = img.attr("data-url").or_else(|| img.attr("src"));
 
 			if let Some(url) = img_url {
 				if url.contains("bg_transparency")
@@ -225,8 +252,11 @@ impl Source for WebtoonSource {
 		page: i32,
 		filters: Vec<FilterValue>,
 	) -> Result<MangaPageResult> {
-		if let Some(keyword) = query {
-			let url = format!("{BASE_URL}{LANG_PATH}/search?keyword={keyword}");
+		if let Some(keyword) = query.filter(|q: &String| !q.trim().is_empty()) {
+			let url = format!(
+				"{BASE_URL}{LANG_PATH}/search?keyword={}",
+				encode_uri_component(keyword.trim())
+			);
 			let (entries, _) = fetch_manga_list(&url)?;
 			return Ok(MangaPageResult {
 				entries,
@@ -251,9 +281,8 @@ impl Source for WebtoonSource {
 			}
 		}
 
-		let url = format!(
-			"{BASE_URL}{LANG_PATH}/genres/{genre_slug}?sortOrder={sort_order}&page={page}"
-		);
+		let url =
+			format!("{BASE_URL}{LANG_PATH}/genres/{genre_slug}?sortOrder={sort_order}&page={page}");
 
 		let (entries, has_next_page) = fetch_manga_list(&url)?;
 
@@ -269,45 +298,40 @@ impl Source for WebtoonSource {
 		needs_details: bool,
 		needs_chapters: bool,
 	) -> Result<Manga> {
-		if needs_details || needs_chapters { auth::ensure_session(); }
+		if needs_details || needs_chapters {
+			auth::ensure_session();
+		}
 		let title_no = manga.key.clone();
-		println!(
-			"[webtoons] get_manga_update: title_no={}, needs_details={}, needs_chapters={}",
-			title_no, needs_details, needs_chapters
-		);
 
 		if needs_details {
-			let detail_url = if let Some(ref url) = manga.url {
-				url.clone()
-			} else {
-				format!("{BASE_URL}{LANG_PATH}/originals/a/list?title_no={title_no}")
+			let detail_url = match manga.url {
+				Some(ref url) => with_cache_bust(url),
+				None => with_cache_bust(&format!(
+					"{BASE_URL}{LANG_PATH}/originals/a/list?title_no={title_no}"
+				)),
 			};
-
-			println!("[webtoons] fetching details: {}", detail_url);
-
-			let detail_url = with_cache_bust(&detail_url);
 			let request = Request::get(&detail_url)?
 				.header("Referer", BASE_URL)
 				.header("User-Agent", USER_AGENT)
 				.header("Cache-Control", "no-cache, no-store, must-revalidate")
 				.header("Pragma", "no-cache");
-			let html = auth::with_web_session(request).html()?;
+			let html = read_html(auth::with_web_session(request).send()?, &detail_url)?;
 
-			if let Some(title_el) = html.select_first("h1.subj") {
-				if let Some(text) = title_el.text() {
-					manga.title = text;
-				}
-			} else if let Some(title_el) = html.select_first(".subj") {
-				if let Some(text) = title_el.text() {
-					manga.title = text;
-				}
-			}
+			// A page without the title is not a details page; overwriting from it would
+			// blank the details and flip a completed work to ongoing.
+			let Some(title) = html
+				.select_first("h1.subj")
+				.or_else(|| html.select_first(".subj"))
+				.and_then(|el| el.text())
+				.filter(|text: &String| !text.trim().is_empty())
+			else {
+				bail!("WEBTOON details page has no title: {detail_url}");
+			};
+			manga.title = title;
 
 			if let Some(author_el) = html.select_first(".author_area") {
 				if let Some(text) = author_el.text() {
-					let cleaned = text
-						.replace("Writer Info", "")
-						.replace("作家資訊", "");
+					let cleaned = text.replace("Writer Info", "").replace("作家資訊", "");
 					let authors: Vec<String> = cleaned
 						.split(',')
 						.flat_map(|s: &str| s.split('/'))
@@ -330,10 +354,12 @@ impl Source for WebtoonSource {
 				}
 			}
 
-			if let Some(genre_el) = html.select_first(".genre") {
-				if let Some(text) = genre_el.text() {
-					manga.tags = Some(aidoku::alloc::vec![text]);
-				}
+			if let Some(text) = html
+				.select_first(".genre")
+				.and_then(|el| el.text())
+				.filter(|text: &String| !text.trim().is_empty())
+			{
+				manga.tags = Some(aidoku::alloc::vec![text]);
 			}
 
 			// Only set cover from og:image if not already set from listing
@@ -353,12 +379,18 @@ impl Source for WebtoonSource {
 			};
 
 			manga.content_rating = ContentRating::Safe;
-			if manga.viewer == Viewer::Unknown { manga.viewer = Viewer::Webtoon; }
-			println!("[webtoons] details fetched OK for title_no={}", title_no);
+			if manga.viewer == Viewer::Unknown {
+				manga.viewer = Viewer::Webtoon;
+			}
 		}
 
 		if needs_details || needs_chapters {
-			let info = update_viewer(&mut manga, needs_chapters, api::title_info(&title_no), api::episode_info)?;
+			let info = update_viewer(
+				&mut manga,
+				needs_chapters,
+				api::title_info(&title_no),
+				api::episode_info,
+			)?;
 			if let Some(info) = info.filter(|_| needs_chapters) {
 				let mut legacy = mobile_chapters(&title_no)?;
 				// A library refresh may also provide stored keys from before a slug change.
@@ -366,28 +398,29 @@ impl Source for WebtoonSource {
 					legacy.extend(previous.iter().cloned());
 				}
 				let episodes = api::episodes(&title_no, info.total_episode_count)?;
-				let mut chapters = models::chapters_from_episodes(episodes, &legacy, info.is_manga())?;
+				let mut chapters =
+					models::chapters_from_episodes(episodes, &legacy, info.is_manga())?;
 				let rights = api::product_rights(&title_no)?;
-				println!("[webtoons] title {}: {} chapters, {} returned rights, logged_in={}",
-					title_no, chapters.len(), rights.len(), auth::is_logged_in());
 				models::apply_rights(&mut chapters, &title_no, &rights, current_date() * 1000);
 				api::remember_keys(&title_no, &mut chapters);
 				manga.chapters = Some(chapters);
 			}
 		}
 
-		println!("[webtoons] get_manga_update done for title_no={}", title_no);
 		Ok(manga)
 	}
 
 	fn get_page_list(&self, manga: Manga, chapter: Chapter) -> Result<Vec<Page>> {
 		auth::ensure_session();
-		read_chapter(&manga, &chapter, auth::is_logged_in(),
+		read_chapter(
+			&manga,
+			&chapter,
+			auth::is_logged_in(),
 			|| api::title_info(&manga.key),
 			|episode, is_manga| api::app_pages(&manga.key, episode, is_manga),
-			web_pages)
+			web_pages,
+		)
 	}
-
 }
 
 impl ListingProvider for WebtoonSource {
@@ -480,12 +513,12 @@ impl Home for WebtoonSource {
 		let mut rows = Vec::new();
 		let mut requests: Vec<Request> = Vec::new();
 		for (id, name) in sections {
-			match listing_url(id, 1).map(|url| manga_list_request(&url)) {
-				Some(Ok(request)) => {
-					rows.push((id, name));
-					requests.push(request);
-				}
-				_ => println!("[webtoons] home row {} could not build its request", id),
+			let Some(url) = listing_url(id, 1) else {
+				continue;
+			};
+			if let Ok(request) = manga_list_request(&url) {
+				rows.push((id, name, url));
+				requests.push(request);
 			}
 		}
 		let mut responses = Vec::new();
@@ -496,17 +529,13 @@ impl Home for WebtoonSource {
 		}
 
 		let mut responses = responses.into_iter();
-		for (id, name) in rows {
-			let entries = match responses.next().map(|r| r.and_then(|res| res.get_html())) {
+		for (id, name, url) in rows {
+			let entries = match responses
+				.next()
+				.map(|r| r.map_err(Into::into).and_then(|res| read_html(res, &url)))
+			{
 				Some(Ok(html)) => parse_manga_list(&html).0,
-				Some(Err(err)) => {
-					println!("[webtoons] home row {} failed: {:?}", id, err);
-					continue;
-				}
-				None => {
-					println!("[webtoons] home row {} got no response", id);
-					continue;
-				}
+				_ => continue,
 			};
 			if !entries.is_empty() {
 				let links: Vec<Link> = entries.into_iter().map(Link::from).collect();
@@ -530,11 +559,7 @@ impl Home for WebtoonSource {
 }
 
 impl ImageRequestProvider for WebtoonSource {
-	fn get_image_request(
-		&self,
-		url: String,
-		context: Option<PageContext>,
-	) -> Result<Request> {
+	fn get_image_request(&self, url: String, context: Option<PageContext>) -> Result<Request> {
 		api::image_request(url, context.as_ref())
 	}
 }
@@ -546,7 +571,8 @@ impl DeepLinkHandler for WebtoonSource {
 				let episode = episode_no(&url).ok_or_else(|| error!("無效的章節連結"))?;
 				let key = match api::saved_key(&title_no, episode) {
 					Some(key) => key,
-					None => mobile_chapters(&title_no)?.into_iter()
+					None => mobile_chapters(&title_no)?
+						.into_iter()
 						.find(|chapter| episode_no(&chapter.key) == Some(episode))
 						.map(|chapter| chapter.key)
 						.unwrap_or_else(|| format!("{episode}")),
@@ -578,16 +604,18 @@ register_source!(
 /// Aidoku's web-login commit removes its login setting when the callback map
 /// is empty, even if the source verified cookies from the shared WebView store.
 fn native_web_login_result(verified: bool, cookies: &HashMap<String, String>) -> bool {
-	if verified && cookies.is_empty() {
-		println!("[webtoons] verified login: empty callback map, keeping native sheet open");
-	}
 	verified && !cookies.is_empty()
 }
 
 impl WebLoginHandler for WebtoonSource {
 	fn handle_web_login(&self, key: String, cookies: HashMap<String, String>) -> Result<bool> {
-		if key != "login" { bail!("Invalid login key: {key}"); }
-		Ok(native_web_login_result(auth::capture_web_login(false), &cookies))
+		if key != "login" {
+			bail!("Invalid login key: {key}");
+		}
+		Ok(native_web_login_result(
+			auth::capture_web_login(false),
+			&cookies,
+		))
 	}
 }
 
@@ -596,8 +624,7 @@ impl NotificationHandler for WebtoonSource {
 		match notification.as_str() {
 			"login" => auth::handle_login_notification(),
 			"syncLogin" => {
-				let synced = auth::capture_web_login(true);
-				println!("[webtoons] manual login sync succeeded={synced}");
+				auth::capture_web_login(true);
 			}
 			_ => {}
 		}
@@ -612,7 +639,8 @@ impl DynamicSettings for WebtoonSource {
 			footer: Some(auth::account_footer().into()),
 			items: Vec::new(),
 			..Default::default()
-		}.into()])
+		}
+		.into()])
 	}
 }
 
@@ -637,49 +665,126 @@ mod fallback_tests {
 	use aidoku_test::aidoku_test;
 
 	fn public_chapter() -> Chapter {
-		Chapter { key: "https://www.webtoons.com/zh-hant/a/b/viewer?title_no=1&episode_no=1".into(), ..Default::default() }
+		Chapter {
+			key: "https://www.webtoons.com/zh-hant/a/b/viewer?title_no=1&episode_no=1".into(),
+			..Default::default()
+		}
 	}
 
 	#[aidoku_test]
 	fn details_survive_api_failure_but_full_chapter_updates_fail() {
-		let mut manga = Manga { title: "網頁詳情".into(), description: Some("簡介".into()), viewer: Viewer::LeftToRight, ..Default::default() };
-		assert!(update_viewer(&mut manga, false, Err(error!("offline")), |_, _| panic!("no episode request")).unwrap().is_none());
+		let mut manga = Manga {
+			title: "網頁詳情".into(),
+			description: Some("簡介".into()),
+			viewer: Viewer::LeftToRight,
+			..Default::default()
+		};
+		assert!(
+			update_viewer(&mut manga, false, Err(error!("offline")), |_, _| panic!(
+				"no episode request"
+			))
+			.unwrap()
+			.is_none()
+		);
 		assert_eq!(manga.title, "網頁詳情");
 		assert_eq!(manga.description.as_deref(), Some("簡介"));
 		assert_eq!(manga.viewer, Viewer::LeftToRight);
-		assert!(update_viewer(&mut manga, true, Err(error!("offline")), |_, _| panic!("no episode request")).is_err());
+		assert!(
+			update_viewer(&mut manga, true, Err(error!("offline")), |_, _| panic!(
+				"no episode request"
+			))
+			.is_err()
+		);
 	}
 
 	#[aidoku_test]
 	fn anonymous_public_webtoon_reads_without_app_api() {
-		let manga = Manga { viewer: Viewer::Webtoon, ..Default::default() };
-		let pages = read_chapter(&manga, &public_chapter(), false,
+		let manga = Manga {
+			viewer: Viewer::Webtoon,
+			..Default::default()
+		};
+		let pages = read_chapter(
+			&manga,
+			&public_chapter(),
+			false,
 			|| panic!("public webtoon must not need titleInfo"),
 			|_, _| panic!("no App reader"),
-			|_| Ok(aidoku::alloc::vec![Page::default()])).unwrap();
+			|_| Ok(aidoku::alloc::vec![Page::default()]),
+		)
+		.unwrap();
 		assert_eq!(pages.len(), 1);
 	}
 
 	#[aidoku_test]
 	fn api_outage_and_expired_session_can_read_public_viewer_in_same_call() {
-		let manga = Manga { viewer: Viewer::RightToLeft, ..Default::default() };
+		let manga = Manga {
+			viewer: Viewer::RightToLeft,
+			..Default::default()
+		};
 		let chapter = public_chapter();
-		assert_eq!(read_chapter(&manga, &chapter, true,
-			|| Err(error!("titleInfo offline")), |_, _| panic!("no App reader"),
-			|_| Ok(aidoku::alloc::vec![Page::default()])).unwrap().len(), 1);
-		let info = models::TitleInfo { viewer: "MANGA".into(), first_episode_no: 1, total_episode_count: 1 };
-		assert_eq!(read_chapter(&manga, &chapter, true,
-			|| Ok(info), |_, manga| { assert!(manga); Err(error!("登入已失效")) },
-			|_| Ok(aidoku::alloc::vec![Page::default()])).unwrap().len(), 1);
+		assert_eq!(
+			read_chapter(
+				&manga,
+				&chapter,
+				true,
+				|| Err(error!("titleInfo offline")),
+				|_, _| panic!("no App reader"),
+				|_| Ok(aidoku::alloc::vec![Page::default()])
+			)
+			.unwrap()
+			.len(),
+			1
+		);
+		let info = models::TitleInfo {
+			viewer: "MANGA".into(),
+			first_episode_no: 1,
+			total_episode_count: 1,
+		};
+		assert_eq!(
+			read_chapter(
+				&manga,
+				&chapter,
+				true,
+				|| Ok(info),
+				|_, manga| {
+					assert!(manga);
+					Err(error!("登入已失效"))
+				},
+				|_| Ok(aidoku::alloc::vec![Page::default()])
+			)
+			.unwrap()
+			.len(),
+			1
+		);
 	}
 
 	#[aidoku_test]
 	fn app_only_failure_and_empty_public_viewer_are_not_successful_reading() {
 		let manga = Manga::default();
-		let chapter = Chapter { key: "2".into(), ..Default::default() };
-		assert!(read_chapter(&manga, &chapter, false, || Err(error!("offline")),
-			|_, _| panic!("no App reader"), |_| panic!("no fabricated web URL")).is_err());
-		assert!(read_chapter(&Manga { viewer: Viewer::Webtoon, ..Default::default() }, &public_chapter(), false,
-			|| panic!("no titleInfo"), |_, _| panic!("no App reader"), |_| Err(error!("no images"))).is_err());
+		let chapter = Chapter {
+			key: "2".into(),
+			..Default::default()
+		};
+		assert!(read_chapter(
+			&manga,
+			&chapter,
+			false,
+			|| Err(error!("offline")),
+			|_, _| panic!("no App reader"),
+			|_| panic!("no fabricated web URL")
+		)
+		.is_err());
+		assert!(read_chapter(
+			&Manga {
+				viewer: Viewer::Webtoon,
+				..Default::default()
+			},
+			&public_chapter(),
+			false,
+			|| panic!("no titleInfo"),
+			|_, _| panic!("no App reader"),
+			|_| Err(error!("no images"))
+		)
+		.is_err());
 	}
 }

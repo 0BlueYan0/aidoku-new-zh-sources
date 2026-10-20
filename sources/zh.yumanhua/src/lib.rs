@@ -30,10 +30,12 @@ fn api_page_with(path: &str, number: &str, page: i32, retry: bool) -> Result<Man
 	if page > MAX_PAGES {
 		return Ok(empty_page());
 	}
-	Ok(match post_list_with(path, &sort_form(number, page), retry)? {
-		Some(data) => page_result(&data, page),
-		None => empty_page(),
-	})
+	Ok(
+		match post_list_with(path, &sort_form(number, page), retry)? {
+			Some(data) => page_result(&data, page),
+			None => empty_page(),
+		},
+	)
 }
 
 struct YumanhuaSource;
@@ -53,7 +55,9 @@ impl Source for YumanhuaSource {
 		let mut unknown_tag = false;
 		for filter in filters {
 			if let FilterValue::Select { id, value } = filter {
-				if id != "genre" || value.is_empty() {
+				// The app only sends the select when it is not the default (`""`), and a
+				// tapped tag always has a name.
+				if id != "genre" {
 					continue;
 				}
 				// The select sends its `ids`; a tapped tag sends the site's name instead.
@@ -62,7 +66,6 @@ impl Source for YumanhuaSource {
 				} else if let Some(id) = category_id(value.trim()) {
 					category = Some(String::from(id));
 				} else {
-					println!("[yumanhua] unknown tag {value}");
 					unknown_tag = true;
 				}
 			}
@@ -102,41 +105,36 @@ impl Source for YumanhuaSource {
 		let html = fetch_html(&manga_url(&manga.key))?;
 
 		if needs_details {
-			match parse_details(&html, &manga.key) {
-				Some(details) => {
-					let chapters = manga.chapters.take();
-					manga = details;
-					manga.chapters = chapters;
-					send_partial_result(&manga);
-				}
-				None => println!("[yumanhua] ERROR no details on the page of {}", manga.key),
+			if let Some(details) = parse_details(&html, &manga.key) {
+				let chapters = manga.chapters.take();
+				manga = details;
+				manga.chapters = chapters;
+				send_partial_result(&manga);
 			}
 		}
 
 		if needs_chapters {
-			let mut chapters = parse_page_chapters(&html, &manga.key);
-			let mut complete = true;
-			if has_more_chapters(&html) {
+			// A chapter link that cannot be read keeps the library's chapters, as below.
+			let (mut chapters, mut complete) = match parse_page_chapters(&html, &manga.key) {
+				Some(chapters) => (chapters, true),
+				None => (Vec::new(), false),
+			};
+			if complete && has_more_chapters(&html) {
 				match post_list("/morechapter", &format!("id={}", manga.key)) {
+					// An answer that adds nothing is as incomplete as -1, and so is one with
+					// an item that cannot be read.
 					Ok(Some(data)) => {
-						let before = chapters.len();
-						append_more_chapters(&mut chapters, &data, &manga.key);
-						// An answer that adds nothing is as incomplete as -1.
-						complete = chapters.len() > before;
+						complete = append_more_chapters(&mut chapters, &data, &manga.key)
+							.is_ok_and(|added: usize| added > 0);
 					}
 					// Works with 20 chapters or fewer have no button (2026-10-13), so -1 here
 					// means the rest failed to load, not that there is no rest.
 					Ok(None) => complete = false,
-					Err(error) => {
-						println!("[yumanhua] ERROR more chapters of {}: {error:?}", manga.key);
-						complete = false;
-					}
+					Err(_) => complete = false,
 				}
 			}
 			// A partial or empty list would make the app drop the library's chapters.
-			if !complete || chapters.is_empty() {
-				println!("[yumanhua] keeping the stored chapters of {}", manga.key);
-			} else {
+			if complete && !chapters.is_empty() {
 				manga.chapters = Some(chapters);
 			}
 		}
@@ -280,7 +278,9 @@ mod test {
 		);
 		assert_eq!(
 			source
-				.handle_deep_link(String::from("http://www.yumanhua.com/trsKtGi/IVpdIdWF.html"))
+				.handle_deep_link(String::from(
+					"http://www.yumanhua.com/trsKtGi/IVpdIdWF.html"
+				))
 				.unwrap(),
 			Some(DeepLinkResult::Chapter {
 				manga_key: String::from("trsKtGi"),

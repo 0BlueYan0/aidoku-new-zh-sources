@@ -35,7 +35,6 @@ fn listing_page(listing: &str, page: i32) -> Result<MangaPageResult> {
 		next_page_url(listing, page)
 	};
 	let Some(url) = url else {
-		println!("[dogemanga] no address for {listing} page {page}");
 		return Ok(empty_page());
 	};
 	let (result, next) = parse_manga_list(fetch_html(&url)?);
@@ -81,23 +80,19 @@ impl Source for DogemangaSource {
 		let html = fetch_html(&manga_url(&manga.key))?;
 
 		if needs_details {
-			match parse_details(&html) {
-				Some(details) => {
-					let chapters = manga.chapters.take();
-					manga = details;
-					manga.chapters = chapters;
-					send_partial_result(&manga);
-				}
-				None => println!("[dogemanga] ERROR no details on the page of {}", manga.key),
+			if let Some(details) = parse_details(&html) {
+				let chapters = manga.chapters.take();
+				manga = details;
+				manga.chapters = chapters;
+				send_partial_result(&manga);
 			}
 		}
 
 		if needs_chapters {
-			// One unreadable title must not abort a whole library refresh.
+			// An empty list means the page was not read as a title page; keep the
+			// chapters the library already has.
 			let chapters = parse_chapters(&html);
-			if chapters.is_empty() {
-				println!("[dogemanga] ERROR no chapters on the page of {}", manga.key);
-			} else {
+			if !chapters.is_empty() {
 				manga.chapters = Some(chapters);
 			}
 		}
@@ -106,7 +101,7 @@ impl Source for DogemangaSource {
 	}
 
 	fn get_page_list(&self, _manga: Manga, chapter: Chapter) -> Result<Vec<Page>> {
-		let pages = parse_pages(&fetch_html(&reader_url(&chapter.key))?);
+		let pages = parse_pages(&fetch_html(&reader_url(&chapter.key))?)?;
 		if pages.is_empty() {
 			bail!("[dogemanga] no images for {}", chapter.key);
 		}
@@ -140,10 +135,7 @@ impl Home for DogemangaSource {
 			// A row that fails stays empty; the other still loads.
 			let entries = match listing_page(id, 1) {
 				Ok(result) => result.entries,
-				Err(_) => {
-					println!("[dogemanga] ERROR loading the {id} row");
-					continue;
-				}
+				Err(_) => continue,
 			};
 			if entries.is_empty() {
 				continue;
@@ -204,7 +196,10 @@ mod test {
 	fn listing_names_match_source_json() {
 		let json = include_str!("../res/source.json");
 		for (title, id) in HOME_ROWS {
-			assert!(json.contains(&format!("\"id\": \"{id}\",\n\t\t\t\"name\": \"{title}\"")), "{id}");
+			assert!(
+				json.contains(&format!("\"id\": \"{id}\",\n\t\t\t\"name\": \"{title}\"")),
+				"{id}"
+			);
 			assert!(listing_url(id).is_some(), "{id}");
 		}
 	}
