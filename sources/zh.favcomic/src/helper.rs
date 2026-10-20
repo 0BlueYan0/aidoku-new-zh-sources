@@ -3,7 +3,7 @@ use aidoku::{
 	imports::{
 		defaults::defaults_get,
 		html::{Document, Element},
-		net::Request,
+		net::{Request, Response},
 	},
 	prelude::*,
 	Chapter, ContentRating, Manga, MangaPageResult, MangaStatus, Page, PageContent, Result,
@@ -88,7 +88,16 @@ pub fn request(url: &str) -> Result<Request> {
 pub fn fetch_html(url: &str) -> Result<Document> {
 	// Renews the token cookie if it is about to lapse; a no-op when nobody is logged in.
 	crate::auth::ensure_session();
-	Ok(request(url)?.html()?)
+	read_html(request(url)?.send()?, url)
+}
+
+/// A locked chapter still answers 200, so anything else is an error page, not content.
+pub fn read_html(response: Response, url: &str) -> Result<Document> {
+	let status = response.status_code();
+	if !(200..300).contains(&status) {
+		bail!("[favcomic] HTTP {status} for {url}");
+	}
+	Ok(response.get_html()?)
 }
 
 /// Pulls the manga key out of a `/comic/detail/<id>` href.
@@ -310,12 +319,15 @@ pub fn parse_detail(document: &Document, manga: &mut Manga) {
 /// Parses the chapter list, which ships inline on the detail page.
 ///
 /// The site lists chapters oldest first; Aidoku expects newest first.
-pub fn parse_chapters(document: &Document, base: &str) -> Vec<Chapter> {
+///
+/// `None` when an entry has no chapter link: a list with a chapter missing would replace
+/// the library's complete one.
+pub fn parse_chapters(document: &Document, base: &str) -> Option<Vec<Chapter>> {
 	let mut chapters = document
 		.select("a.item_box")
 		.map(|list| {
 			list.into_iter()
-				.filter_map(|el| {
+				.map(|el| {
 					let key = chapter_key_from_href(&el.attr("href")?)?;
 					let title = el
 						.select_first("span.title")
@@ -351,12 +363,12 @@ pub fn parse_chapters(document: &Document, base: &str) -> Vec<Chapter> {
 						..Default::default()
 					})
 				})
-				.collect::<Vec<Chapter>>()
+				.collect::<Option<Vec<Chapter>>>()
 		})
-		.unwrap_or_default();
+		.unwrap_or_else(|| Some(Vec::new()))?;
 
 	chapters.reverse();
-	chapters
+	Some(chapters)
 }
 
 /// Why a chapter refused to hand over its pages, in the site's own terms.
@@ -443,6 +455,26 @@ pub fn parse_pages(document: &Document) -> Result<Vec<Page>> {
 mod test {
 	use super::*;
 	use aidoku_test::aidoku_test;
+
+	#[aidoku_test]
+	fn a_chapter_without_a_link_fails_the_list() {
+		let parse = |html: &str| {
+			let document = aidoku::imports::html::Html::parse(html).expect("parse");
+			parse_chapters(&document, "https://www.favcomic.com")
+		};
+		let chapters = parse(concat!(
+			r#"<a class="item_box" href="/comic/chapter/1"><span class="title">第1话</span></a>"#,
+			r#"<a class="item_box" href="/comic/chapter/2"><span class="title">第2话</span></a>"#,
+		))
+		.expect("complete list");
+		assert_eq!(chapters.len(), 2);
+		assert_eq!(chapters[0].key, "2");
+		assert!(parse(concat!(
+			r#"<a class="item_box" href="/comic/chapter/1"><span class="title">第1话</span></a>"#,
+			r#"<a class="item_box" href="/comic/"><span class="title">第2话</span></a>"#,
+		))
+		.is_none());
+	}
 
 	#[aidoku_test]
 	fn rates_by_section_and_tags() {

@@ -3,7 +3,7 @@ use aidoku::{
 	helpers::uri::encode_uri_component,
 	imports::{
 		html::{Document, Element},
-		net::Request,
+		net::{Request, Response},
 	},
 	prelude::*,
 	Chapter, ContentRating, Manga, MangaPageResult, MangaStatus, Result, Viewer,
@@ -28,8 +28,23 @@ pub fn request(url: &str) -> Result<Request> {
 	Ok(Request::get(url)?)
 }
 
+/// A non-2xx answer is an error, so an error page is never read as an empty list.
 pub fn fetch_html(url: &str) -> Result<Document> {
-	Ok(request(url)?.html()?)
+	read_html(request(url)?.send()?, url)
+}
+
+/// `fetch_html`'s status check, shared with the home's batched rows.
+pub fn read_html(response: Response, url: &str) -> Result<Document> {
+	check_status(&response, url)?;
+	Ok(response.get_html()?)
+}
+
+fn check_status(response: &Response, url: &str) -> Result<()> {
+	let status = response.status_code();
+	if !(200..300).contains(&status) {
+		bail!("[manwang] HTTP {status} for {url}");
+	}
+	Ok(())
 }
 
 /// Where the site sends a removed work: `/book/<id>` answers 302 to this page, which
@@ -38,12 +53,19 @@ pub const DELISTED_PATH: &str = "/err/comic";
 
 /// The details page, or `None` when the site has removed the work.
 pub fn fetch_details_page(key: &str) -> Result<Option<Document>> {
-	let response = Request::get(manga_url(key))?.send()?;
-	let removed = response
+	let url = manga_url(key);
+	let response = Request::get(&url)?.send()?;
+	// The removal address is decided before the status, so a removal page that stops
+	// answering 200 still marks the work removed instead of failing every removed work.
+	if response
 		.get_url()
-		.is_some_and(|url: String| url.contains(DELISTED_PATH));
+		.is_some_and(|url: String| url.contains(DELISTED_PATH))
+	{
+		return Ok(None);
+	}
+	check_status(&response, &url)?;
 	let html = response.get_html()?;
-	Ok((!removed && !is_delisted_page(&html)).then_some(html))
+	Ok((!is_delisted_page(&html)).then_some(html))
 }
 
 /// The removal page, recognised by its text in case the final address is not reported.
@@ -56,7 +78,9 @@ pub fn is_delisted_page(html: &Document) -> bool {
 }
 
 pub fn fetch_text(url: &str) -> Result<String> {
-	Request::get(url)?.string()
+	let response = Request::get(url)?.send()?;
+	check_status(&response, url)?;
+	response.get_string()
 }
 
 pub fn manga_url(key: &str) -> String {
@@ -302,6 +326,8 @@ pub fn chapter_number(title: &str) -> Option<f32> {
 }
 
 /// The details page lists every chapter, oldest first; the app wants newest first.
+/// An entry without a usable id gives an empty list, which the caller treats as unreadable,
+/// so the library is not handed a list with chapters missing.
 pub fn parse_chapters(html: &Document, manga_key: &str) -> Vec<Chapter> {
 	let mut chapters: Vec<Chapter> = Vec::new();
 	for item in html
@@ -313,7 +339,7 @@ pub fn parse_chapters(html: &Document, manga_key: &str) -> Vec<Chapter> {
 			.attr("data-chapter")
 			.filter(|k: &String| !k.is_empty() && k.chars().all(|c: char| c.is_ascii_digit()))
 		else {
-			continue;
+			return Vec::new();
 		};
 		if chapters.iter().any(|c: &Chapter| c.key == key) {
 			continue;
@@ -508,5 +534,17 @@ mod test {
 		assert_eq!(chapter_number("第529话 巨手（下）"), Some(529.0));
 		assert_eq!(chapter_number("第1回 重生"), Some(1.0));
 		assert_eq!(chapter_number("致歉信~"), None);
+	}
+
+	#[aidoku_test]
+	fn a_bad_chapter_id_rejects_the_list() {
+		let html = r#"<ul id="j_chapter_list"><li data-chapter="12"><a title="第1话">第1话</a></li><li data-chapter="x"><a>第2话</a></li></ul>"#;
+		assert!(parse_chapters(&doc(html), "1").is_empty());
+		let html = r#"<ul id="j_chapter_list"><li data-chapter="12"><a title="第1话">第1话</a></li><li data-chapter="13"><a>第2话</a></li></ul>"#;
+		let keys: Vec<String> = parse_chapters(&doc(html), "1")
+			.into_iter()
+			.map(|c| c.key)
+			.collect();
+		assert_eq!(keys, ["13", "12"]);
 	}
 }

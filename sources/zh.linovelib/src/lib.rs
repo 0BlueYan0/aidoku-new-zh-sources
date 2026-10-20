@@ -98,33 +98,22 @@ impl Source for LinovelibSource {
 		let base = base_url();
 		if needs_details {
 			let html = fetch_html(&manga_url(base, &manga.key))?;
-			match parse_details(&html, &manga.key, base) {
-				Some(details) => {
-					let chapters = manga.chapters.take();
-					manga = details;
-					manga.chapters = chapters;
-					send_partial_result(&manga);
-				}
-				None => println!("[linovelib] ERROR no details on the page of {}", manga.key),
+			if let Some(details) = parse_details(&html, &manga.key, base) {
+				let chapters = manga.chapters.take();
+				manga = details;
+				manga.chapters = chapters;
+				send_partial_result(&manga);
 			}
 		}
 
 		if needs_chapters {
 			// A failed catalogue must not abort a whole library refresh, nor empty the
 			// chapters the app already has.
-			match fetch_html(&catalog_url(base, &manga.key)) {
-				Ok(html) => {
-					let chapters = parse_catalog(&html, &manga.key, base);
-					if chapters.is_empty() {
-						println!(
-							"[linovelib] ERROR no chapters in the catalogue of {}",
-							manga.key
-						);
-					} else {
-						manga.chapters = Some(chapters);
-					}
+			if let Ok(html) = fetch_html(&catalog_url(base, &manga.key)) {
+				let chapters = parse_catalog(&html, &manga.key, base);
+				if !chapters.is_empty() {
+					manga.chapters = Some(chapters);
 				}
-				Err(err) => println!("[linovelib] ERROR catalogue of {}: {err:?}", manga.key),
 			}
 		}
 
@@ -155,6 +144,9 @@ impl Source for LinovelibSource {
 			let raw = fetch_text(&url)?;
 			if content::is_withheld(&raw) {
 				bail!("[linovelib] {url}: the site withheld paragraphs");
+			}
+			if content::is_locked(&raw) {
+				bail!("[linovelib] {url}: the site does not let this chapter be read");
 			}
 			let html = Html::parse_with_url(&raw, &url)?;
 			content::append_page(&html, seed, &mut segments);
@@ -210,10 +202,7 @@ impl Home for LinovelibSource {
 			// A row that fails stays empty; the others still load.
 			let entries = match listing_url(base, id, 1).map(|url: String| fetch_html(&url)) {
 				Some(Ok(html)) => parse_manga_list(&html, base).entries,
-				_ => {
-					println!("[linovelib] ERROR loading the {id} row");
-					continue;
-				}
+				_ => continue,
 			};
 			if entries.is_empty() {
 				continue;

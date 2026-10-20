@@ -141,20 +141,17 @@ impl Source for TibiuSource {
 	) -> Result<Manga> {
 		if needs_details {
 			let url = format!("{API_URL}/comic/detail?id={}", manga.key);
-			match fetch_json(&url) {
-				Ok(body) => {
-					if let Some(data) = json_data_field(&body, "data") {
-						if let Some(mut details) = parse_comic(data) {
-							// The detail response is authoritative for everything the
-							// reader sees, but the library key and any chapters already
-							// attached have to survive.
-							details.key = manga.key;
-							details.chapters = manga.chapters.take();
-							manga = details;
-						}
+			if let Ok(body) = fetch_json(&url) {
+				if let Some(data) = json_data_field(&body, "data") {
+					if let Some(mut details) = parse_comic(data) {
+						// The detail response is authoritative for everything the
+						// reader sees, but the library key and any chapters already
+						// attached have to survive.
+						details.key = manga.key;
+						details.chapters = manga.chapters.take();
+						manga = details;
 					}
 				}
-				Err(_) => println!("[tibiu] ERROR fetching details for id={}", manga.key),
 			}
 			send_partial_result(&manga);
 		}
@@ -162,25 +159,17 @@ impl Source for TibiuSource {
 		if needs_chapters {
 			let url = format!("{API_URL}/comic/chapter?mid={}", manga.key);
 			// Swallow failures: one unreachable title must not abort a whole library
-			// refresh.
-			match fetch_json(&url) {
-				Ok(body) => {
-					let mut chapters: Vec<Chapter> = Vec::new();
-					if let Some(array) = json_data_field(&body, "data") {
-						for obj in json_top_level_objects(array) {
-							if let Some(chapter) = parse_chapter(obj) {
-								chapters.push(chapter);
-							}
-						}
-					}
+			// refresh. A failed request, an answer without `data` or an empty list
+			// leaves the library's chapters as they were instead of wiping them.
+			if let Some(mut chapters) = fetch_json(&url)
+				.ok()
+				.and_then(|body: String| parse_chapter_list(&body))
+			{
+				// The API order is not reliable: new uploads land after the extras
+				// and out of sequence, so sort by the parsed chapter number.
+				sort_chapters_newest_first(&mut chapters);
 
-					// The API order is not reliable: new uploads land after the extras
-					// and out of sequence, so sort by the parsed chapter number.
-					sort_chapters_newest_first(&mut chapters);
-
-					manga.chapters = Some(chapters);
-				}
-				Err(_) => println!("[tibiu] ERROR fetching chapters for mid={}", manga.key),
+				manga.chapters = Some(chapters);
 			}
 		}
 
@@ -191,23 +180,32 @@ impl Source for TibiuSource {
 		let url = format!("{API_URL}/data/pic?cid={}", chapter.key);
 		let body = fetch_json(&url)?;
 
-		let mut pages: Vec<Page> = Vec::new();
-		if let Some(array) = json_data_field(&body, "data") {
-			for obj in json_top_level_objects(array) {
-				if let Some(image) = json_text(obj, "img") {
-					pages.push(Page {
-						content: PageContent::url(image),
-						..Default::default()
-					});
-				}
-			}
-		}
-
-		if pages.is_empty() {
+		let images: Vec<Option<String>> = json_data_field(&body, "data")
+			.map(json_top_level_objects)
+			.unwrap_or_default()
+			.into_iter()
+			.map(|obj| json_text(obj, "img"))
+			.collect();
+		if images.iter().all(Option::is_none) {
 			bail!("{}", page_list_error(&body));
 		}
 
-		Ok(pages)
+		// Some pages without an image would silently shorten the chapter.
+		images
+			.into_iter()
+			.enumerate()
+			.map(|(index, image)| match image {
+				Some(image) => Ok(Page {
+					content: PageContent::url(image),
+					..Default::default()
+				}),
+				None => Err(error!(
+					"[tibiu] page {} of chapter {} has no image",
+					index + 1,
+					chapter.key
+				)),
+			})
+			.collect()
 	}
 }
 

@@ -115,8 +115,14 @@ pub fn account_footer() -> String {
 	if needs_relogin() {
 		String::from("登入已失效，請先登出再重新登入。")
 	} else if is_logged_in() {
-		let nickname = defaults_get::<String>(NAME_KEY).unwrap_or_default();
-		format!("已登入：{nickname}\n已購買的章節可直接閱讀。若剛在官方 App 購買，請重新整理作品章節清單。")
+		let first_line =
+			match defaults_get::<String>(NAME_KEY).filter(|name| !name.trim().is_empty()) {
+				Some(nickname) => format!("已登入：{nickname}"),
+				None => String::from("已登入"),
+			};
+		format!(
+			"{first_line}\n已購買的章節可直接閱讀。若剛在官方 App 購買，請重新整理作品章節清單。"
+		)
 	} else {
 		String::from("尚未登入。免費與試閱內容可直接閱讀；已購買內容請登入同一個 WEBTOON 帳號。")
 	}
@@ -151,14 +157,6 @@ fn accept_session(session: SessionCookies, nickname: &str) {
 
 fn read_web_session() -> Option<SessionCookies> {
 	let cookies = WebView::new().get_cookies().ok()?;
-	let has_session = cookies.iter().any(|cookie| cookie.name == "NEO_SES");
-	let has_check = cookies.iter().any(|cookie| cookie.name == "NEO_CHK");
-	println!(
-		"[webtoons] login store: {} cookies, NEO_SES={}, NEO_CHK={}",
-		cookies.len(),
-		has_session,
-		has_check
-	);
 	SessionCookies::from_store(&cookies)
 }
 
@@ -187,18 +185,13 @@ pub fn capture_web_login(force_verify: bool) -> bool {
 	match crate::api::member_with_cookie(&header) {
 		Ok(Some(member)) => {
 			accept_session(session, &member.nickname);
-			println!("[webtoons] official login verified by App API");
 			true
 		}
 		Ok(None) => {
 			mark_relogin(&header);
-			println!("[webtoons] login not verified: App API reports not logged in");
 			false
 		}
-		Err(_) => {
-			println!("[webtoons] login verification unavailable; session unchanged");
-			false
-		}
+		Err(_) => false,
 	}
 }
 
@@ -207,7 +200,6 @@ pub fn capture_web_login(force_verify: bool) -> bool {
 pub fn mark_relogin(request_cookie: &str) {
 	if api_cookie().as_deref() == Some(request_cookie) {
 		defaults_set(NEEDS_RELOGIN_KEY, DefaultValue::Bool(true));
-		println!("[webtoons] login expired; automatic probes stopped");
 	}
 }
 
@@ -250,23 +242,17 @@ pub fn ensure_session() {
 
 pub fn handle_login_notification() {
 	if !login_notification_is_logout() {
-		println!("[webtoons] login notification: no logout requested, session preserved");
 		return;
 	}
 	let session = stored_session();
 	// Clear first so concurrent refreshes cannot use the account during logout.
 	clear_local();
 	if let Some(session) = session {
-		let result = Request::get("https://www.webtoons.com/member/logout?returnUrl=https%3A%2F%2Fwww.webtoons.com%2Fzh-hant%2F")
+		let _ = Request::get("https://www.webtoons.com/member/logout?returnUrl=https%3A%2F%2Fwww.webtoons.com%2Fzh-hant%2F")
 			.map(|request| request.timeout(8.0).header("Cookie", session.web_header().as_str()))
 			.and_then(|request| request.send());
-		println!(
-			"[webtoons] official web logout request completed={}",
-			result.is_ok()
-		);
 	}
-	let cleared = WebView::new().delete_all_cookies().is_ok();
-	println!("[webtoons] logout: source web store cleared={cleared}");
+	let _ = WebView::new().delete_all_cookies();
 }
 
 fn login_notification_is_logout() -> bool {

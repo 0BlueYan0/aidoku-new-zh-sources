@@ -16,7 +16,6 @@ use aidoku::{
 		net::Request,
 		std::current_date,
 	},
-	prelude::*,
 };
 
 use crate::helper::{base_url, USER_AGENT};
@@ -148,11 +147,9 @@ pub fn login(email: &str, password: &str) -> LoginOutcome {
 		.body(body.as_bytes())
 		.send()
 	else {
-		println!("[favcomic] login request could not be sent");
 		return LoginOutcome::Unreachable;
 	};
 
-	let status = response.status_code();
 	let Ok(text) = response.get_string() else {
 		return LoginOutcome::Unreachable;
 	};
@@ -169,16 +166,13 @@ pub fn login(email: &str, password: &str) -> LoginOutcome {
 	// Checked before the generic refusal: this answer is also `result: fail`, and taking
 	// it for a wrong password would wipe credentials that are perfectly good.
 	if is_device_limit(&text) {
-		println!("[favcomic] login refused: too many devices signed in");
 		return LoginOutcome::DeviceLimit;
 	}
 
 	if text.contains("\"result\":\"fail\"") {
-		println!("[favcomic] login refused by the site");
 		return LoginOutcome::Rejected;
 	}
 
-	println!("[favcomic] unexpected login response (status {status})");
 	LoginOutcome::Unreachable
 }
 
@@ -350,7 +344,7 @@ pub fn account_footer() -> String {
 	// The coin balance is the first link in the recharge box; the points box nested inside it
 	// carries the coupon and point counts.
 	if let Some(coins) = text_of(".recharge_box a") {
-		footer = format!("{footer}\n金幣 {coins}");
+		footer.push_str(&format!("\n金幣 {coins}"));
 	}
 
 	let extras = document
@@ -371,11 +365,11 @@ pub fn account_footer() -> String {
 		})
 		.unwrap_or_default();
 	for extra in extras {
-		footer = format!("{footer} ・ {extra}");
+		footer.push_str(&format!(" ・ {extra}"));
 	}
 
 	if let Some(progress) = text_of(".progress_txt_box span") {
-		footer = format!("{footer}\n會員進度 {progress}");
+		footer.push_str(&format!("\n會員進度 {progress}"));
 	}
 
 	footer

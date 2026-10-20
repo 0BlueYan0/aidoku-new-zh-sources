@@ -140,7 +140,7 @@ fn parse_entry(value: &Value, comic: bool) -> Option<Manga> {
 	}
 	Some(Manga {
 		key: format!("{id}"),
-		title: str_field(value, "title").unwrap_or_default().to_string(),
+		title: str_field(value, "title")?.to_string(),
 		cover: str_field(value, "cover").map(content::image_url),
 		url: Some(manga_url(id, comic)),
 		tags: (!tags.is_empty()).then_some(tags),
@@ -170,6 +170,48 @@ fn parse_page(value: &Value, comic: bool) -> MangaPageResult {
 		has_next_page: has_next && !entries.is_empty(),
 		entries,
 	}
+}
+
+/// The book's chapters, newest first. `None` when the reply has no chapter list or an
+/// entry cannot be keyed: the library keeps its chapters rather than storing a shorter list.
+fn parse_chapters(book: &Value, id: i64, comic: bool) -> Option<Vec<Chapter>> {
+	field(book, "chapters")
+		.or_else(|| field(book, "chapter"))
+		.and_then(Value::as_array)?
+		.iter()
+		.enumerate()
+		.rev()
+		.map(|(i, c): (usize, &Value)| {
+			// Novella numbers a chapter by its position when SortNum is missing.
+			let sort = int_field(c, "sortNum").unwrap_or(i as i64 + 1);
+			let key = if comic {
+				// Page count rides in the key: page lists need it to split the
+				// 12-image calls, and GetComicContent is only reachable by id.
+				format!(
+					"c{}.{}",
+					int_field(c, "id")?,
+					int_field(c, "pageCount").unwrap_or(0)
+				)
+			} else {
+				format!("n{sort}")
+			};
+			let url = if comic {
+				format!("{SITE_URL}/manga/{id}/read/{}", int_field(c, "id")?)
+			} else {
+				format!("{SITE_URL}/read/{id}/{sort}")
+			};
+			Some(Chapter {
+				key,
+				title: str_field(c, "title").map(String::from),
+				chapter_number: Some(sort as f32),
+				date_uploaded: str_field(c, "updatedAt")
+					.or_else(|| str_field(c, "createdAt"))
+					.and_then(parse_iso),
+				url: Some(url),
+				..Default::default()
+			})
+		})
+		.collect()
 }
 
 /// Novel category names as `GetBookCategories {Type: "Novel"}` returned them on
@@ -242,7 +284,6 @@ fn invoke_signed_in(calls: &[Call]) -> Result<Vec<Reply>> {
 	};
 	let mut replies = hub::invoke_all(Some(&token), calls)?;
 	if replies.iter().any(is_unauthorized) {
-		println!("[lightnovel] hub said unauthorized, renewing the token once");
 		if let Some(token) = auth::renew() {
 			replies = hub::invoke_all(Some(&token), calls)?;
 		}
@@ -404,8 +445,8 @@ impl Source for LightnovelSource {
 			match filter {
 				FilterValue::Select { id, value } => match id.as_str() {
 					"type" => comic = value == "comic",
-					"mode" if !value.is_empty() => mode = value,
-					"sort" if !value.is_empty() => sort = value,
+					"mode" => mode = value,
+					"sort" => sort = value,
 					"category" => category = value,
 					// A tapped tag.
 					"genre" => tag = Some(value),
@@ -429,9 +470,7 @@ impl Source for LightnovelSource {
 		let author = author
 			.map(|a: String| a.trim().to_string())
 			.filter(|a: &String| !a.is_empty());
-		let tag = tag
-			.map(|t: String| t.trim().to_string())
-			.filter(|t: &String| !t.is_empty());
+		let tag = tag.map(|t: String| t.trim().to_string());
 
 		let (call, comic) = if let Some(author) = author {
 			// Author and tag searches come from tapping a book's details, which are
@@ -546,7 +585,9 @@ impl Source for LightnovelSource {
 						.cloned(),
 				);
 			}
-			manga.title = str_field(book, "title").unwrap_or(&manga.title).to_string();
+			if let Some(title) = str_field(book, "title") {
+				manga.title = title.to_string();
+			}
 			manga.cover = str_field(book, "cover")
 				.map(content::image_url)
 				.or(manga.cover);
@@ -559,47 +600,9 @@ impl Source for LightnovelSource {
 		}
 
 		if needs_chapters {
-			let list = field(book, "chapters")
-				.or_else(|| field(book, "chapter"))
-				.and_then(Value::as_array)
-				.cloned()
-				.unwrap_or_default();
-			let mut chapters: Vec<Chapter> = list
-				.iter()
-				.enumerate()
-				.filter_map(|(i, c): (usize, &Value)| {
-					// Novella numbers a chapter by its position when SortNum is missing.
-					let sort = int_field(c, "sortNum").unwrap_or(i as i64 + 1);
-					let key = if comic {
-						// Page count rides in the key: page lists need it to split the
-						// 12-image calls, and GetComicContent is only reachable by id.
-						format!(
-							"c{}.{}",
-							int_field(c, "id")?,
-							int_field(c, "pageCount").unwrap_or(0)
-						)
-					} else {
-						format!("n{sort}")
-					};
-					let url = if comic {
-						format!("{SITE_URL}/manga/{id}/read/{}", int_field(c, "id")?)
-					} else {
-						format!("{SITE_URL}/read/{id}/{sort}")
-					};
-					Some(Chapter {
-						key,
-						title: str_field(c, "title").map(String::from),
-						chapter_number: Some(sort as f32),
-						date_uploaded: str_field(c, "updatedAt")
-							.or_else(|| str_field(c, "createdAt"))
-							.and_then(parse_iso),
-						url: Some(url),
-						..Default::default()
-					})
-				})
-				.collect();
-			chapters.reverse();
-			manga.chapters = Some(chapters);
+			if let Some(chapters) = parse_chapters(book, id, comic) {
+				manga.chapters = Some(chapters);
+			}
 		}
 		Ok(manga)
 	}
@@ -621,7 +624,9 @@ impl Source for LightnovelSource {
 			// get_image_request resolves a batch at a time as the reader reaches them.
 			let first = call_one("GetComicContent", comic_args(cid, 0))?;
 			let (total, skip, urls) = comic_batch(&first, 0);
-			println!("[lightnovel] comic {cid}: asked skip 0, reply skip {skip}, total {total}, {} images", urls.len());
+			if urls.is_empty() {
+				bail!("[lightnovel] no images in GetComicContent for {cid}");
+			}
 			let total = total.max(listed).max(skip + urls.len() as i64);
 			comic_cache::store(cid, skip, &urls, true);
 			let pages = (0..total)
@@ -650,17 +655,25 @@ impl Source for LightnovelSource {
 			json!({ "Bid": bid, "SortNum": sort, "Convert": convert_setting() }),
 		)?;
 		let ch = field(&value, "chapter").ok_or_else(|| error!("[lightnovel] no chapter"))?;
-		let html = str_field(ch, "content").unwrap_or("");
+		let html = str_field(ch, "content").ok_or_else(|| error!("[lightnovel] no content"))?;
 		let map = match str_field(ch, "font") {
 			Some(path) => Some(font::map_for(path)?),
 			None => None,
 		};
 		let markdown = content::chapter_markdown(html, map.as_ref());
+		// An empty text page would mark the chapter read.
+		if markdown.trim().is_empty() {
+			bail!("[lightnovel] empty chapter {bid}/{sort}");
+		}
 		if vertical_layout() {
-			return Ok(vertical::pages(
+			let pages = vertical::pages(
 				&markdown,
 				vertical::size_for(defaults_get::<String>("verticalSize").as_deref()),
-			));
+			);
+			if pages.is_empty() {
+				bail!("[lightnovel] no vertical pages for {bid}/{sort}");
+			}
+			return Ok(pages);
 		}
 		Ok(vec![Page {
 			content: PageContent::text(markdown),
@@ -774,13 +787,7 @@ impl ImageRequestProvider for LightnovelSource {
 			.parse()
 			.map_err(|_| error!("[lightnovel] bad page {url}"))?;
 		let (skip, urls) = match comic_cache::get(cid, index) {
-			Some(batch) => {
-				println!(
-					"[lightnovel] comic {cid}: page {index} from cached batch {}",
-					batch.0
-				);
-				batch
-			}
+			Some(batch) => batch,
 			None => {
 				// Reached when the reader lands in a batch nobody fetched: resuming a
 				// chapter at a saved page, or jumping with the slider. The app then asks
@@ -790,11 +797,7 @@ impl ImageRequestProvider for LightnovelSource {
 				// gate is needed: a caller that misses has nothing else to return anyway.
 				let requested = index / COMIC_TAKE * COMIC_TAKE;
 				let value = call_one("GetComicContent", comic_args(cid, requested))?;
-				let (total, skip, urls) = comic_batch(&value, requested);
-				println!(
-					"[lightnovel] comic {cid}: page {index} asked skip {requested}, reply skip {skip}, total {total}, {} images",
-					urls.len()
-				);
+				let (_, skip, urls) = comic_batch(&value, requested);
 				comic_cache::store(cid, skip, &urls, false);
 				(skip, urls)
 			}
@@ -802,13 +805,7 @@ impl ImageRequestProvider for LightnovelSource {
 		let real = usize::try_from(index - skip)
 			.ok()
 			.and_then(|at: usize| urls.get(at))
-			.ok_or_else(|| {
-				println!(
-					"[lightnovel] comic {cid}: page {index} is not in batch {skip} of {} images",
-					urls.len()
-				);
-				error!("[lightnovel] no image {index} in batch {skip} of {cid}")
-			})?;
+			.ok_or_else(|| error!("[lightnovel] no image {index} in batch {skip} of {cid}"))?;
 		Ok(Request::get(real)?)
 	}
 }
@@ -848,18 +845,10 @@ impl BasicLoginHandler for LightnovelSource {
 		match auth::login(username.trim(), &auth::password_hash(&password)) {
 			auth::LoginOutcome::LoggedIn => {
 				auth::mark_just_logged_in();
-				println!("[lightnovel] login successful");
 				Ok(true)
 			}
 			// The app shows its own message either way (CLAUDE.md), so no Err for text.
-			auth::LoginOutcome::Rejected => {
-				println!("[lightnovel] login rejected");
-				Ok(false)
-			}
-			auth::LoginOutcome::Unreachable => {
-				println!("[lightnovel] login failed: site unreachable");
-				Ok(false)
-			}
+			auth::LoginOutcome::Rejected | auth::LoginOutcome::Unreachable => Ok(false),
 		}
 	}
 }
@@ -869,10 +858,8 @@ impl NotificationHandler for LightnovelSource {
 		if notification == "login" {
 			// Fired for both logging in and logging out; see auth::is_just_logged_in.
 			if auth::is_just_logged_in() {
-				println!("[lightnovel] login notification after a login");
 				auth::clear_just_logged_in();
 			} else {
-				println!("[lightnovel] login notification without a recent login: logging out");
 				auth::clear_auth();
 				sign_in::clear();
 			}
@@ -888,7 +875,6 @@ fn account_footer() -> String {
 	let Ok(info) = call_one("GetMyInfo", json!({})) else {
 		return String::from("無法取得帳號資訊，請檢查網路後重新開啟這一頁。");
 	};
-	let name = str_field(&info, "userName").unwrap_or("");
 	let growth = field(&info, "growth");
 	// Novella reads these under `Growth`; the top level is kept as a fallback.
 	let stat = |key: &str| {
@@ -896,8 +882,13 @@ fn account_footer() -> String {
 			.and_then(|g: &Value| field(g, key))
 			.or_else(|| field(&info, key))
 	};
-	let level = stat("level").and_then(Value::as_i64).unwrap_or(0);
-	let mut lines = vec![format!("已登入：{name}"), format!("閱讀等級：Lv.{level}")];
+	let mut lines = vec![match str_field(&info, "userName") {
+		Some(name) => format!("已登入：{name}"),
+		None => String::from("已登入"),
+	}];
+	if let Some(level) = stat("level").and_then(Value::as_i64) {
+		lines.push(format!("閱讀等級：Lv.{level}"));
+	}
 	if let (Some(exp), Some(next)) = (
 		stat("exp").and_then(Value::as_i64),
 		stat("nextLevelExp").and_then(Value::as_i64),
@@ -1049,6 +1040,23 @@ mod tests {
 		comic_cache::store(7, 0, &urls, true);
 		assert!(comic_cache::get(7, 12).is_none());
 		assert!(comic_cache::get(7, 0).is_some());
+	}
+
+	#[aidoku_test]
+	fn chapters_need_every_entry() {
+		let novel = json!({ "chapters": [{ "sortNum": 1, "title": "一" }, { "title": "二" }] });
+		let chapters = parse_chapters(&novel, 5, false).expect("chapters");
+		let keys: Vec<&str> = chapters.iter().map(|c: &Chapter| c.key.as_str()).collect();
+		assert_eq!(keys, ["n2", "n1"]);
+		assert!(parse_chapters(&json!({ "title": "書" }), 5, false).is_none());
+		let comic = json!({ "Chapters": [{ "Id": 9, "PageCount": 20 }, { "Title": "無 id" }] });
+		assert!(parse_chapters(&comic, 5, true).is_none());
+		let comic = json!({ "chapters": [{ "id": 9, "pageCount": 20 }] });
+		assert_eq!(
+			parse_chapters(&comic, 5, true).expect("chapters")[0].key,
+			"c9.20"
+		);
+		assert!(parse_entry(&json!({ "id": 3 }), false).is_none());
 	}
 
 	#[aidoku_test]

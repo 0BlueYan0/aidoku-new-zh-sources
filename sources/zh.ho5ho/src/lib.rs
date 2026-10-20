@@ -53,7 +53,7 @@ impl Source for Ho5hoSource {
 					"match" => search.match_all = value != "any",
 					// A tapped tag. Categories can be searched; a tag has only its own page,
 					// which takes no other condition.
-					"genre" if !value.is_empty() => {
+					"genre" => {
 						if CATEGORIES.contains(&value.as_str()) {
 							if !search.categories.contains(&value) {
 								search.categories.push(value);
@@ -87,23 +87,18 @@ impl Source for Ho5hoSource {
 		let html = fetch_html(&manga_url(&manga.key))?;
 
 		if needs_details {
-			match parse_details(&html, &manga.key) {
-				Some(details) => {
-					let chapters = manga.chapters.take();
-					manga = details;
-					manga.chapters = chapters;
-					send_partial_result(&manga);
-				}
-				None => println!("[ho5ho] ERROR no details on the page of {}", manga.key),
+			if let Some(details) = parse_details(&html, &manga.key) {
+				let chapters = manga.chapters.take();
+				manga = details;
+				manga.chapters = chapters;
+				send_partial_result(&manga);
 			}
 		}
 
 		if needs_chapters {
 			// One unreadable title must not abort a whole library refresh.
 			let chapters = parse_chapters(&html, &manga.key);
-			if chapters.is_empty() {
-				println!("[ho5ho] ERROR no chapters on the page of {}", manga.key);
-			} else {
+			if !chapters.is_empty() {
 				manga.chapters = Some(chapters);
 			}
 		}
@@ -148,11 +143,13 @@ impl Home for Ho5hoSource {
 		let mut rows = Vec::new();
 		let mut requests: Vec<Request> = Vec::new();
 		for (title, id) in HOME_ROWS {
-			let Some(Ok(request)) = listing_url(id, 1).map(|url| request(&url)) else {
-				println!("[ho5ho] ERROR building the {id} row");
+			let Some(url) = listing_url(id, 1) else {
 				continue;
 			};
-			rows.push((title, id));
+			let Ok(request) = request(&url) else {
+				continue;
+			};
+			rows.push((title, id, url));
 			requests.push(request);
 		}
 		let mut responses = Vec::new();
@@ -165,14 +162,11 @@ impl Home for Ho5hoSource {
 		// Drawn one at a time so a short response list leaves the trailing rows empty instead
 		// of shifting results onto the wrong titles.
 		let mut responses = responses.into_iter();
-		for (title, id) in rows {
+		for (title, id, url) in rows {
 			// A row that fails stays empty; the others still load.
-			let entries = match responses.next().map(|response| response?.get_html()) {
+			let entries = match responses.next().map(|response| read_html(response?, &url)) {
 				Some(Ok(html)) => parse_manga_list(&html).entries,
-				_ => {
-					println!("[ho5ho] ERROR loading the {id} row");
-					continue;
-				}
+				_ => continue,
 			};
 			if entries.is_empty() {
 				continue;

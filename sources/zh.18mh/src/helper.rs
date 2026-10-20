@@ -108,7 +108,6 @@ fn relay_request(request: Request) -> Request {
 fn check_relay_status(url: &str, response: &Response) -> Result<()> {
 	let status = response.status_code();
 	if !(200..400).contains(&status) {
-		println!("[18mh] relay answered {status} for {url}");
 		bail!("[18mh] relay answered {status} for {url}");
 	}
 	Ok(())
@@ -136,7 +135,14 @@ pub fn fetch_html(url: &str) -> Result<Document> {
 	{
 		request = request.header("Cookie", &format!("{CLEARANCE_COOKIE}={clearance}"));
 	}
-	Ok(request.html()?)
+	// A challenge the app could not get past arrives here as a 403 page. Parsed as a page it
+	// would read as an empty list or a chapter with no images.
+	let response = request.send()?;
+	let status = response.status_code();
+	if !(200..300).contains(&status) {
+		bail!("[18mh] HTTP {status} for {url}");
+	}
+	Ok(response.get_html()?)
 }
 
 pub fn manga_url(slug: &str) -> String {
@@ -268,8 +274,9 @@ pub fn parse_manga_list(html: Document) -> MangaPageResult {
 
 /// The details page. Returns the work's numeric id alongside, which the chapter list and
 /// the pages are keyed by. Both `#firstchap` and `#mangachapters` carry it; either one
-/// is enough.
-pub fn parse_details(html: &Document, slug: &str) -> (Manga, Option<String>) {
+/// is enough. `None` when the page has no title heading: a challenge or error page must
+/// not replace the library's details.
+pub fn parse_details(html: &Document, slug: &str) -> Option<(Manga, Option<String>)> {
 	let mid = ["#firstchap", "#mangachapters"]
 		.iter()
 		.find_map(|sel: &&str| {
@@ -280,15 +287,13 @@ pub fn parse_details(html: &Document, slug: &str) -> (Manga, Option<String>) {
 		});
 
 	// The age warning dialog has its own `h1`, outside `main`.
-	let heading = html.select_first("main h1.text-xl");
+	let heading = html.select_first("main h1.text-xl")?;
 	let title = heading
-		.as_ref()
-		.and_then(|h: &Element| h.own_text())
+		.own_text()
 		.map(|t: String| String::from(t.trim()))
-		.unwrap_or_default();
+		.filter(|t: &String| !t.is_empty())?;
 	let status = match heading
-		.as_ref()
-		.and_then(|h: &Element| h.select_first("span"))
+		.select_first("span")
 		.map(|el: Element| text_of(&el))
 		.as_deref()
 	{
@@ -372,7 +377,7 @@ pub fn parse_details(html: &Document, slug: &str) -> (Manga, Option<String>) {
 		},
 		..Default::default()
 	};
-	(manga, mid)
+	Some((manga, mid))
 }
 
 /// `第118話` → 118. `最終話` and other titles without a number give `None`.
@@ -387,7 +392,8 @@ pub fn chapter_number(title: &str) -> Option<f32> {
 /// `/manga/get?mid=&mode=all`, oldest first on the site, returned newest first. The key
 /// is `<mid>/<chapter id>` because the page list needs both and only gets the chapter.
 /// The site's dates are `Apr 7` with no year (the import date of the whole work), so
-/// none is set rather than a guessed year.
+/// none is set rather than a guessed year. Empty when a row has no chapter id: a shorter
+/// list would replace the library's chapters, and the caller keeps those when this is empty.
 pub fn parse_chapters(html: &Document, mid: &str) -> Vec<Chapter> {
 	let mut chapters: Vec<Chapter> = Vec::new();
 	if let Some(links) = html.select(".chapteritem a[data-cs]") {
@@ -396,7 +402,7 @@ pub fn parse_chapters(html: &Document, mid: &str) -> Vec<Chapter> {
 				.attr("data-cs")
 				.filter(|c: &String| !c.trim().is_empty())
 			else {
-				continue;
+				return Vec::new();
 			};
 			let title = link
 				.attr("data-ct")
@@ -405,6 +411,7 @@ pub fn parse_chapters(html: &Document, mid: &str) -> Vec<Chapter> {
 				.or_else(|| {
 					link.select_first(".chaptertitle")
 						.map(|el: Element| text_of(&el))
+						.filter(|t: &String| !t.is_empty())
 				});
 			let url = link
 				.attr("href")
@@ -428,6 +435,7 @@ pub fn parse_chapters(html: &Document, mid: &str) -> Vec<Chapter> {
 /// banner sits in `#chapcontent` too.
 pub fn parse_pages(html: &Document) -> Vec<Page> {
 	let mut pages: Vec<Page> = Vec::new();
+	let mut seen: Vec<String> = Vec::new();
 	if let Some(images) = html.select("#chapcontent > div > img") {
 		for img in images {
 			let url = img
@@ -436,12 +444,10 @@ pub fn parse_pages(html: &Document) -> Vec<Page> {
 				.or_else(|| img.attr("src").filter(|u: &String| u.starts_with("http")));
 			if let Some(url) = url {
 				let url = String::from(url.trim());
-				if pages
-					.iter()
-					.any(|p: &Page| p.content == PageContent::url(url.clone()))
-				{
+				if seen.contains(&url) {
 					continue;
 				}
+				seen.push(url.clone());
 				pages.push(Page {
 					content: PageContent::url(url),
 					..Default::default()
@@ -532,7 +538,8 @@ mod test {
 		let (manga, mid) = parse_details(
 			&doc(include_str!("fixtures/detail_pengyoudejiejie.html")),
 			"pengyoudejiejie",
-		);
+		)
+		.expect("details");
 		assert_eq!(mid.as_deref(), Some("16"));
 		assert_eq!(manga.title, "朋友的姐姐");
 		assert_eq!(manga.status, MangaStatus::Completed);
@@ -564,7 +571,8 @@ mod test {
 		let (manga, mid) = parse_details(
 			&doc(include_str!("fixtures/detail_toutouai.html")),
 			"toutouai",
-		);
+		)
+		.expect("details");
 		assert_eq!(mid.as_deref(), Some("144"));
 		assert_eq!(manga.title, "偷偷愛");
 		assert_eq!(
@@ -587,10 +595,44 @@ mod test {
 
 	#[aidoku_test]
 	fn falls_back_to_mangachapters_for_the_id() {
-		let html = doc(r#"<main><div id="mangachapters" data-mid="7"></div></main>"#);
-		assert_eq!(parse_details(&html, "x").1.as_deref(), Some("7"));
-		let html = doc("<main></main>");
-		assert_eq!(parse_details(&html, "x").1, None);
+		let html = doc(
+			r#"<main><h1 class="text-xl">X</h1><div id="mangachapters" data-mid="7"></div></main>"#,
+		);
+		assert_eq!(
+			parse_details(&html, "x").expect("details").1.as_deref(),
+			Some("7")
+		);
+		let html = doc(r#"<main><h1 class="text-xl">X</h1></main>"#);
+		assert_eq!(parse_details(&html, "x").expect("details").1, None);
+	}
+
+	#[aidoku_test]
+	fn a_page_without_the_title_is_not_details() {
+		assert!(parse_details(&doc(include_str!("fixtures/list.html")), "x").is_none());
+		let html = doc(
+			r#"<main><h1 class="text-xl"> </h1><div id="mangachapters" data-mid="7"></div></main>"#,
+		);
+		assert!(parse_details(&html, "x").is_none());
+	}
+
+	#[aidoku_test]
+	fn a_blank_chapter_id_rejects_the_list() {
+		let html = doc(
+			r#"<div class="chapteritem"><a data-cs="1" data-ct="第1話"></a></div>
+			<div class="chapteritem"><a data-cs=" " data-ct="第2話"></a></div>"#,
+		);
+		assert!(parse_chapters(&html, "9").is_empty());
+	}
+
+	#[aidoku_test]
+	fn an_empty_data_ct_falls_back_and_an_empty_title_is_none() {
+		let html = doc(
+			r#"<div class="chapteritem"><a data-cs="1" data-ct=""><span class="chaptertitle">第2話</span></a></div>
+			<div class="chapteritem"><a data-cs="2" data-ct=""><span class="chaptertitle"> </span></a></div>"#,
+		);
+		let chapters = parse_chapters(&html, "9");
+		assert_eq!(chapters[0].title, None);
+		assert_eq!(chapters[1].title.as_deref(), Some("第2話"));
 	}
 
 	#[aidoku_test]

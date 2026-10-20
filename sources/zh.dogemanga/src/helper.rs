@@ -19,7 +19,14 @@ pub const REFERER: &str = "https://dogemanga.com/";
 const SEARCH_PAGE_SIZE: i32 = 24;
 
 pub fn fetch_html(url: &str) -> Result<Document> {
-	Ok(Request::get(url)?.html()?)
+	let response = Request::get(url)?.send()?;
+	let status = response.status_code();
+	// The site rate-limits with a 429 notice page. Parsed as content it would read as an
+	// empty list, a title without chapters, or a chapter without pages.
+	if !(200..300).contains(&status) {
+		bail!("[dogemanga] HTTP {status} for {url}");
+	}
+	Ok(response.get_html()?)
 }
 
 pub fn manga_url(id: &str) -> String {
@@ -245,6 +252,9 @@ fn tab_keys(html: &Document, tab: &str) -> Vec<String> {
 /// Numbers come from the title but only within the tab the entry sits in: extras such
 /// as `第05卷特典` are under `番外篇`, and numbering them as volume 5 would show two
 /// volume 5s next to `單行本`'s `第05卷`.
+///
+/// Empty when a listed entry has no page id: the page shape broke, and a shorter list
+/// would replace the library's complete one.
 pub fn parse_chapters(html: &Document) -> Vec<Chapter> {
 	let volumes = tab_keys(html, "tankobon");
 	let extras = tab_keys(html, "bangaihen");
@@ -257,7 +267,7 @@ pub fn parse_chapters(html: &Document) -> Vec<Chapter> {
 			.attr("href")
 			.and_then(|href: String| id_after(&href, "/p/"))
 		else {
-			continue;
+			return Vec::new();
 		};
 		if chapters.iter().any(|c: &Chapter| c.key == key) {
 			continue;
@@ -297,30 +307,40 @@ pub fn parse_chapters(html: &Document) -> Vec<Chapter> {
 
 /// Every page of the chapter is listed on any of its reader pages, in
 /// `data-page-index` order.
-fn reader_images(html: &Document) -> Vec<(i32, Element)> {
+///
+/// An image whose index does not parse is an error rather than skipped: without its
+/// index the order of the chapter is unknown.
+fn reader_images(html: &Document) -> Result<Vec<(i32, Element)>> {
 	let mut images: Vec<(i32, Element)> = Vec::new();
 	if let Some(els) = html.select("img.site-reader__image[data-page-index]") {
 		for el in els {
-			if let Some(index) = el
-				.attr("data-page-index")
-				.and_then(|i: String| i.trim().parse::<i32>().ok())
-			{
-				images.push((index, el));
-			}
+			let raw = el.attr("data-page-index").unwrap_or_default();
+			let Ok(index) = raw.trim().parse::<i32>() else {
+				bail!("[dogemanga] unreadable page index {raw:?}");
+			};
+			images.push((index, el));
 		}
 	}
 	images.sort_by_key(|(index, _)| *index);
-	images
+	Ok(images)
 }
 
-pub fn parse_pages(html: &Document) -> Vec<Page> {
-	reader_images(html)
+/// A page without a usable image url fails the whole chapter: dropping it would
+/// hand the reader a chapter with a page silently missing.
+pub fn parse_pages(html: &Document) -> Result<Vec<Page>> {
+	reader_images(html)?
 		.into_iter()
-		.filter_map(|(_, el)| el.attr("data-page-image-url"))
-		.filter(|url: &String| url.starts_with("http"))
-		.map(|url: String| Page {
-			content: PageContent::url(url),
-			..Default::default()
+		.map(|(index, el)| {
+			let Some(url) = el
+				.attr("data-page-image-url")
+				.filter(|url: &String| url.starts_with("http"))
+			else {
+				bail!("[dogemanga] page {index} has no image url");
+			};
+			Ok(Page {
+				content: PageContent::url(url),
+				..Default::default()
+			})
 		})
 		.collect()
 }
@@ -332,7 +352,7 @@ pub fn reader_keys(html: &Document) -> Option<(String, String)> {
 		.select_first("a[href*='/m/']")
 		.and_then(|a: Element| a.attr("href"))
 		.and_then(|href: String| id_after(&href, "/m/"))?;
-	let (_, first) = reader_images(html).into_iter().next()?;
+	let (_, first) = reader_images(html).ok()?.into_iter().next()?;
 	let chapter = first
 		.attr("data-page-id")
 		.map(|id: String| String::from(id.trim()))
@@ -543,7 +563,7 @@ mod test {
 	#[aidoku_test]
 	fn reads_every_page_from_a_mid_chapter_reader_page() {
 		let html = doc(include_str!("fixtures/reader.html"));
-		let pages = parse_pages(&html);
+		let pages = parse_pages(&html).unwrap();
 		assert_eq!(pages.len(), 19);
 		assert_eq!(
 			pages[0].content,
@@ -557,6 +577,42 @@ mod test {
 			reader_keys(&html),
 			Some((String::from("zw7V_YJF"), String::from("5gT25mfd")))
 		);
+	}
+
+	#[aidoku_test]
+	fn a_chapter_without_a_page_id_rejects_the_list() {
+		let html = doc(concat!(
+			r#"<div id="site-manga__tab-pane-all">"#,
+			r#"<a class="site-manga-thumbnail__link" href="/p/aaa"><img alt="第1話"></a>"#,
+			r#"<a class="site-manga-thumbnail__link" href="/p/bbb"><img alt="第2話"></a>"#,
+			r#"</div>"#,
+		));
+		assert_eq!(parse_chapters(&html).len(), 2);
+		let html = doc(concat!(
+			r#"<div id="site-manga__tab-pane-all">"#,
+			r#"<a class="site-manga-thumbnail__link" href="/p/aaa"><img alt="第1話"></a>"#,
+			r#"<a class="site-manga-thumbnail__link" href="/m/zzz"><img alt="第2話"></a>"#,
+			r#"</div>"#,
+		));
+		assert!(parse_chapters(&html).is_empty());
+	}
+
+	#[aidoku_test]
+	fn a_page_without_an_image_url_fails_the_chapter() {
+		let html = doc(concat!(
+			r#"<img class="site-reader__image" data-page-index="0" data-page-image-url="https://dogemanga.com/images/pages/a.jpg">"#,
+			r#"<img class="site-reader__image" data-page-index="1" data-page-image-url="">"#,
+		));
+		assert!(parse_pages(&html).is_err());
+	}
+
+	#[aidoku_test]
+	fn an_unreadable_page_index_fails_the_chapter() {
+		let html = doc(concat!(
+			r#"<img class="site-reader__image" data-page-index="0" data-page-image-url="https://dogemanga.com/images/pages/a.jpg">"#,
+			r#"<img class="site-reader__image" data-page-index="x" data-page-image-url="https://dogemanga.com/images/pages/b.jpg">"#,
+		));
+		assert!(parse_pages(&html).is_err());
 	}
 
 	#[aidoku_test]

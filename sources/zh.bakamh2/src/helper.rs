@@ -168,7 +168,6 @@ fn relay_request(request: Request) -> Request {
 pub fn check_relay_status(url: &str, response: &Response) -> Result<()> {
 	let status = response.status_code();
 	if !(200..400).contains(&status) {
-		println!("[bakamh] relay answered {status} for {url}");
 		bail!("[bakamh] relay answered {status} for {url}");
 	}
 	Ok(())
@@ -249,8 +248,10 @@ pub fn same_domain(url: &str, domain: &str) -> bool {
 ///
 /// A Cloudflare challenge page that still comes back after the app's own handling is an
 /// error, as zh.vomicmh's `fetch_checked` does (the reader chose an error they can retry
-/// over an empty list). The home page, `get_manga_update` and the account requests stop
-/// there; the reader, search and listings ask again through `fetch_html_retrying`.
+/// over an empty list). `get_manga_update`, the account requests and the blank first search
+/// page the app runs by itself stop there; the reader, the reader's own searches and listings
+/// ask again through `fetch_html_retrying`. The home page reads its rows through `fetch_page`
+/// and asks each challenged row once more after the others.
 pub fn fetch_html(url: &str) -> Result<Document> {
 	fetch_html_with(url, None)
 }
@@ -300,9 +301,6 @@ fn until_not_challenged<T>(
 			return Ok(page);
 		}
 		if tries < CHALLENGE_TRIES {
-			println!(
-				"[bakamh] Cloudflare still blocks {url} after try {tries} of {CHALLENGE_TRIES}, trying again in {CHALLENGE_PAUSE} s"
-			);
 			pause(CHALLENGE_PAUSE);
 		}
 	}
@@ -325,15 +323,22 @@ pub fn fetch_page(url: &str, timeout: Option<f64>) -> Result<Option<Document>> {
 pub fn read_page(url: &str, response: Response) -> Result<Option<Document>> {
 	// Through the relay the response's own address is the relay's, so the page is parsed
 	// against the site's address for links to resolve to the site.
-	let html = if relay_url(url).is_some() {
+	let relayed = relay_url(url).is_some();
+	let html = if relayed {
 		check_relay_status(url, &response)?;
 		Html::parse_with_url(&response.get_string()?, url)?
 	} else {
 		response.get_html()?
 	};
+	// The challenge is answered with 403, so it is recognised before the status is checked.
 	if is_challenge(&html) {
-		log_challenge(url, &response);
 		return Ok(None);
+	}
+	// Any other error page is not content: a 404 or 5xx page read as a list is an empty list.
+	// Measured 2026-10-20: sign-in and early-access locks, and an empty search, are all 200.
+	// Through the relay `check_relay_status` has already decided.
+	if !relayed {
+		check_status(url, response.status_code())?;
 	}
 	if is_site_page(&html) {
 		crate::auth::note_site_session(is_signed_in(&html));
@@ -341,32 +346,27 @@ pub fn read_page(url: &str, response: Response) -> Result<Option<Document>> {
 	Ok(Some(html))
 }
 
+/// A page other than 2xx is an error, not content. The app follows redirects, so a 3xx
+/// that reaches the source is not a page either.
+fn check_status(url: &str, status: i32) -> Result<()> {
+	if !(200..300).contains(&status) {
+		bail!("[bakamh] HTTP {status} for {url}");
+	}
+	Ok(())
+}
+
 /// The selector half of the app's challenge check. The app also requires `Server: cloudflare`
-/// and status 403 or 503 (docs/aidoku-rs-api.md 7.6); this looks at the selectors only, which
-/// is why `log_challenge` prints the status.
+/// and status 403 or 503 (docs/aidoku-rs-api.md 7.6); this looks at the selectors only.
 pub fn is_challenge(html: &Document) -> bool {
 	html.select_first("#challenge-error-title, #challenge-error-text")
 		.is_some()
 }
 
-/// What the site answered when the app's Cloudflare handling gave up, to line up with the
-/// app's own `Failed to handle CloudFlare` lines. Cookie names only, never values.
-fn log_challenge(url: &str, response: &Response) {
-	let set_cookie = response.get_header("set-cookie").unwrap_or_default();
-	let sets_clearance = set_cookie.contains("cf_clearance=");
-	let sets_bm = set_cookie.contains("__cf_bm=");
-	println!(
-		"[bakamh] Cloudflare page for {url}: status={} cf-ray={:?} cf-mitigated={:?} sets cf_clearance={sets_clearance} __cf_bm={sets_bm}",
-		response.status_code(),
-		response.get_header("cf-ray"),
-		response.get_header("cf-mitigated"),
-	);
-}
-
 /// `fetch_html` for callers that need the raw text.
 pub fn fetch_text(url: &str) -> Result<String> {
 	let response = site_get(url)?.send()?;
-	if relay_url(url).is_some() {
+	let relayed = relay_url(url).is_some();
+	if relayed {
 		check_relay_status(url, &response)?;
 	}
 	let text = response.get_string()?;
@@ -374,8 +374,10 @@ pub fn fetch_text(url: &str) -> Result<String> {
 		.map(|doc| is_challenge(&doc))
 		.unwrap_or(false)
 	{
-		log_challenge(url, &response);
 		bail!("[bakamh] Cloudflare still blocks {url}");
+	}
+	if !relayed {
+		check_status(url, response.status_code())?;
 	}
 	Ok(text)
 }
@@ -627,7 +629,9 @@ pub fn parse_details(html: &Document, key: &str) -> Option<Manga> {
 		.filter(|src: &String| src.starts_with("http"));
 	let authors = link_names(detail_item(html, "作者"));
 	let categories = link_names(detail_item(html, "分类"));
-	let mut tags = categories.clone();
+	let content_rating = rating_of(&categories);
+	let viewer = viewer_of(&categories);
+	let mut tags = categories;
 	for tag in link_names(detail_item(html, "标籤")) {
 		if !tags.contains(&tag) {
 			tags.push(tag);
@@ -651,8 +655,8 @@ pub fn parse_details(html: &Document, key: &str) -> Option<Manga> {
 		description,
 		tags: (!tags.is_empty()).then_some(tags),
 		status,
-		content_rating: rating_of(&categories),
-		viewer: viewer_of(&categories),
+		content_rating,
+		viewer,
 		..Default::default()
 	})
 }
@@ -717,7 +721,9 @@ pub fn badge_suffix(badge: &str) -> Option<String> {
 	Some(format!("{}/{} 解鎖", month.trim(), day.trim()))
 }
 
-/// The details page lists chapters newest first, as the app wants them.
+/// The details page lists chapters newest first, as the app wants them. Empty when a row
+/// cannot be read: a shorter list would replace the library's chapters, and the caller keeps
+/// those when this is empty.
 pub fn parse_chapters(html: &Document, manga_key: &str) -> Vec<Chapter> {
 	let now = current_date();
 	let mut chapters: Vec<Chapter> = Vec::new();
@@ -725,15 +731,23 @@ pub fn parse_chapters(html: &Document, manga_key: &str) -> Vec<Chapter> {
 		return chapters;
 	};
 	for item in items {
+		// Signed in, the list carries an empty reading-position row (the signed-in fixture).
+		if item.has_class("chapter-bookmark") {
+			continue;
+		}
 		let Some(link) = item.select_first("a") else {
-			continue;
+			return Vec::new();
 		};
-		let Some(key) = link
-			.attr("href")
-			.and_then(|href: String| work_keys(&href))
-			.and_then(|(work, chapter)| (work == manga_key).then_some(chapter).flatten())
+		let Some((work, chapter)) = link.attr("href").and_then(|href: String| work_keys(&href))
 		else {
+			return Vec::new();
+		};
+		// A link to another work is not one of this work's chapters.
+		if work != manga_key {
 			continue;
+		}
+		let Some(key) = chapter else {
+			return Vec::new();
 		};
 		if chapters.iter().any(|c: &Chapter| c.key == key) {
 			continue;
@@ -1097,6 +1111,49 @@ mod test {
 			.entries
 			.iter()
 			.any(|m: &Manga| m.content_rating == ContentRating::NSFW));
+	}
+
+	#[aidoku_test]
+	fn an_unreadable_chapter_row_rejects_the_list() {
+		let row = |href: &str| format!(r#"<li><a href="{href}">第1话</a></li>"#);
+		let list = |rows: &[String]| {
+			doc(&format!(
+				r#"<ul class="version-chap">{}</ul>"#,
+				rows.concat()
+			))
+		};
+		let good = row("https://bakamh.com/manga/w/c-2/");
+		let keys: Vec<String> = parse_chapters(
+			&list(&[
+				good.clone(),
+				row("https://bakamh.com/manga/other/c-9/"),
+				row("https://bakamh.com/manga/w/c-1/"),
+			]),
+			"w",
+		)
+		.into_iter()
+		.map(|c| c.key)
+		.collect();
+		assert_eq!(keys, ["c-2", "c-1"]);
+		assert!(
+			parse_chapters(&list(&[good.clone(), String::from("<li>第1话</li>")]), "w").is_empty()
+		);
+		assert!(parse_chapters(
+			&list(&[good.clone(), row("https://bakamh.com/manga/w/")]),
+			"w"
+		)
+		.is_empty());
+		assert!(parse_chapters(&list(&[good.clone(), row("/about/")]), "w").is_empty());
+		let bookmark = String::from(r#"<li class="chapter-bookmark"><div></div></li>"#);
+		assert_eq!(parse_chapters(&list(&[bookmark, good]), "w").len(), 1);
+	}
+
+	#[aidoku_test]
+	fn error_statuses_are_not_pages() {
+		assert!(check_status("u", 200).is_ok());
+		assert!(check_status("u", 302).is_err());
+		assert!(check_status("u", 404).is_err());
+		assert!(check_status("u", 503).is_err());
 	}
 
 	#[aidoku_test]

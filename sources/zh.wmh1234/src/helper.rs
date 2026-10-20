@@ -6,7 +6,7 @@ use aidoku::{
 		net::{Request, Response},
 	},
 	prelude::*,
-	Chapter, ContentRating, Manga, MangaPageResult, MangaStatus, Result, Viewer,
+	Chapter, ContentRating, Manga, MangaPageResult, MangaStatus, Page, PageContent, Result, Viewer,
 };
 use base64::{
 	alphabet,
@@ -353,7 +353,9 @@ pub fn chapter_number(title: &str) -> Option<f32> {
 }
 
 /// The details page lists every chapter, newest first, as the app wants. Titles repeat
-/// (two `第35话`); the site's order and titles are kept as they are.
+/// (two `第35话`); the site's order and titles are kept as they are. A chapter link whose
+/// token cannot be read empties the whole list, so the library keeps its chapters instead
+/// of a list with one missing.
 pub fn parse_chapters(html: &Document) -> Vec<Chapter> {
 	let mut chapters: Vec<Chapter> = Vec::new();
 	for link in html
@@ -365,7 +367,7 @@ pub fn parse_chapters(html: &Document) -> Vec<Chapter> {
 			.attr("href")
 			.and_then(|href: String| chapter_token(&href))
 		else {
-			continue;
+			return Vec::new();
 		};
 		if chapters.iter().any(|c: &Chapter| c.key == key) {
 			continue;
@@ -383,14 +385,24 @@ pub fn parse_chapters(html: &Document) -> Vec<Chapter> {
 }
 
 /// The reader's images in order. The page names the next lazily loaded image in
-/// `data-src`; `src` is a placeholder.
-pub fn parse_pages(html: &Document) -> Vec<String> {
-	html.select("img.reader-image[data-src]")
+/// `data-src`; `src` is a placeholder. An image without a usable address fails the
+/// whole chapter: dropping it would hand the reader a chapter with a page missing.
+pub fn parse_pages(html: &Document) -> Result<Vec<Page>> {
+	html.select("img.reader-image")
 		.into_iter()
 		.flatten()
-		.filter_map(|img: Element| img.attr("data-src"))
-		.map(|src: String| String::from(src.trim()))
-		.filter(|src: &String| src.starts_with("http"))
+		.enumerate()
+		.map(|(index, img): (usize, Element)| {
+			let src = img.attr("data-src").unwrap_or_default();
+			let src = src.trim();
+			if !src.starts_with("http") {
+				bail!("[wmh1234] reader image {index} has no usable data-src");
+			}
+			Ok(Page {
+				content: PageContent::url(src),
+				..Default::default()
+			})
+		})
 		.collect()
 }
 
@@ -570,6 +582,14 @@ mod test {
 	}
 
 	#[aidoku_test]
+	fn a_bad_chapter_link_rejects_the_list() {
+		let html = r#"<div class="mint-chapter-grid"><a href="/go/NDczMTUtMQ==" data-chapter-id="2">第2话</a><a href="/comic/1" data-chapter-id="1">第1话</a></div>"#;
+		assert!(parse_chapters(&doc(html)).is_empty());
+		let html = r#"<div class="mint-chapter-grid"><a href="/go/NDczMTUtMg==" data-chapter-id="2">第2话</a><a href="/go/NDczMTUtMQ==" data-chapter-id="1">第1话</a></div>"#;
+		assert_eq!(parse_chapters(&doc(html)).len(), 2);
+	}
+
+	#[aidoku_test]
 	fn lists_chapters_newest_first() {
 		let chapters = parse_chapters(&doc(include_str!("fixtures/manga.html")));
 		assert_eq!(chapters.len(), 45);
@@ -589,11 +609,26 @@ mod test {
 
 	#[aidoku_test]
 	fn reads_the_reader_page() {
-		let pages = parse_pages(&doc(include_str!("fixtures/reader.html")));
+		let pages = parse_pages(&doc(include_str!("fixtures/reader.html"))).expect("pages");
 		assert_eq!(pages.len(), 159);
-		assert!(pages[0].starts_with("https://wmh1234.wszwhg.net/kantu/"));
+		let PageContent::Url(first, _) = &pages[0].content else {
+			panic!("not a url page");
+		};
+		assert!(first.starts_with("https://wmh1234.wszwhg.net/kantu/"));
 		// Page images keep their signature.
-		assert!(pages[0].contains("?st="));
-		assert!(parse_pages(&doc(include_str!("fixtures/syncing.html"))).is_empty());
+		assert!(first.contains("?st="));
+		assert!(parse_pages(&doc(include_str!("fixtures/syncing.html")))
+			.expect("syncing")
+			.is_empty());
+	}
+
+	#[aidoku_test]
+	fn fails_on_a_reader_image_without_address() {
+		let html = r#"<div>
+			<img class="reader-image" data-src="https://img.example/1.webp">
+			<img class="reader-image" src="/placeholder.svg">
+			<img class="reader-image" data-src="https://img.example/3.webp">
+		</div>"#;
+		assert!(parse_pages(&doc(html)).is_err());
 	}
 }

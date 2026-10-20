@@ -111,11 +111,6 @@ pub fn member_with_cookie(cookie: &str) -> Result<Option<MemberInfo>> {
 	)?
 	.send()?;
 	let body = response.get_string()?;
-	println!(
-		"[webtoons] member check: HTTP {}, code {:?}",
-		response.status_code(),
-		response_code(&body)
-	);
 	classify_member(response.status_code(), &body)
 }
 

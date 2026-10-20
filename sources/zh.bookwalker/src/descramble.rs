@@ -625,7 +625,7 @@ pub fn tiles(pg: &Seeds, w: i64, h: i64) -> Vec<Tile> {
 }
 
 /// Content-wide keys derived from the final A/Z/T (`N1h` hooks).
-struct ContentKeys {
+pub struct ContentKeys {
 	b6o: u64,
 	e1u: u32,
 	l7g: u32,
@@ -650,7 +650,7 @@ fn xor_words(a: &[u8; 32]) -> u32 {
 	r
 }
 
-fn content_keys(a: &[u8; 32], z: &[u8; 32], t: &[u8; 32]) -> ContentKeys {
+pub fn content_keys(a: &[u8; 32], z: &[u8; 32], t: &[u8; 32]) -> ContentKeys {
 	let mut u2g = [0u8; 32];
 	for i in 0..32 {
 		u2g[i] = a[i] ^ z[i] ^ t[i];
@@ -862,6 +862,14 @@ fn slice_page_object<'a>(json: &'a [u8], xhtml_key: &str) -> Option<&'a [u8]> {
 	Some(&json[start..end])
 }
 
+/// Whether `xhtml_key` is a page the site serves unscrambled: its `Page` object has no
+/// tile fields. The cover is one (measured on the test book, 2026-10-20). `false` when
+/// the page is not in the config at all.
+pub fn is_unscrambled_page(json: &[u8], xhtml_key: &str) -> bool {
+	slice_page_object(json, xhtml_key)
+		.is_some_and(|page| find(page, b"\"BlockWidth\"", 0).is_none())
+}
+
 /// Parse the `Page` object for `xhtml_key` out of the decrypted config JSON.
 pub fn parse_page_info(json: &[u8], xhtml_key: &str) -> Option<PageInfo> {
 	let page = slice_page_object(json, xhtml_key)?;
@@ -879,38 +887,26 @@ pub fn parse_page_info(json: &[u8], xhtml_key: &str) -> Option<PageInfo> {
 	})
 }
 
-/// Convenience: given decrypted config JSON, one xhtml key and the final A/Z/T keys,
-/// return the hashed page file base name and its tile list.
-/// The hashed file name and tile list for one page, from an already-parsed
-/// [`PageInfo`], so the image processor can recompute tiles without re-parsing the
-/// whole config.
-pub fn page_file_and_tiles_from_info(
+/// The tile list for one page, from an already-parsed [`PageInfo`], so the image
+/// processor can recompute tiles without re-parsing the whole config.
+pub fn page_tiles(
 	info: &PageInfo,
 	xhtml_key: &str,
 	a: &[u8; 32],
 	z: &[u8; 32],
 	t: &[u8; 32],
-) -> (String, Vec<Tile>) {
+) -> Vec<Tile> {
 	let ck = content_keys(a, z, t);
-	let file_name = format!("{}", info.no);
-	let seeds = page_seeds(&ck, xhtml_key, &file_name, info);
-	let file = hashed_name(&ck, xhtml_key, &file_name);
+	let seeds = page_seeds(&ck, xhtml_key, &format!("{}", info.no), info);
 	let w = info.size_width + seeds.y2a as i64;
 	let h = info.size_height + seeds.r7l as i64;
-	let tl = tiles(&seeds, w, h);
-	(file, tl)
+	tiles(&seeds, w, h)
 }
 
-/// The hashed file base name only (for building the image URL), without the tiles.
-pub fn page_file_name(
-	info: &PageInfo,
-	xhtml_key: &str,
-	a: &[u8; 32],
-	z: &[u8; 32],
-	t: &[u8; 32],
-) -> String {
-	let ck = content_keys(a, z, t);
-	hashed_name(&ck, xhtml_key, &format!("{}", info.no))
+/// The hashed file base name (for building the image URL). `ck` is the same for every
+/// page of a book, so the caller derives it once.
+pub fn page_file_name(info: &PageInfo, xhtml_key: &str, ck: &ContentKeys) -> String {
+	hashed_name(ck, xhtml_key, &format!("{}", info.no))
 }
 
 /// The ordered list of page xhtml keys from `configuration.contents`. That array is
@@ -1049,9 +1045,9 @@ mod tests {
 	fn p001_file_name_and_tiles_match() {
 		let (json, a, z, t) = crypto::decrypt_config(DATA_B64).expect("decrypt");
 		let info = parse_page_info(&json, "item/xhtml/p-001.xhtml").expect("page info");
-		let (file, got) =
-			page_file_and_tiles_from_info(&info, "item/xhtml/p-001.xhtml", &a, &z, &t);
+		let file = page_file_name(&info, "item/xhtml/p-001.xhtml", &content_keys(&a, &z, &t));
 		assert_eq!(file, "1055836d080ba885d1");
+		let got = page_tiles(&info, "item/xhtml/p-001.xhtml", &a, &z, &t);
 		let want = expected_tiles();
 		assert_eq!(got.len(), want.len(), "tile count");
 		for (i, (g, w)) in got.iter().zip(want.iter()).enumerate() {
@@ -1131,7 +1127,7 @@ mod tests {
 		let mut fails: Vec<String> = Vec::new();
 		for (key, fixture) in cases {
 			let info = parse_page_info(&json, key).expect("page info");
-			let (_f, got) = page_file_and_tiles_from_info(&info, key, &a, &z, &t);
+			let got = page_tiles(&info, key, &a, &z, &t);
 			let want = parse_tiles(fixture);
 			if got.len() != want.len() {
 				fails.push(format!("{key}: len {} vs {}", got.len(), want.len()));
@@ -1186,5 +1182,21 @@ mod tests {
 		assert_eq!(order[0], "item/xhtml/p-cover.xhtml");
 		assert_eq!(order[1], "item/xhtml/p-001.xhtml");
 		assert_eq!(order[173], "item/xhtml/p-173.xhtml");
+		assert!(is_unscrambled_page(&json, "item/xhtml/p-cover.xhtml"));
+		assert!(!is_unscrambled_page(&json, "item/xhtml/p-001.xhtml"));
+		assert!(!is_unscrambled_page(&json, "item/xhtml/p-999.xhtml"));
+	}
+
+	#[aidoku_test]
+	fn every_listed_page_has_page_info() {
+		// The page list fails when a listed page cannot be read, so every page of a real
+		// book must parse, except the unscrambled cover, which the list leaves out.
+		let (json, _a, _z, _t) = crypto::decrypt_config(DATA_B64).expect("decrypt");
+		for xhtml in page_order(&json) {
+			assert!(
+				parse_page_info(&json, &xhtml).is_some() || is_unscrambled_page(&json, &xhtml),
+				"{xhtml}"
+			);
+		}
 	}
 }

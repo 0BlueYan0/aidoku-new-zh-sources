@@ -1,10 +1,9 @@
 [
 	{
 		"type": "select",
-		"name": "類型",
+		"title": "類型",
 		"id": "genre",
 		"options": [
-			"全部",
 			"愛情",
 			"歐式宮廷",
 			"影視化",
@@ -31,7 +30,7 @@
 	},
 	{
 		"type": "select",
-		"name": "排序",
+		"title": "排序",
 		"id": "sort",
 		"options": [
 			"人氣排序",

@@ -4,7 +4,7 @@ use aidoku::{
 	imports::{
 		defaults::defaults_get,
 		html::{Document, Element, ElementList},
-		net::Request,
+		net::{Request, Response},
 	},
 	prelude::*,
 	Chapter, ContentRating, Manga, MangaPageResult, MangaStatus, Page, PageContent, Result, Viewer,
@@ -62,8 +62,18 @@ pub fn request(url: &str) -> Result<Request> {
 	Ok(Request::get(url)?.header("User-Agent", USER_AGENT))
 }
 
+/// A non-2xx answer is an error, so an error page is never read as an empty list.
 pub fn fetch_html(url: &str) -> Result<Document> {
-	Ok(request(url)?.html()?)
+	read_html(request(url)?.send()?, url)
+}
+
+/// `fetch_html`'s status check, shared with the home's batched rows.
+pub fn read_html(response: Response, url: &str) -> Result<Document> {
+	let status = response.status_code();
+	if !(200..300).contains(&status) {
+		bail!("[msxhm] HTTP {status} for {url}");
+	}
+	Ok(response.get_html()?)
 }
 
 /// An image address moved onto `base`, so a reader who picked a mirror because the
@@ -228,8 +238,9 @@ pub fn parse_manga_list(html: &Document, base: &str) -> MangaPageResult {
 	}
 }
 
-/// One board of the rank page, found by its heading.
-pub fn parse_rank(html: &Document, heading: &str, base: &str) -> MangaPageResult {
+/// One board of the rank page, found by its heading. A page without that board is an
+/// error rather than an empty board: the site renamed it or answered another page.
+pub fn parse_rank(html: &Document, heading: &str, base: &str) -> Result<MangaPageResult> {
 	let board = html
 		.select("ul.top-cat > li")
 		.and_then(|boards: ElementList| {
@@ -239,13 +250,13 @@ pub fn parse_rank(html: &Document, heading: &str, base: &str) -> MangaPageResult
 					.as_deref() == Some(heading)
 			})
 		});
-	let entries = board
-		.map(|li: Element| collect(li.select("a[title]"), li.select(".mh-cover"), base))
-		.unwrap_or_default();
-	MangaPageResult {
-		entries,
+	let Some(board) = board else {
+		bail!("[msxhm] no rank board {heading}");
+	};
+	Ok(MangaPageResult {
+		entries: collect(board.select("a[title]"), board.select(".mh-cover"), base),
 		has_next_page: false,
-	}
+	})
 }
 
 /// The value of a `<label>：<value>` line among the details page's subtitles and tips.
@@ -322,6 +333,8 @@ pub fn chapter_number(title: &str) -> Option<f32> {
 }
 
 /// The details page lists every chapter, oldest first; the app wants newest first.
+/// A link that is not a chapter gives an empty list, which the caller treats as unreadable,
+/// so the library is not handed a list with chapters missing.
 pub fn parse_chapters(html: &Document, base: &str) -> Vec<Chapter> {
 	let mut chapters: Vec<Chapter> = Vec::new();
 	for link in html.select("#detail-list-select a").into_iter().flatten() {
@@ -329,7 +342,7 @@ pub fn parse_chapters(html: &Document, base: &str) -> Vec<Chapter> {
 			.attr("href")
 			.and_then(|href: String| id_after(&href, "chapter"))
 		else {
-			continue;
+			return Vec::new();
 		};
 		if chapters.iter().any(|c: &Chapter| c.key == key) {
 			continue;
@@ -489,17 +502,29 @@ mod test {
 		let html = doc(include_str!("fixtures/rank.html"));
 		// The site numbers 10 works on three boards and 14 on the last.
 		for ((_, heading), count) in RANKS.into_iter().zip([10, 10, 10, 14]) {
-			let board = parse_rank(&html, heading, BASE_URL);
+			let board = parse_rank(&html, heading, BASE_URL).expect("board");
 			assert_eq!(board.entries.len(), count, "{heading}");
 			assert!(
 				board.entries.iter().all(|m: &Manga| m.cover.is_some()),
 				"{heading}"
 			);
 		}
-		let new = parse_rank(&html, "新书榜", BASE_URL);
+		let new = parse_rank(&html, "新书榜", BASE_URL).expect("board");
 		assert_eq!(new.entries[0].title, "衣冠禽獸");
 		assert_eq!(new.entries[1].title, "我的in援團");
-		assert!(parse_rank(&html, "日榜", BASE_URL).entries.is_empty());
+		assert!(parse_rank(&html, "日榜", BASE_URL).is_err());
+	}
+
+	#[aidoku_test]
+	fn a_link_that_is_not_a_chapter_rejects_the_list() {
+		let html = r#"<ul id="detail-list-select"><li><a href="/chapter/12">第1話</a></li><li><a href="/book/3">更多</a></li></ul>"#;
+		assert!(parse_chapters(&doc(html), BASE_URL).is_empty());
+		let html = r#"<ul id="detail-list-select"><li><a href="/chapter/12">第1話</a></li><li><a href="/chapter/13">第2話</a></li></ul>"#;
+		let keys: Vec<String> = parse_chapters(&doc(html), BASE_URL)
+			.into_iter()
+			.map(|c| c.key)
+			.collect();
+		assert_eq!(keys, ["13", "12"]);
 	}
 
 	#[aidoku_test]

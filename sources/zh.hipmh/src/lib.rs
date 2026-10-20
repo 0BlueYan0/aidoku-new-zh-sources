@@ -55,7 +55,7 @@ fn fetch_list_page(url: &str, page: i32) -> Result<MangaPageResult> {
 	let data = fetch_data(url)?;
 	let entries = json_field(&data, "items")
 		.map(parse_manga_list)
-		.unwrap_or_default();
+		.ok_or_else(|| error!("[hipmh] {url}: no items"))?;
 	let total_pages = json_i64(&data, "total_pages").unwrap_or(0);
 	Ok(MangaPageResult {
 		has_next_page: !entries.is_empty() && i64::from(page) < total_pages,
@@ -65,10 +65,11 @@ fn fetch_list_page(url: &str, page: i32) -> Result<MangaPageResult> {
 
 /// A `/v1/search` page: `data.data` plus `total_pages`.
 fn fetch_search_page(query: &str, page: i32) -> Result<MangaPageResult> {
-	let data = fetch_data(&search_url(query, page, SEARCH_PAGE_SIZE))?;
+	let url = search_url(query, page, SEARCH_PAGE_SIZE);
+	let data = fetch_data(&url)?;
 	let entries = json_field(&data, "data")
 		.map(parse_manga_list)
-		.unwrap_or_default();
+		.ok_or_else(|| error!("[hipmh] {url}: no data"))?;
 	let total_pages = json_i64(&data, "total_pages").unwrap_or(0);
 	Ok(MangaPageResult {
 		has_next_page: !entries.is_empty() && i64::from(page) < total_pages,
@@ -83,10 +84,11 @@ fn author_search(name: &str) -> Result<MangaPageResult> {
 	let name = name.trim();
 	let mut entries: Vec<Manga> = Vec::new();
 	for page in 1..=AUTHOR_SEARCH_MAX_PAGES {
-		let data = fetch_data(&search_url(name, page, AUTHOR_SEARCH_PAGE_SIZE))?;
+		let url = search_url(name, page, AUTHOR_SEARCH_PAGE_SIZE);
+		let data = fetch_data(&url)?;
 		let rows = json_field(&data, "data")
 			.map(json_items)
-			.unwrap_or_default();
+			.ok_or_else(|| error!("[hipmh] {url}: no data"))?;
 		for row in rows.iter() {
 			if !json_names(row, "authors")
 				.iter()
@@ -132,7 +134,7 @@ impl Source for HipmhSource {
 			match filter {
 				// `filters.json` supplies `ids`, so `value` is already the query value.
 				FilterValue::Select { id, value } => match id.as_str() {
-					"sort" if !value.is_empty() => sort = value,
+					"sort" => sort = value,
 					"status" => status = value,
 					"category" => category = value,
 					"genre" => genre = value,
@@ -190,8 +192,8 @@ impl Source for HipmhSource {
 			let mut details = parse_manga(&data, Some(&manga.key))
 				.ok_or_else(|| error!("[hipmh] unreadable details for {}", manga.key))?;
 			// `/v1/manga` gives a numeric `id`; the library key must survive.
-			details.key = manga.key.clone();
 			details.url = Some(manga_url(&manga.key));
+			details.key = manga.key;
 			details.chapters = manga.chapters.take();
 			manga = details;
 			send_partial_result(&manga);
@@ -207,24 +209,20 @@ impl Source for HipmhSource {
 					Ok(data) => data,
 					Err(_) => break false,
 				};
-				let items = json_field(&data, "items")
-					.map(json_items)
-					.unwrap_or_default();
-				chapters.extend(items.iter().filter_map(|obj: &&str| parse_chapter(obj)));
+				let Some(parsed) = parse_chapter_page(&data) else {
+					break false;
+				};
+				let last = parsed.is_empty();
+				chapters.extend(parsed);
 				let total_pages = json_i64(&data, "total_pages").unwrap_or(0);
-				if items.is_empty() || i64::from(page) >= total_pages {
+				if last || i64::from(page) >= total_pages {
 					break true;
 				}
 				page += 1;
 			};
-			if complete {
+			// One unreachable title must not abort a whole library refresh.
+			if let Some(chapters) = chapters_to_store(complete, chapters) {
 				manga.chapters = Some(chapters);
-			} else {
-				// One unreachable title must not abort a whole library refresh.
-				println!(
-					"[hipmh] ERROR fetching chapters for {} at page {page}",
-					manga.key
-				);
 			}
 		}
 

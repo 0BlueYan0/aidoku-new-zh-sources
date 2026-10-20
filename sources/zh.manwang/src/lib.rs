@@ -70,14 +70,11 @@ impl Source for ManwangSource {
 				match id.as_str() {
 					"order" => by_update = value == "addtime",
 					// `filters.json` supplies `ids`, so `value` is already the tag id.
-					"tag" if value != "all" => tag = Some(value),
+					"tag" => tag = Some(value),
 					// A tapped tag sends its name.
-					"genre" if !value.is_empty() => match tags::tag_id(value.trim()) {
+					"genre" => match tags::tag_id(value.trim()) {
 						Some(id) => tag = Some(String::from(id)),
-						None => {
-							println!("[manwang] unknown tag {value}");
-							return Ok(empty_page());
-						}
+						None => return Ok(empty_page()),
 					},
 					_ => {}
 				}
@@ -99,7 +96,6 @@ impl Source for ManwangSource {
 		let Some(html) = fetch_details_page(&manga.key)? else {
 			// The boards still list removed works; say so instead of an empty page, and
 			// keep any chapters the library already has.
-			println!("[manwang] {} has been removed by the site", manga.key);
 			if needs_details {
 				manga.status = MangaStatus::Cancelled;
 				manga.description = Some(String::from(DELISTED_NOTE));
@@ -109,23 +105,18 @@ impl Source for ManwangSource {
 		};
 
 		if needs_details {
-			match parse_details(&html, &manga.key) {
-				Some(details) => {
-					let chapters = manga.chapters.take();
-					manga = details;
-					manga.chapters = chapters;
-					send_partial_result(&manga);
-				}
-				None => println!("[manwang] ERROR no details on the page of {}", manga.key),
+			if let Some(details) = parse_details(&html, &manga.key) {
+				let chapters = manga.chapters.take();
+				manga = details;
+				manga.chapters = chapters;
+				send_partial_result(&manga);
 			}
 		}
 
 		if needs_chapters {
 			// An unreadable page must not empty the chapters the library already has.
 			let chapters = parse_chapters(&html, &manga.key);
-			if chapters.is_empty() {
-				println!("[manwang] ERROR no chapters on the page of {}", manga.key);
-			} else {
+			if !chapters.is_empty() {
 				manga.chapters = Some(chapters);
 			}
 		}
@@ -138,12 +129,10 @@ impl Source for ManwangSource {
 		let Some(list) = crypto::image_list(&html) else {
 			bail!("[manwang] no image list for chapter {}", chapter.key);
 		};
-		if list.source_id != PLAIN_SOURCE_ID {
-			println!(
-				"[manwang] ERROR chapter {} uses source_id {}",
-				chapter.key, list.source_id
-			);
-			bail!("[manwang] unsupported source_id {}", list.source_id);
+		match list.source_id.as_deref() {
+			Some(PLAIN_SOURCE_ID) => {}
+			Some(other) => bail!("[manwang] unsupported source_id {other}"),
+			None => bail!("[manwang] no source_id for chapter {}", chapter.key),
 		}
 		if list.images.is_empty() {
 			bail!("[manwang] no images for chapter {}", chapter.key);
@@ -191,11 +180,13 @@ impl Home for ManwangSource {
 		let mut rows = Vec::new();
 		let mut requests: Vec<Request> = Vec::new();
 		for (title, id) in HOME_ROWS {
-			let Some(Ok(request)) = board_url(id).map(|url: String| request(&url)) else {
-				println!("[manwang] ERROR building the {id} row");
+			let Some(url) = board_url(id) else {
 				continue;
 			};
-			rows.push((title, id));
+			let Ok(request) = request(&url) else {
+				continue;
+			};
+			rows.push((title, id, url));
 			requests.push(request);
 		}
 		let mut responses = Vec::new();
@@ -208,14 +199,11 @@ impl Home for ManwangSource {
 		// Drawn one at a time so a short response list leaves the trailing rows empty instead
 		// of shifting results onto the wrong titles.
 		let mut responses = responses.into_iter();
-		for (title, id) in rows {
+		for (title, id, url) in rows {
 			// A row that fails stays empty; the others still load.
-			let entries = match responses.next().map(|response| response?.get_html()) {
+			let entries = match responses.next().map(|response| read_html(response?, &url)) {
 				Some(Ok(html)) => parse_manga_list(&html, 1).entries,
-				_ => {
-					println!("[manwang] ERROR loading the {id} row");
-					continue;
-				}
+				_ => continue,
 			};
 			if entries.is_empty() {
 				continue;

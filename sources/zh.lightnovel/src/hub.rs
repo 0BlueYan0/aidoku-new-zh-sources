@@ -61,19 +61,13 @@ pub enum Reply {
 }
 
 impl Reply {
-	/// The app shows a generic message for an `Err`, so the site's answer is printed
-	/// here too; without it a refusal (402 quota, 403 level) leaves no trace in logcat.
+	/// The site's answer goes into the error, which the app logs, so a refusal
+	/// (402 quota, 403 level) shows up in logcat.
 	pub fn into_result(self) -> Result<Value> {
 		match self {
 			Reply::Ok(value) => Ok(value),
-			Reply::Refused(status, msg) => {
-				println!("[lightnovel] refused {status}: {msg}");
-				bail!("[lightnovel] refused {status}: {msg}")
-			}
-			Reply::Error(msg) => {
-				println!("[lightnovel] hub error: {msg}");
-				bail!("[lightnovel] hub error: {msg}")
-			}
+			Reply::Refused(status, msg) => bail!("[lightnovel] refused {status}: {msg}"),
+			Reply::Error(msg) => bail!("[lightnovel] hub error: {msg}"),
 		}
 	}
 }
@@ -166,11 +160,7 @@ fn request(
 			.header("Content-Type", "text/plain;charset=UTF-8")
 			.body(body.as_bytes());
 	}
-	let response = req.send().map_err(|e| {
-		println!(
-			"[lightnovel] {} {url} failed: {e:?}",
-			if method_post { "POST" } else { "GET" }
-		);
+	let response = req.send().map_err(|_| {
 		// A poll now and then never gets its answer; a new connection usually does.
 		if method_post {
 			Failure::Other("request failed".to_string())
@@ -204,14 +194,6 @@ impl Connection {
 					.map(String::from)
 			})
 			.ok_or_else(|| Failure::Other("negotiate without connectionToken".to_string()))?;
-		println!(
-			"[lightnovel] hub connection {id} ({})",
-			if token.is_some() {
-				"signed in"
-			} else {
-				"anonymous"
-			}
-		);
 		let conn = Self {
 			url: format!("{}/hub/api?id={id}", api_base()),
 			token: token.map(String::from),
@@ -287,7 +269,7 @@ impl Connection {
 /// A completion message (`type` 3) as (invocation index, reply). Other messages, such
 /// as the `OnMessage` announcements the hub pushes, are ignored.
 fn parse_completion(frame: &str) -> Option<(usize, Reply)> {
-	let value: Value = serde_json::from_str(frame).ok()?;
+	let mut value: Value = serde_json::from_str(frame).ok()?;
 	if value.get("type").and_then(Value::as_i64) != Some(3) {
 		return None;
 	}
@@ -295,13 +277,13 @@ fn parse_completion(frame: &str) -> Option<(usize, Reply)> {
 	if let Some(error) = value.get("error").and_then(Value::as_str) {
 		return Some((index, Reply::Error(error.to_string())));
 	}
-	let result = value.get("result")?;
+	let result = value.get_mut("result")?;
 	let success = result
 		.get("success")
 		.and_then(Value::as_bool)
 		.unwrap_or(false);
 	if success {
-		let response = result.get("response").cloned().unwrap_or(Value::Null);
+		let response = result.get_mut("response").map_or(Value::Null, Value::take);
 		Some((index, Reply::Ok(response)))
 	} else {
 		let status = result.get("status").and_then(Value::as_i64).unwrap_or(0);
@@ -318,12 +300,11 @@ fn parse_completion(frame: &str) -> Option<(usize, Reply)> {
 /// The connection is used for this batch only.
 pub fn invoke_all(token: Option<&str>, calls: &[Call]) -> Result<Vec<Reply>> {
 	let mut last = String::new();
-	for attempt in 0..2 {
+	for _ in 0..2 {
 		let outcome = Connection::open(token).and_then(|conn: Connection| conn.invoke(calls));
 		match outcome {
 			Ok(replies) => return Ok(replies),
 			Err(Failure::Lost) => {
-				println!("[lightnovel] hub connection lost (attempt {attempt})");
 				last = "connection lost".to_string();
 			}
 			Err(Failure::Other(msg)) => bail!("[lightnovel] hub: {msg}"),

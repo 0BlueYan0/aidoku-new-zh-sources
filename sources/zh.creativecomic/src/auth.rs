@@ -123,7 +123,7 @@ pub fn ensure_guest_uuid() {
 	let _ = fetch_guest_uuid();
 }
 
-fn fetch_guest_uuid() -> Option<String> {
+fn fetch_guest_uuid() -> Option<()> {
 	let url = format!("{API_URL}/guest");
 	let request = Request::get(&url)
 		.ok()?
@@ -134,8 +134,8 @@ fn fetch_guest_uuid() -> Option<String> {
 	if uuid.is_empty() {
 		return None;
 	}
-	defaults_set(UUID_KEY, DefaultValue::String(uuid.clone()));
-	Some(uuid)
+	defaults_set(UUID_KEY, DefaultValue::String(uuid));
+	Some(())
 }
 
 /// What asking CCC about the stored session produced.
@@ -204,13 +204,11 @@ pub fn ensure_session() {
 		MemberResult::Ok(_) => set_timestamp(NEXT_CHECK_KEY, now + CHECK_INTERVAL),
 		MemberResult::Dead => match refresh() {
 			TokenOutcome::Renewed => {
-				println!("[ccc] session renewed");
 				set_timestamp(NEXT_CHECK_KEY, now + CHECK_INTERVAL);
 			}
 			TokenOutcome::Rejected => {
 				// Nothing on the device can revive this. Drop it so browsing carries on
 				// as a guest, and let the settings footer explain.
-				println!("[ccc] session cannot be renewed, falling back to guest");
 				clear();
 				defaults_set(NEEDS_RELOGIN_KEY, DefaultValue::Bool(true));
 			}
@@ -250,7 +248,7 @@ fn form_encode(pairs: &[(&str, &str)]) -> String {
 	body
 }
 
-/// POST the OAuth token endpoint. Returns true when new tokens were stored.
+/// What a POST to the OAuth token endpoint came to.
 enum TokenOutcome {
 	/// New tokens were issued and stored.
 	Renewed,
@@ -271,18 +269,12 @@ fn request_token(pairs: &[(&str, &str)]) -> TokenOutcome {
 			.header("Accept-Language", "zh")
 			.header("Content-Type", "application/x-www-form-urlencoded")
 			.body(body),
-		Err(_) => {
-			println!("[ccc] ERROR building the token request");
-			return TokenOutcome::Unreachable;
-		}
+		Err(_) => return TokenOutcome::Unreachable,
 	};
 
 	let response = match request.send() {
 		Ok(response) => response,
-		Err(_) => {
-			println!("[ccc] ERROR the token endpoint could not be reached");
-			return TokenOutcome::Unreachable;
-		}
+		Err(_) => return TokenOutcome::Unreachable,
 	};
 	let status = response.status_code();
 
@@ -291,10 +283,8 @@ fn request_token(pairs: &[(&str, &str)]) -> TokenOutcome {
 	// status rather than by the absence of a token.
 	let refused = |status: i32| {
 		if (400..500).contains(&status) {
-			println!("[ccc] the token endpoint refused the grant (HTTP {status})");
 			TokenOutcome::Rejected
 		} else {
-			println!("[ccc] ERROR the token endpoint returned no access token (HTTP {status})");
 			TokenOutcome::Unreachable
 		}
 	};
@@ -303,11 +293,7 @@ fn request_token(pairs: &[(&str, &str)]) -> TokenOutcome {
 	let Ok(parsed) = response.get_json_owned::<TokenResponse>() else {
 		return refused(status);
 	};
-	let Some(access) = parsed
-		.access_token
-		.clone()
-		.filter(|value| !value.is_empty())
-	else {
+	let Some(access) = parsed.access_token.filter(|value| !value.is_empty()) else {
 		return refused(status);
 	};
 
@@ -359,7 +345,7 @@ pub fn capture_web_login(values: &HashMap<String, String>) -> bool {
 	true
 }
 
-/// Swap the refresh token for a fresh pair. Returns true when it worked.
+/// Swap the refresh token for a fresh pair.
 fn refresh() -> TokenOutcome {
 	let Some(refresh_token) = stored(REFRESH_TOKEN_KEY) else {
 		// Nothing to renew with, and nothing will change that on its own.
@@ -474,7 +460,6 @@ pub fn purge_experimental_state() {
 		defaults_set(key, DefaultValue::Null);
 	}
 	clear();
-	println!("[ccc] cleared session state left by an earlier version");
 }
 
 /// Sign out of CCC as well as out of Aidoku.
@@ -483,30 +468,21 @@ pub fn purge_experimental_state() {
 /// `localStorage`, so on its own it leaves the site signed in: the login page comes back
 /// already authenticated and the sync button restores the very same account.
 pub fn clear_web_session() {
-	match open_site() {
-		Some(webview) => {
-			// `eval` hands back whatever the script evaluates to, and that has to be a
-			// string. `localStorage.removeItem(...)` evaluates to `undefined`, which comes
-			// back as an error even though the removal worked - reporting a failure that
-			// never happened. So the script ends by reading the keys back: that gives
-			// `eval` its string and makes the log honest, because empty means the session
-			// really is gone.
-			let names = SESSION_STORAGE_KEYS
-				.iter()
-				.map(|key| format!("'{key}'"))
-				.collect::<Vec<String>>()
-				.join(",");
-			// Keys are literals defined in this file, so the quoting is safe.
-			let script = format!(
-				"var k=[{names}];				 k.forEach(function(n){{try{{localStorage.removeItem(n)}}catch(e){{}}}});				 k.filter(function(n){{return localStorage.getItem(n)}}).join(',')"
-			);
-			match webview.eval(&script) {
-				Ok(left) if left.trim().is_empty() => println!("[ccc] site session cleared"),
-				Ok(left) => println!("[ccc] ERROR the site's storage still holds {left}"),
-				Err(_) => println!("[ccc] ERROR could not run the storage clearing script"),
-			}
-		}
-		None => println!("[ccc] ERROR could not open the web view to clear the site session"),
+	if let Some(webview) = open_site() {
+		// `eval` hands back whatever the script evaluates to, and that has to be a
+		// string. `localStorage.removeItem(...)` evaluates to `undefined`, which comes
+		// back as an error even though the removal worked. So the script ends by reading
+		// the keys back, which gives `eval` its string.
+		let names = SESSION_STORAGE_KEYS
+			.iter()
+			.map(|key| format!("'{key}'"))
+			.collect::<Vec<String>>()
+			.join(",");
+		// Keys are literals defined in this file, so the quoting is safe.
+		let script = format!(
+			"var k=[{names}];				 k.forEach(function(n){{try{{localStorage.removeItem(n)}}catch(e){{}}}});				 k.filter(function(n){{return localStorage.getItem(n)}}).join(',')"
+		);
+		let _ = webview.eval(&script);
 	}
 	clear();
 }
@@ -543,52 +519,41 @@ pub fn handle_login_notification() {
 ///
 /// The balances, once signed in, are also the only visible proof that signing in worked,
 /// so a failure names the next step rather than going blank.
-pub fn account_footer() -> Option<String> {
+pub fn account_footer() -> String {
 	if needs_relogin() {
-		return Some(String::from(
-			"登入已失效且無法自動恢復，請按「清除登入狀態」後重新登入。",
-		));
+		return String::from("登入已失效且無法自動恢復，請按「清除登入狀態」後重新登入。");
 	}
 	if !is_logged_in() {
 		// Signed out: nothing to fetch, and defaults are all this needs to read.
 		if let Some(reason) = stored(SYNC_RESULT_KEY) {
-			return Some(reason);
+			return reason;
 		}
 		if stored(SEEN_KEYS_KEY).is_some() {
-			let calls = defaults_get::<i32>(CALL_COUNT_KEY).unwrap_or(0);
-			let seen = stored(SEEN_KEYS_KEY).unwrap_or_default();
-			println!("[ccc] web login called back {calls} time(s) handing over: {seen}");
-			return Some(String::from(
-				"登入尚未完成。請按「登入」登入後，再按「同步登入狀態」。",
-			));
+			return String::from("登入尚未完成。請按「登入」登入後，再按「同步登入狀態」。");
 		}
-		return Some(String::from(
+		return String::from(
 			"尚未登入。登入後才能讀取已購買的章節：按「登入」完成登入，再按「同步登入狀態」。",
-		));
+		);
 	}
 
 	match fetch_member() {
-		MemberResult::Ok(member) => Some(describe(member)),
+		MemberResult::Ok(member) => describe(member),
 		// Being unable to reach CCC is not the same as being signed out, and saying so
 		// would invite the reader to log out of a session that is perfectly good.
-		MemberResult::Unknown => Some(String::from(
-			"目前無法連線到 CCC，暫時讀不到帳號資訊（登入狀態未變）。",
-		)),
+		MemberResult::Unknown => {
+			String::from("目前無法連線到 CCC，暫時讀不到帳號資訊（登入狀態未變）。")
+		}
 		MemberResult::Dead => {
 			// The reader is looking at this right now, so renew immediately instead of
 			// waiting for the gate that `ensure_session` would otherwise respect.
 			defaults_set(NEXT_CHECK_KEY, DefaultValue::Null);
 			ensure_session();
 			if needs_relogin() {
-				return Some(String::from(
-					"登入已失效且無法自動恢復，請按「清除登入狀態」後重新登入。",
-				));
+				return String::from("登入已失效且無法自動恢復，請按「清除登入狀態」後重新登入。");
 			}
 			match fetch_member() {
-				MemberResult::Ok(member) => Some(describe(member)),
-				_ => Some(String::from(
-					"登入已失效，稍後會自動重試，請稍後再回來看看。",
-				)),
+				MemberResult::Ok(member) => describe(member),
+				_ => String::from("登入已失效，稍後會自動重試，請稍後再回來看看。"),
 			}
 		}
 	}

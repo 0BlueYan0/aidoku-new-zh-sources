@@ -4,7 +4,7 @@ use aidoku::{
 	imports::{
 		defaults::defaults_get,
 		html::{Document, Element},
-		net::Request,
+		net::{Request, Response},
 		std::parse_date,
 	},
 	prelude::*,
@@ -86,12 +86,28 @@ pub fn request(url: &str) -> Result<Request> {
 }
 
 pub fn fetch_html(url: &str) -> Result<Document> {
-	Ok(request(url)?.html()?)
+	read_html(request(url)?.send()?, url)
+}
+
+/// An error or maintenance page must not be parsed as an empty list or a blank album.
+pub fn read_html(response: Response, url: &str) -> Result<Document> {
+	check_status(&response, url)?;
+	Ok(response.get_html()?)
 }
 
 /// `photos-gallery-aid-*.html` answers with JavaScript, so it is read as plain text.
 pub fn fetch_text(url: &str) -> Result<String> {
-	request(url)?.string()
+	let response = request(url)?.send()?;
+	check_status(&response, url)?;
+	response.get_string()
+}
+
+fn check_status(response: &Response, url: &str) -> Result<()> {
+	let status = response.status_code();
+	if !(200..300).contains(&status) {
+		bail!("[wnacg] HTTP {status} for {url}");
+	}
+	Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -410,12 +426,12 @@ pub fn parse_manga_item(item: &Element) -> Option<Manga> {
 	let (artists, authors) = parse_authors(&title);
 
 	Some(Manga {
-		key: key.clone(),
+		url: Some(detail_url(&key)),
+		key,
 		title,
 		cover,
 		artists: (!artists.is_empty()).then_some(artists),
 		authors: (!authors.is_empty()).then_some(authors),
-		url: Some(detail_url(&key)),
 		status: MangaStatus::Completed,
 		content_rating: ContentRating::NSFW,
 		viewer: viewer_for_cate(cate),
@@ -501,18 +517,22 @@ fn paginator_page_number(href: &str) -> Option<i32> {
 /// The detail page has no "created on" field — that only exists on list pages, which
 /// `get_manga_update` never sees — so the date comes from the first entry of the
 /// thumbnail strip, which is labelled `上傳於YYYY-MM-DD`.
-pub fn apply_detail(html: &Document, manga: &mut Manga) -> Option<i64> {
-	if let Some(title) = html
+///
+/// A page without the album title is not a detail page; it fails before touching
+/// `manga`, so the library keeps what it had.
+pub fn apply_detail(html: &Document, manga: &mut Manga) -> Result<Option<i64>> {
+	let Some(title) = html
 		.select_first("#bodywrap h2")
 		.and_then(|el: Element| el.text())
 		.map(|raw: String| String::from(strip_em(&raw).trim()))
 		.filter(|value: &String| !value.is_empty())
-	{
-		let (artists, authors) = parse_authors(&title);
-		manga.artists = (!artists.is_empty()).then_some(artists);
-		manga.authors = (!authors.is_empty()).then_some(authors);
-		manga.title = title;
-	}
+	else {
+		bail!("[wnacg] not an album page: {}", manga.key);
+	};
+	let (artists, authors) = parse_authors(&title);
+	manga.artists = (!artists.is_empty()).then_some(artists);
+	manga.authors = (!authors.is_empty()).then_some(authors);
+	manga.title = title;
 
 	if let Some(cover) = html
 		.select_first("div.uwthumb img")
@@ -553,12 +573,19 @@ pub fn apply_detail(html: &Document, manga: &mut Manga) -> Option<i64> {
 		.and_then(|el: Element| el.text())
 		.map(|text: String| String::from(text.trim().trim_start_matches("簡介：").trim()))
 		.filter(|text: &String| !text.is_empty());
-	manga.description = Some(match summary {
-		Some(text) => text,
-		None => metadata_description(&category, &page_count, &serial, uploader.as_deref()),
-	});
+	manga.description = summary
+		.or_else(|| {
+			Some(metadata_description(
+				&category,
+				&page_count,
+				&serial,
+				uploader.as_deref(),
+			))
+		})
+		.filter(|text: &String| !text.is_empty());
 
-	manga.tags = Some(collect_tags(html, &category));
+	let tags = collect_tags(html, &category);
+	manga.tags = (!tags.is_empty()).then_some(tags);
 	manga.status = MangaStatus::Completed;
 	manga.content_rating = ContentRating::NSFW;
 	manga.update_strategy = UpdateStrategy::Never;
@@ -572,9 +599,10 @@ pub fn apply_detail(html: &Document, manga: &mut Manga) -> Option<i64> {
 		manga.url = Some(detail_url(&manga.key));
 	}
 
-	html.select_first("div.gallary_wrap div.info_col")
+	Ok(html
+		.select_first("div.gallary_wrap div.info_col")
 		.and_then(|el: Element| el.text())
-		.and_then(|text: String| parse_info_col_date(&text))
+		.and_then(|text: String| parse_info_col_date(&text)))
 }
 
 fn metadata_description(
@@ -723,6 +751,40 @@ mod test {
 	/// bookmark promo the site appends as the final entry of every gallery.
 	const GALLERY_JS: &str = r#"document.writeln("		var fast_img_host=\"\";");
 document.writeln("		var imglist = [{ url: fast_img_host+\"//img5.qy0.ru/data/3856/18/001.jpg?verify=1789711200-aaa\", caption: \"[001]\"},{ url: fast_img_host+\"//img5.qy0.ru/data/3856/18/002.jpg?verify=1789711200-bbb\", caption: \"[002]\"},{ url: fast_img_host+\"/themes/weitu/images/bg/shoucang.jpg\", caption: \"收藏\"}];");"#;
+
+	fn album(key: &str) -> Manga {
+		Manga {
+			key: String::from(key),
+			title: String::from("old title"),
+			description: Some(String::from("old description")),
+			tags: Some(aidoku::alloc::vec![String::from("old tag")]),
+			..Default::default()
+		}
+	}
+
+	#[aidoku_test]
+	fn a_page_without_album_title_leaves_the_manga_alone() {
+		let html = aidoku::imports::html::Html::parse("<html><body><p>維護中</p></body></html>")
+			.expect("parse");
+		let mut manga = album("1");
+		assert!(apply_detail(&html, &mut manga).is_err());
+		assert_eq!(manga.title, "old title");
+		assert_eq!(manga.description.as_deref(), Some("old description"));
+		assert_eq!(manga.tags.as_ref().map(Vec::len), Some(1));
+	}
+
+	#[aidoku_test]
+	fn an_album_without_summary_or_tags_has_none() {
+		let html = aidoku::imports::html::Html::parse(
+			r#"<html><body><div id="bodywrap"><h2>New title</h2></div></body></html>"#,
+		)
+		.expect("parse");
+		let mut manga = album("1");
+		assert!(apply_detail(&html, &mut manga).is_ok());
+		assert_eq!(manga.title, "New title");
+		assert_eq!(manga.description, None);
+		assert_eq!(manga.tags, None);
+	}
 
 	/// Same shape, but with the site serving a host prefix and plain paths.
 	const GALLERY_JS_WITH_HOST: &str = r#"document.writeln("var fast_img_host=\"//cdn.example.com\";");

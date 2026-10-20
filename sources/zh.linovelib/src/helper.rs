@@ -3,7 +3,7 @@ use aidoku::{
 	imports::{
 		defaults::defaults_get,
 		html::{Document, Element, Html},
-		net::Request,
+		net::{Request, Response},
 	},
 	prelude::*,
 	Chapter, Manga, MangaPageResult, MangaStatus, Result, Viewer,
@@ -63,16 +63,20 @@ pub fn request(url: &str) -> Result<Request> {
 /// answer must not be read as a book with no chapters.
 pub fn fetch_text(url: &str) -> Result<String> {
 	let response = request(url)?.send()?;
+	check_status(&response, url)?;
+	response.get_string()
+}
+
+/// `Err` for anything but a page, so a rate-limit or error answer is never read as content.
+pub fn check_status(response: &Response, url: &str) -> Result<()> {
 	let status = response.status_code();
 	if status == 429 {
-		println!("[linovelib] rate limited: {url}");
-		bail!("[linovelib] rate limited");
+		bail!("[linovelib] rate limited for {url}");
 	}
 	if !(200..300).contains(&status) {
-		println!("[linovelib] HTTP {status}: {url}");
-		bail!("[linovelib] HTTP {status}");
+		bail!("[linovelib] HTTP {status} for {url}");
 	}
-	response.get_string()
+	Ok(())
 }
 
 pub fn fetch_html(url: &str) -> Result<Document> {
@@ -150,7 +154,8 @@ pub fn listing_url(base: &str, id: &str, page: i32) -> Option<String> {
 /// The catalogue's conditions, all combinable. `0` means any.
 pub struct Browse {
 	pub order: String,
-	/// Genre ids; the site takes up to four and lists the books that have all of them.
+	/// Genre ids; the site lists the books that have all of them. Its own page lets a reader
+	/// pick four, but every id the reader picked is sent (it answered five on 2026-10-20).
 	pub tags: Vec<String>,
 	pub isfull: String,
 	pub anime: String,
@@ -177,13 +182,7 @@ pub fn browse_url(base: &str, browse: &Browse, page: i32) -> String {
 	let tags = if browse.tags.is_empty() {
 		String::from("0")
 	} else {
-		browse
-			.tags
-			.iter()
-			.take(4)
-			.cloned()
-			.collect::<Vec<String>>()
-			.join("-")
+		browse.tags.join("-")
 	};
 	format!(
 		"{base}/wenku/{}_{tags}_{}_{}_{}_0_0_{}_{page}_0.html",
@@ -193,16 +192,9 @@ pub fn browse_url(base: &str, browse: &Browse, page: i32) -> String {
 
 /// The number in `/novel/<n>.html` (a book) or `/novel/<book>/<n>.html` (a chapter).
 fn number_before(text: &str, suffix: &str) -> Option<String> {
-	let end = text.find(suffix)?;
-	let digits: String = text[..end]
-		.chars()
-		.rev()
-		.take_while(|c: &char| c.is_ascii_digit())
-		.collect::<Vec<char>>()
-		.into_iter()
-		.rev()
-		.collect();
-	(!digits.is_empty()).then_some(digits)
+	let head = &text[..text.find(suffix)?];
+	let number = &head[head.trim_end_matches(|c: char| c.is_ascii_digit()).len()..];
+	(!number.is_empty()).then(|| String::from(number))
 }
 
 /// The book and chapter a link names: `/novel/2.html` → (2, None),
@@ -442,24 +434,30 @@ pub fn parse_catalog(html: &Document, key: &str, base: &str) -> Vec<Chapter> {
 						placeholder_key(volume_id, index),
 						volume_url(base, key, volume_id),
 					),
-					None => continue,
+					// A row with no link in a volume without its own page: the catalogue
+					// is not the shape this reads, so a shorter list must not replace the
+					// library's (an empty one is left alone by `get_manga_update`).
+					None => return Vec::new(),
 				},
 			};
-			let title = if label.is_empty() {
-				title
-			} else {
-				format!("【{label}】{title}")
-			};
+			// A link without text has no title rather than an empty one.
+			let title = Some(title)
+				.filter(|title: &String| !title.is_empty())
+				.map(|title| {
+					if label.is_empty() {
+						title
+					} else {
+						format!("【{label}】{title}")
+					}
+				});
 			chapters.push(Chapter {
 				key: chapter_key,
-				title: Some(title),
+				title,
 				url: Some(url),
+				chapter_number: Some((chapters.len() + 1) as f32),
 				..Default::default()
 			});
 		}
-	}
-	for (number, chapter) in chapters.iter_mut().enumerate() {
-		chapter.chapter_number = Some((number + 1) as f32);
 	}
 	chapters.reverse();
 	chapters
@@ -495,6 +493,18 @@ mod test {
 	use aidoku::imports::html::Html;
 	use aidoku_test::aidoku_test;
 
+	#[aidoku_test]
+	fn an_unreachable_row_rejects_the_catalog() {
+		let html = r#"<div id="chapterNav"><h1>書</h1></div>
+			<div class="catalog-volume"><ul>
+			<li class="chapter-bar"><h3>書 1</h3></li>
+			<li class="chapter-li jsChapter"><a href="/novel/2/403.html">一</a></li>
+			<li class="chapter-li jsChapter"><a href="javascript:cid(1)">二</a></li>
+			</ul></div>"#;
+		let doc = Html::parse_with_url(html, "https://tw.linovelib.com/novel/2/catalog").unwrap();
+		assert!(parse_catalog(&doc, "2", TW_URL).is_empty());
+	}
+
 	fn doc(html: &str) -> Document {
 		Html::parse_with_url(html, TW_URL).expect("parse")
 	}
@@ -520,7 +530,7 @@ mod test {
 		};
 		assert_eq!(
 			browse_url(TW_URL, &browse, 3),
-			"https://tw.linovelib.com/wenku/words_64-48-63-27_5_1_2_0_0_3_3_0.html"
+			"https://tw.linovelib.com/wenku/words_64-48-63-27-26_5_1_2_0_0_3_3_0.html"
 		);
 		assert_eq!(
 			chapter_url(TW_URL, "2", "403"),

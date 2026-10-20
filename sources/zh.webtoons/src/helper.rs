@@ -100,10 +100,12 @@ pub fn parse_manga_item(item: &Element) -> Option<Manga> {
 	}
 
 	// Genre tag (shown on originals pages where author spot has genre)
-	if let Some(genre_el) = item.select_first(".genre") {
-		if let Some(genre_text) = genre_el.text() {
-			manga.tags = Some(aidoku::alloc::vec![genre_text]);
-		}
+	if let Some(genre_text) = item
+		.select_first(".genre")
+		.and_then(|el: Element| el.text())
+		.filter(|text: &String| !text.trim().is_empty())
+	{
+		manga.tags = Some(aidoku::alloc::vec![genre_text]);
 	}
 
 	Some(manga)
@@ -139,10 +141,11 @@ pub fn parse_episodes_json(body: &str) -> aidoku::Result<Vec<Chapter>> {
 	if !envelope.success {
 		return Err(aidoku::error!("網頁章節清單請求失敗"));
 	}
-	let mut chapters: Vec<Chapter> = envelope
+	let chapters: Vec<Chapter> = envelope
 		.result
 		.episode_list
 		.into_iter()
+		.rev()
 		.map(|episode| {
 			let url = episode
 				.viewer_link
@@ -162,7 +165,6 @@ pub fn parse_episodes_json(body: &str) -> aidoku::Result<Vec<Chapter>> {
 			}
 		})
 		.collect();
-	chapters.reverse();
 	Ok(chapters)
 }
 
@@ -196,6 +198,16 @@ mod tests {
 	fn mobile_titles_preserve_quotes_and_braces() {
 		let chapters = parse_episodes_json(r#"{"result":{"episodeList":[{"episodeNo":1,"episodeTitle":"試閱 \"{咒術}\"","viewerLink":"/zh-hant/action/jjk/trial/viewer?title_no=10568&episode_no=1"}]},"success":true}"#).unwrap();
 		assert_eq!(chapters[0].title.as_deref(), Some("試閱 \"{咒術}\""));
+	}
+
+	#[aidoku_test]
+	fn mobile_episodes_come_newest_first() {
+		let chapters = parse_episodes_json(
+			r#"{"result":{"episodeList":[{"episodeNo":1},{"episodeNo":2},{"episodeNo":3}]},"success":true}"#,
+		)
+		.unwrap();
+		let numbers: Vec<Option<f32>> = chapters.iter().map(|c| c.chapter_number).collect();
+		assert_eq!(numbers, [Some(3.0), Some(2.0), Some(1.0)]);
 	}
 
 	#[aidoku_test]

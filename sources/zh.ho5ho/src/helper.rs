@@ -3,7 +3,7 @@ use aidoku::{
 	helpers::uri::{decode_uri, encode_uri_component},
 	imports::{
 		html::{Document, Element},
-		net::Request,
+		net::{Request, Response},
 		std::parse_date,
 	},
 	prelude::*,
@@ -65,7 +65,16 @@ pub fn request(url: &str) -> Result<Request> {
 }
 
 pub fn fetch_html(url: &str) -> Result<Document> {
-	Ok(request(url)?.html()?)
+	read_html(request(url)?.send()?, url)
+}
+
+/// An error page must not be parsed as an empty list or a work without chapters.
+pub fn read_html(response: Response, url: &str) -> Result<Document> {
+	let status = response.status_code();
+	if !(200..300).contains(&status) {
+		bail!("[ho5ho] HTTP {status} for {url}");
+	}
+	Ok(response.get_html()?)
 }
 
 /// A term's slug: the name percent-encoded with lowercase hex and letters (`M女` →

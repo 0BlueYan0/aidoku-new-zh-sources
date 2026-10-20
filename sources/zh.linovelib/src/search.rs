@@ -18,7 +18,9 @@ use aidoku::{
 	MangaPageResult, Result,
 };
 
-use crate::helper::{base_url, parse_details, parse_link, parse_manga_list, request, CN_URL};
+use crate::helper::{
+	base_url, check_status, parse_details, parse_link, parse_manga_list, request, CN_URL,
+};
 
 /// `name=value` of the cookie `name` in a `Set-Cookie` header or a script.
 fn cookie(text: &str, name: &str) -> Option<String> {
@@ -69,7 +71,9 @@ pub fn search(query: &str, page: i32) -> Result<MangaPageResult> {
 		encode_uri_component(query.trim())
 	);
 	let response = request(&url)?.header("Cookie", cookies.as_str()).send()?;
-	let final_url = response.get_url().unwrap_or_default();
+	check_status(&response, &url)?;
+	// Without a final address the request's own stands in, so links still resolve.
+	let final_url = response.get_url().unwrap_or(url);
 	let body = response.get_string()?;
 	if body.trim().is_empty() {
 		bail!("[linovelib] search: ticket refused");

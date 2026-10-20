@@ -25,9 +25,15 @@ pub const SEARCH_PAGE_SIZE: i32 = 30;
 // ---------------------------------------------------------------------------
 
 /// Fetch an API endpoint and return the `data` value of its `{code, message, data}`
-/// envelope. A non-200 `code` becomes an error carrying the server's message.
+/// envelope. A non-2xx status or a non-200 `code` becomes an error carrying the
+/// server's message.
 pub fn fetch_data(url: &str) -> Result<String> {
-	let body = Request::get(url)?.string()?;
+	let response = Request::get(url)?.send()?;
+	let status = response.status_code();
+	if !(200..300).contains(&status) {
+		bail!("[hipmh] {url}: HTTP {status}");
+	}
+	let body = response.get_string()?;
 	let code = json_i64(&body, "code");
 	if code != Some(200) {
 		bail!(
@@ -502,6 +508,22 @@ pub fn parse_chapter(obj: &str) -> Option<Chapter> {
 	})
 }
 
+/// One page of `/v1/manga/chapters`, or `None` when it has no `items` or an entry cannot
+/// be read: either would silently drop chapters from the list.
+pub fn parse_chapter_page(data: &str) -> Option<Vec<Chapter>> {
+	json_field(data, "items")
+		.map(json_items)?
+		.into_iter()
+		.map(parse_chapter)
+		.collect()
+}
+
+/// The walked list, if the library should take it. A partial list would read as chapters
+/// having been removed, and an unknown mid answers an empty list (checked 2026-10-20).
+pub fn chapters_to_store(complete: bool, chapters: Vec<Chapter>) -> Option<Vec<Chapter>> {
+	(complete && !chapters.is_empty()).then_some(chapters)
+}
+
 #[cfg(test)]
 mod test {
 	use super::*;
@@ -627,5 +649,24 @@ mod test {
 			Some("https://m.hipmh.com/chapter/go?hid=bTo4MDgzLWM6OTIwMw-ODA4MzoxLjAw")
 		);
 		assert_eq!(chapter.date_uploaded, Some(1770488685));
+	}
+
+	#[aidoku_test]
+	fn a_bad_chapter_page_rejects_the_list() {
+		let good = r#"{"hid":"bTo4MDgzLWM6OTIwMw-ODA4MzoxLjAw","title":"第1话"}"#;
+		let page = format!(r#"{{"items":[{good}],"total_pages":1}}"#);
+		assert_eq!(parse_chapter_page(&page).map(|c| c.len()), Some(1));
+		// No `items` field.
+		assert!(parse_chapter_page(r#"{"total_pages":1}"#).is_none());
+		// One entry without a hid.
+		let page = format!(r#"{{"items":[{good},{{"title":"第2话"}}],"total_pages":1}}"#);
+		assert!(parse_chapter_page(&page).is_none());
+
+		let chapters = parse_chapter_page(r#"{"items":[],"total_pages":0}"#).expect("empty page");
+		assert!(chapters_to_store(true, chapters).is_none());
+		let chapters = parse_chapter_page(&format!(r#"{{"items":[{good}]}}"#)).expect("page");
+		assert!(chapters_to_store(false, chapters).is_none());
+		let chapters = parse_chapter_page(&format!(r#"{{"items":[{good}]}}"#)).expect("page");
+		assert_eq!(chapters_to_store(true, chapters).map(|c| c.len()), Some(1));
 	}
 }

@@ -19,6 +19,11 @@ use crate::reorder;
 /// for a bot. The served paragraphs are then a fraction of the page.
 const WITHHELD: [&str; 2] = ["內容加載失敗", "内容加载失败"];
 
+/// What a chapter the site keeps from readers shows instead of its text: the catalogue
+/// marks it with `❤️`, and the page says it failed review or needs more permission
+/// (`不相容的異種族妻子們` 第241話, 2026-10-20).
+const LOCKED: [&str; 2] = ["沒有可閱讀的章節", "没有可阅读的章节"];
+
 /// One child of `#acontent` worth keeping.
 enum Block {
 	/// Inner HTML of a non-empty `<p>`. Only these take part in the shuffle.
@@ -29,6 +34,11 @@ enum Block {
 /// Whether the page lost paragraphs to the site's bot check.
 pub fn is_withheld(html: &str) -> bool {
 	WITHHELD.iter().any(|marker: &&str| html.contains(marker))
+}
+
+/// Whether the page is the site's notice for a chapter nobody can read.
+pub fn is_locked(html: &str) -> bool {
+	LOCKED.iter().any(|marker: &&str| html.contains(marker))
 }
 
 /// The address of an `<img>`: lazy-loaded ones keep it in `data-src` behind a spinner.
@@ -78,19 +88,25 @@ fn blocks(html: &Document, chapter_id: u64) -> Vec<Block> {
 		}
 	}
 
-	let paragraphs: Vec<String> = served
-		.iter()
-		.filter_map(|block: &Block| match block {
-			Block::Paragraph(p) => Some(p.clone()),
-			Block::Image(_) => None,
-		})
-		.collect();
+	// The paragraphs are restored on their own; the images keep their places, marked by
+	// `Some` in `layout`.
+	let mut paragraphs: Vec<String> = Vec::new();
+	let mut layout: Vec<Option<String>> = Vec::new();
+	for block in served {
+		match block {
+			Block::Paragraph(p) => {
+				paragraphs.push(p);
+				layout.push(None);
+			}
+			Block::Image(src) => layout.push(Some(src)),
+		}
+	}
 	let mut restored = reorder::restore(paragraphs, chapter_id).into_iter();
-	served
+	layout
 		.into_iter()
-		.map(|block: Block| match block {
-			Block::Paragraph(_) => Block::Paragraph(restored.next().unwrap_or_default()),
-			image => image,
+		.map(|slot: Option<String>| match slot {
+			Some(src) => Block::Image(src),
+			None => Block::Paragraph(restored.next().unwrap_or_default()),
 		})
 		.collect()
 }
@@ -404,6 +420,13 @@ mod test {
 		assert!(is_withheld(include_str!("fixtures/chapter_truncated.html")));
 		assert!(!is_withheld(include_str!("fixtures/chapter_403.html")));
 		assert!(!is_withheld(include_str!("fixtures/chapter_bili_403.html")));
+	}
+
+	#[aidoku_test]
+	fn notices_locked_chapters() {
+		assert!(is_locked(include_str!("fixtures/chapter_locked.html")));
+		assert!(!is_locked(include_str!("fixtures/chapter_403.html")));
+		assert!(!is_locked(include_str!("fixtures/chapter_bili_403.html")));
 	}
 
 	#[aidoku_test]

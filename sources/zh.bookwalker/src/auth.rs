@@ -91,11 +91,9 @@ pub fn book_count() -> Option<i32> {
 /// takes as "close the login page".
 pub fn capture_from_web_login() -> bool {
 	let Some(header) = read_cookie_from_store() else {
-		println!("[bookwalker] login: store has no login cookie yet");
 		return false;
 	};
 	if defaults_get::<String>(LAST_FAILED_KEY).as_deref() == Some(header.as_str()) {
-		println!("[bookwalker] login: same cookies as the last failed check, skipped");
 		return false;
 	}
 	match verify(&header) {
@@ -107,12 +105,10 @@ pub fn capture_from_web_login() -> bool {
 				DefaultValue::String(current_date().to_string()),
 			);
 			defaults_set(LAST_FAILED_KEY, DefaultValue::Null);
-			println!("[bookwalker] login ok, {count} series/books");
 			true
 		}
 		None => {
 			defaults_set(LAST_FAILED_KEY, DefaultValue::String(header));
-			println!("[bookwalker] login: cookies did not read the bookcase back");
 			false
 		}
 	}
@@ -125,15 +121,11 @@ pub fn handle_login_notification() {
 		.unwrap_or(0);
 	if current_date() - logged_in_at < LOGIN_WINDOW {
 		defaults_set(LOGGED_IN_AT_KEY, DefaultValue::Null);
-		println!("[bookwalker] login notification taken as sign-in, state kept");
 		return;
 	}
 	// The app clears the per-source web store in a detached task; clearing it here as
 	// well makes sure an immediate re-login cannot pick the old cookies back up.
-	match WebView::new().delete_all_cookies() {
-		Ok(()) => println!("[bookwalker] logout: web store cookies deleted"),
-		Err(_) => println!("[bookwalker] logout: could not delete web store cookies"),
-	}
+	let _ = WebView::new().delete_all_cookies();
 	clear_all();
 }
 
@@ -184,7 +176,6 @@ fn refresh_archived_if_stale() {
 		.ok()
 		.and_then(|request| request.html().ok())
 	else {
-		println!("[bookwalker] archive shelf fetch failed, keeping the cached set");
 		return;
 	};
 	if !is_bookcase(&html) {
@@ -195,10 +186,6 @@ fn refresh_archived_if_stale() {
 		.into_iter()
 		.flat_map(|card| card.product_ids)
 		.collect();
-	println!(
-		"[bookwalker] archive shelf has {} archived volumes",
-		ids.len()
-	);
 	defaults_set(ARCHIVED_IDS_KEY, DefaultValue::String(ids.join(",")));
 }
 
@@ -213,17 +200,11 @@ fn verify(header: &str) -> Option<i32> {
 
 /// Reads the login cookies straight out of the per-source web store, without loading
 /// a page. A load would rotate the site's session cookies, the login page observes that
-/// store, and it would call `handle_web_login` again for every rotation. The cookie
-/// names (never the values) are logged: whether this store shows the login page's
-/// cookies while that page is still open is only known from the device.
+/// store, and it would call `handle_web_login` again for every rotation. Whether this
+/// store shows the login page's cookies while that page is still open is only known
+/// from the device.
 fn read_cookie_from_store() -> Option<String> {
 	let cookies = WebView::new().get_cookies().ok()?;
-	let names: Vec<&str> = cookies.iter().map(|cookie| cookie.name.as_str()).collect();
-	println!(
-		"[bookwalker] login: store has {} cookies: {}",
-		cookies.len(),
-		names.join(",")
-	);
 	cookie_header_from(&cookies)
 }
 

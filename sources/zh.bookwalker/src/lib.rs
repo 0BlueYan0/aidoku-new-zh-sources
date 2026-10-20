@@ -36,7 +36,14 @@ fn fetch_bookcase(url: &str) -> Result<Option<Vec<BookCard>>> {
 	let Some(cookie) = auth::cookie_header() else {
 		return Ok(None);
 	};
-	let html = auth::bookcase_request(url, &cookie)?.html()?;
+	let response = auth::bookcase_request(url, &cookie)?.send()?;
+	// An error page is neither the bookcase nor a sign-out: read as the latter it would
+	// tell a reader with a working login that they are signed out.
+	let status = response.status_code();
+	if !(200..300).contains(&status) {
+		bail!("bookcase answered HTTP {status}");
+	}
+	let html = response.get_html()?;
 	if !is_bookcase(&html) {
 		return Ok(None);
 	}
@@ -46,18 +53,21 @@ fn fetch_bookcase(url: &str) -> Result<Option<Vec<BookCard>>> {
 /// The series view (`sd=1`) of purchased books, archived ones included.
 fn bookcase_page(category: &str, query: Option<&str>) -> Result<MangaPageResult> {
 	let url = format!("{BASE_URL}/bookcase/available_book_list/buy?sd=1&d=0&sort=0&c={category}");
-	let cards = fetch_bookcase(&url)?.unwrap_or_default();
+	// Signed out reads the same as in `get_manga_update`, rather than as an empty bookcase.
+	let Some(cards) = fetch_bookcase(&url)? else {
+		bail!("not logged in");
+	};
 	// The site's bookcase has no keyword parameter that works, so titles are matched here.
 	let needle = query
 		.map(|q| q.trim().to_lowercase())
 		.filter(|q| !q.is_empty());
 	let entries = cards
-		.iter()
+		.into_iter()
 		.filter(|card| match &needle {
 			Some(needle) => card.name.to_lowercase().contains(needle.as_str()),
 			None => true,
 		})
-		.filter_map(|card| card.to_manga())
+		.filter_map(BookCard::into_manga)
 		.collect();
 	Ok(MangaPageResult {
 		entries,
@@ -131,7 +141,7 @@ impl Source for BookwalkerSource {
 					authors: newest.authors.clone(),
 					category: newest.category.clone(),
 				};
-				if let Some(details) = card.to_manga() {
+				if let Some(details) = card.into_manga() {
 					manga.copy_from(details);
 				}
 			}

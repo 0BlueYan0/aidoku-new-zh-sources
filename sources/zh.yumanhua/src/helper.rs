@@ -91,19 +91,16 @@ pub fn content_rating<S: AsRef<str>>(tags: &[S]) -> ContentRating {
 /// request unanswered for 30 seconds or more (3 of 7 in one test, 2026-10-13); the user
 /// chose one retry. Only a failed send is retried: an HTTP answer, even an error, is final.
 /// The retry runs after the first request has ended, so it holds no other request's slot.
-fn send_once_more(build: impl Fn() -> Result<Request>, what: &str) -> Result<Response> {
+fn send_once_more(build: impl Fn() -> Result<Request>) -> Result<Response> {
 	match build()?.send() {
 		Ok(response) => Ok(response),
-		Err(error) => {
-			println!("[yumanhua] no answer for {what} ({error:?}), asking again");
-			Ok(build()?.send()?)
-		}
+		Err(_) => Ok(build()?.send()?),
 	}
 }
 
 /// A page. A non-2xx answer is an error, so an error page is never read as an empty list.
 pub fn fetch_html(url: &str) -> Result<Document> {
-	let response = send_once_more(|| Ok(Request::get(url)?), url)?;
+	let response = send_once_more(|| Ok(Request::get(url)?))?;
 	let status = response.status_code();
 	if !(200..300).contains(&status) {
 		bail!("[yumanhua] HTTP {status} for {url}");
@@ -131,7 +128,7 @@ pub fn post_list_with(path: &str, form: &str, retry: bool) -> Result<Option<Stri
 			.body(form.as_bytes()))
 	};
 	let response = if retry {
-		send_once_more(build, &url)?
+		send_once_more(build)?
 	} else {
 		build()?.send()?
 	};
@@ -631,31 +628,38 @@ pub fn has_more_chapters(html: &Document) -> bool {
 	html.select_first(".chaplist-more").is_some()
 }
 
-/// The chapters on the details page, newest first, as the app wants.
-pub fn parse_page_chapters(html: &Document, manga_key: &str) -> Vec<Chapter> {
+/// The chapters on the details page, newest first, as the app wants, or `None` when a
+/// chapter link cannot be read: a list with one missing must not replace the library's.
+pub fn parse_page_chapters(html: &Document, manga_key: &str) -> Option<Vec<Chapter>> {
 	let mut chapters: Vec<Chapter> = Vec::new();
 	for link in html
 		.select(".chaplist-box li a[href]")
 		.into_iter()
 		.flatten()
 	{
-		let Some((manga, key)) = link.attr("href").and_then(|h: String| chapter_keys(&h)) else {
-			continue;
-		};
+		let (manga, key) = link.attr("href").and_then(|h: String| chapter_keys(&h))?;
 		if manga != manga_key || chapters.iter().any(|c: &Chapter| c.key == key) {
 			continue;
 		}
 		chapters.push(chapter(manga_key, key, text_of(&link)));
 	}
-	chapters
+	Some(chapters)
 }
 
-/// The rest of the chapters from `/morechapter`, appended in the site's order. Titles and
-/// order are the site's: some works list two runs (`702 …` then `第710话 …`).
-pub fn append_more_chapters(chapters: &mut Vec<Chapter>, data: &str, manga_key: &str) {
+/// The rest of the chapters from `/morechapter`, appended in the site's order, and how
+/// many were added. Titles and order are the site's: some works list two runs (`702 …`
+/// then `第710话 …`). An item without a usable `chapterid` fails the whole answer: skipping
+/// it would store a list with a chapter missing. Repeats of chapters already listed are
+/// skipped.
+pub fn append_more_chapters(
+	chapters: &mut Vec<Chapter>,
+	data: &str,
+	manga_key: &str,
+) -> Result<usize> {
+	let before = chapters.len();
 	for item in json_items(data) {
 		let Some(key) = json_string(item, "chapterid").filter(|k: &String| is_id(k)) else {
-			continue;
+			bail!("[yumanhua] /morechapter item without chapterid for {manga_key}");
 		};
 		if chapters.iter().any(|c: &Chapter| c.key == key) {
 			continue;
@@ -663,6 +667,7 @@ pub fn append_more_chapters(chapters: &mut Vec<Chapter>, data: &str, manga_key: 
 		let title = json_string(item, "chaptername").unwrap_or_default();
 		chapters.push(chapter(manga_key, key, title));
 	}
+	Ok(chapters.len() - before)
 }
 
 /// The reader page's inline scripts and the `data-id` that picks the image key.
@@ -866,7 +871,7 @@ mod test {
 		assert!(manga.cover.is_some());
 
 		assert!(has_more_chapters(&html));
-		let mut chapters = parse_page_chapters(&html, "trsKtGi");
+		let mut chapters = parse_page_chapters(&html, "trsKtGi").expect("chapters");
 		assert_eq!(chapters.len(), 20);
 		assert_eq!(chapters[0].key, "IVpdIdWF");
 		assert_eq!(
@@ -874,13 +879,42 @@ mod test {
 			Some("702 701-2 漩涡中的旋风②")
 		);
 		let more = include_str!("fixtures/morechapter.json");
-		append_more_chapters(&mut chapters, json_field(more, "data").unwrap(), "trsKtGi");
+		let added =
+			append_more_chapters(&mut chapters, json_field(more, "data").unwrap(), "trsKtGi");
+		assert_eq!(added.ok(), Some(526));
 		assert_eq!(chapters.len(), 546);
 		assert_eq!(chapters[20].key, "vhTTvGi");
 		assert_eq!(chapters[20].title.as_deref(), Some("第695话 鸣人与佐助②"));
 		assert_eq!(
 			chapters[20].url.as_deref(),
 			Some("http://yumanhua.com/trsKtGi/vhTTvGi.html")
+		);
+	}
+
+	#[aidoku_test]
+	fn a_bad_chapter_link_rejects_the_list() {
+		let html = r#"<div class="chaplist-box"><ul><li><a href="/trsKtGi/IVpdIdWF.html">2</a></li><li><a href="/trsKtGi/">1</a></li></ul></div>"#;
+		assert!(parse_page_chapters(&doc(html), "trsKtGi").is_none());
+		// Another work's chapter is left out, not an error.
+		let html = r#"<div class="chaplist-box"><ul><li><a href="/trsKtGi/IVpdIdWF.html">2</a></li><li><a href="/otherId/DjvbDbhH.html">1</a></li></ul></div>"#;
+		assert_eq!(
+			parse_page_chapters(&doc(html), "trsKtGi").map(|c| c.len()),
+			Some(1)
+		);
+	}
+
+	#[aidoku_test]
+	fn a_malformed_morechapter_item_fails_the_answer() {
+		let data = r#"[{"chapterid":"vhTTvGi","chaptername":"a"},{"chaptername":"b"}]"#;
+		assert!(append_more_chapters(&mut Vec::new(), data, "trsKtGi").is_err());
+		let data =
+			r#"[{"chapterid":"vhTTvGi","chaptername":"a"},{"chapterid":"","chaptername":"b"}]"#;
+		assert!(append_more_chapters(&mut Vec::new(), data, "trsKtGi").is_err());
+		// A repeat of a listed chapter is not an error.
+		let data = r#"[{"chapterid":"vhTTvGi","chaptername":"a"},{"chapterid":"vhTTvGi","chaptername":"a"}]"#;
+		assert_eq!(
+			append_more_chapters(&mut Vec::new(), data, "trsKtGi").ok(),
+			Some(1)
 		);
 	}
 

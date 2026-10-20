@@ -121,20 +121,17 @@ pub fn map_for(font_path: &str) -> Result<FontMap> {
 pub fn build_map(ttf: &[u8]) -> Result<FontMap> {
 	let font = Font::parse(ttf).ok_or_else(|| error!("[lightnovel] unreadable font"))?;
 	let mut pairs = Vec::with_capacity(POOL.len());
-	let mut unknown = 0;
+	// A glyph missing from the table means the site changed its base font or its pool.
+	// Nothing reports it: the unmapped characters stay in the text as they came. To check,
+	// count the misses in a diagnostic build and rerun tools/build_glyph_table.py.
 	for &fake in POOL.iter() {
 		let real = font
 			.glyph_id(fake)
 			.and_then(|gid: u16| font.outline(gid, 0))
 			.and_then(|outline: Outline| lookup(&outline));
-		match real {
-			Some(real) => pairs.push((fake, real)),
-			None => unknown += 1,
+		if let Some(real) = real {
+			pairs.push((fake, real));
 		}
-	}
-	if unknown > 0 {
-		// The site changed its base font or its pool: rerun tools/build_glyph_table.py.
-		println!("[lightnovel] {unknown} obfuscated glyphs not in the table");
 	}
 	if pairs.is_empty() {
 		bail!("[lightnovel] font matches no known glyph");

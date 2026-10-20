@@ -54,7 +54,7 @@ impl Source for BakamhSource {
 					"match" => search.match_all = value == "all",
 					// A tapped tag. Categories can be searched with everything else; a tag
 					// has only its own page.
-					"genre" if !value.is_empty() => match category_slug(&value) {
+					"genre" => match category_slug(&value) {
 						Some(slug) => {
 							if !search.categories.contains(&slug) {
 								search.categories.push(slug);
@@ -104,14 +104,10 @@ impl Source for BakamhSource {
 		// One blocked work must not abort a whole library refresh; the app keeps what it has.
 		let html = match fetch_html(&manga_url(&manga.key)) {
 			Ok(html) => html,
-			Err(_) => {
-				println!("[bakamh] ERROR could not load the page of {}", manga.key);
-				return Ok(manga);
-			}
+			Err(_) => return Ok(manga),
 		};
 		// A block page must not empty the library entry.
 		if !is_details_page(&html) {
-			println!("[bakamh] ERROR not a details page for {}", manga.key);
 			return Ok(manga);
 		}
 
@@ -132,9 +128,7 @@ impl Source for BakamhSource {
 
 		if needs_chapters {
 			let chapters = parse_chapters(&html, &manga.key);
-			if chapters.is_empty() {
-				println!("[bakamh] ERROR no chapters on the page of {}", manga.key);
-			} else {
+			if !chapters.is_empty() {
 				manga.chapters = Some(chapters);
 			}
 		}
@@ -204,7 +198,7 @@ impl Home for BakamhSource {
 			match fetch_page(&url, None) {
 				Ok(Some(html)) => send_home_row(title, id, parse_manga_list(&html).entries),
 				Ok(None) => blocked.push((title, id, url)),
-				Err(_) => println!("[bakamh] ERROR loading the {id} row"),
+				Err(_) => {}
 			}
 		}
 
@@ -216,12 +210,8 @@ impl Home for BakamhSource {
 		if !blocked.is_empty() {
 			sleep(CHALLENGE_PAUSE);
 			for (title, id, url) in blocked {
-				match fetch_page(&url, None) {
-					Ok(Some(html)) => send_home_row(title, id, parse_manga_list(&html).entries),
-					Ok(None) => {
-						println!("[bakamh] ERROR the {id} row is still blocked after a retry")
-					}
-					Err(_) => println!("[bakamh] ERROR loading the {id} row"),
+				if let Ok(Some(html)) = fetch_page(&url, None) {
+					send_home_row(title, id, parse_manga_list(&html).entries);
 				}
 			}
 		}
@@ -245,12 +235,9 @@ fn send_home_rows_together() {
 		let Some(url) = listing_url(id, 1) else {
 			continue;
 		};
-		match site_get(&url) {
-			Ok(request) => {
-				rows.push((title, id, url));
-				requests.push(request);
-			}
-			Err(_) => println!("[bakamh] ERROR loading the {id} row"),
+		if let Ok(request) = site_get(&url) {
+			rows.push((title, id, url));
+			requests.push(request);
 		}
 	}
 
@@ -272,10 +259,7 @@ fn send_home_rows_together() {
 		let entries = match page {
 			Ok(Some(html)) => parse_manga_list(&html).entries,
 			// A challenge page, which `fetch_html` turns into an error.
-			Ok(None) | Err(_) => {
-				println!("[bakamh] ERROR loading the {id} row");
-				continue;
-			}
+			Ok(None) | Err(_) => continue,
 		};
 		send_home_row(title, id, entries);
 	}

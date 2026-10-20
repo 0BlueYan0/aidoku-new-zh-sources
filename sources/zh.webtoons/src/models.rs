@@ -228,19 +228,6 @@ pub fn trusted_image_url(url: &str) -> bool {
 	})
 }
 
-fn image_host(url: &str) -> &str {
-	url.split_once("://")
-		.map(|(_, rest)| {
-			rest.split(['/', '?', '#'])
-				.next()
-				.unwrap_or_default()
-				.rsplit('@')
-				.next()
-				.unwrap_or_default()
-		})
-		.unwrap_or("relative")
-}
-
 impl EpisodeInfo {
 	pub fn requires_secure_token(&self, manga: bool) -> bool {
 		self.product || manga
@@ -264,8 +251,7 @@ impl EpisodeInfo {
 		self.image_info.sort_by_key(|image| image.sort_order);
 		self.image_info
 			.into_iter()
-			.enumerate()
-			.map(|(index, image)| {
+			.map(|image| {
 				// Android preserves absolute URLs, using productDomain only for relative
 				// paths. Paid WEBTOON images may already point at the regular image CDN.
 				let url = if let Some(rest) = image.url.strip_prefix("http://") {
@@ -276,15 +262,7 @@ impl EpisodeInfo {
 					absolute_url(host, &image.url)
 				};
 				if !trusted_image_url(&url) {
-					println!("[webtoons] rejected image host: {}", image_host(&url));
 					return Err(error!("WEBTOON 圖片主機與預期不符"));
-				}
-				if index == 0 {
-					println!(
-						"[webtoons] image source: host={}, secure_cookie={}",
-						image_host(&url),
-						cookie.is_some()
-					);
 				}
 				let mut context = PageContext::new();
 				if let Some(cookie) = cookie {

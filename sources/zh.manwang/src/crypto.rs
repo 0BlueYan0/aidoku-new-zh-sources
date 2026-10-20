@@ -23,7 +23,7 @@ const KEY: &[u8; 16] = b"9S8$vJnU2ANeSRoF";
 
 /// The reader's decrypted image list: the site's `source_id` and the image addresses.
 pub struct ImageList {
-	pub source_id: String,
+	pub source_id: Option<String>,
 	pub images: Vec<String>,
 }
 
@@ -125,7 +125,7 @@ pub fn parse_image_list(json: &str) -> Option<ImageList> {
 	let (_, rest) = json.split_once("\"images\"")?;
 	let images = string_array(rest.trim_start().strip_prefix(':')?)?;
 	Some(ImageList {
-		source_id: scalar_field(json, "source_id").unwrap_or_default(),
+		source_id: scalar_field(json, "source_id"),
 		images,
 	})
 }
@@ -143,7 +143,7 @@ mod test {
 	#[aidoku_test]
 	fn decrypts_the_reader_page() {
 		let list = image_list(include_str!("fixtures/reader.html")).expect("image list");
-		assert_eq!(list.source_id, "15");
+		assert_eq!(list.source_id.as_deref(), Some("15"));
 		assert_eq!(list.images.len(), 15);
 		assert_eq!(
 			list.images[0],
@@ -161,12 +161,16 @@ mod test {
 			r#"{"host":"x","source_id":12,"images":["\/a\/b.jpg", "cA"],"lazy":false}"#,
 		)
 		.expect("list");
-		assert_eq!(list.source_id, "12");
+		assert_eq!(list.source_id.as_deref(), Some("12"));
 		assert_eq!(list.images, ["/a/b.jpg", "cA"]);
 		assert_eq!(
 			parse_image_list(r#"{"images":[]}"#).map(|l| l.images.len()),
 			Some(0)
 		);
+		assert!(parse_image_list(r#"{"images":["a"]}"#)
+			.expect("list")
+			.source_id
+			.is_none());
 		assert!(decrypt_params("not base64!").is_none());
 		assert!(params_of("<script>var x = 1;</script>").is_none());
 	}

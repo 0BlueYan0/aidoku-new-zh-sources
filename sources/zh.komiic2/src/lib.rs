@@ -81,8 +81,8 @@ impl Source for KomiicSource {
 
 		// Filter-based browsing
 		let mut category_id = String::new();
-		let mut order_by = String::from("DATE_UPDATED");
-		let mut status_filter = String::new();
+		let mut order_by = "DATE_UPDATED";
+		let mut status_filter = "";
 
 		for filter in filters {
 			if let FilterValue::Select { id, value } = filter {
@@ -90,17 +90,16 @@ impl Source for KomiicSource {
 					category_id = value;
 				} else if id == "sort" {
 					order_by = match value.as_str() {
-						"最新更新" => String::from("DATE_UPDATED"),
-						"本月觀看" => String::from("MONTH_VIEWS"),
-						"總觀看數" => String::from("VIEWS"),
-						"收藏人數" => String::from("FAVORITE_COUNT"),
-						_ => String::from("DATE_UPDATED"),
+						"本月觀看" => "MONTH_VIEWS",
+						"總觀看數" => "VIEWS",
+						"收藏人數" => "FAVORITE_COUNT",
+						_ => "DATE_UPDATED",
 					};
 				} else if id == "status" {
 					status_filter = match value.as_str() {
-						"連載中" => String::from("ONGOING"),
-						"已完結" => String::from("END"),
-						_ => String::new(),
+						"連載中" => "ONGOING",
+						"已完結" => "END",
+						_ => "",
 					};
 				}
 			}
@@ -109,14 +108,14 @@ impl Source for KomiicSource {
 		let limit = 20;
 		let offset = (page - 1) * limit;
 
-		if !category_id.is_empty() && category_id != "all" {
-			// Browse by category
+		if !category_id.is_empty() {
+			// `filters.json` supplies `ids`, so `category_id` is the site's category id.
 			let vars = format!(
-				r#"{{"categoryId":"{}","pagination":{{"limit":{},"offset":{},"orderBy":"{}","status":"{}","asc":true}}}}"#,
+				r#"{{"categoryId":["{}"],"pagination":{{"limit":{},"offset":{},"orderBy":"{}","status":"{}","asc":true}}}}"#,
 				category_id, limit, offset, order_by, status_filter
 			);
-			let body = gql(COMICS_BY_CATEGORY_QUERY, &vars)?;
-			let entries = parse_comic_list(&body, "comicByCategory");
+			let body = gql(COMICS_BY_CATEGORIES_QUERY, &vars)?;
+			let entries = parse_comic_list(&body, "comicByCategories");
 			let has_next_page = entries.len() == limit as usize;
 
 			Ok(MangaPageResult {
@@ -146,10 +145,8 @@ impl Source for KomiicSource {
 		needs_details: bool,
 		needs_chapters: bool,
 	) -> Result<Manga> {
-		let comic_id = manga.key.clone();
-
 		if needs_details {
-			let vars = format!(r#"{{"comicId":"{}"}}"#, comic_id);
+			let vars = format!(r#"{{"comicId":"{}"}}"#, manga.key);
 			let body = gql(COMIC_BY_ID_QUERY, &vars)?;
 
 			if let Some(comic_obj) = json_data_field(&body, "comicById") {
@@ -212,55 +209,45 @@ impl Source for KomiicSource {
 					}
 				};
 
-				manga.url = Some(format!("{BASE_URL}/comic/{comic_id}"));
+				manga.url = Some(format!("{BASE_URL}/comic/{}", manga.key));
 				manga.viewer = Viewer::Webtoon;
 			}
 		}
 
 		if needs_chapters {
-			let vars = format!(r#"{{"comicId":"{}"}}"#, comic_id);
+			let vars = format!(r#"{{"comicId":"{}"}}"#, manga.key);
 			let body = gql(CHAPTERS_QUERY, &vars)?;
 
-			let mut chapters: Vec<Chapter> = Vec::new();
-
-			if let Some(chapters_arr) = json_data_field(&body, "chaptersByComicId") {
-				let objects = json_top_level_objects(chapters_arr);
-				for obj in objects {
-					if let Some(chapter) = parse_chapter(obj) {
-						chapters.push(chapter);
-					}
-				}
+			if let Some(chapters) = parse_chapter_list(&body) {
+				manga.chapters = Some(chapters);
 			}
-
-			// Reverse to show newest first
-			chapters.reverse();
-			manga.chapters = Some(chapters);
 		}
 
 		Ok(manga)
 	}
 
 	fn get_page_list(&self, _manga: Manga, chapter: Chapter) -> Result<Vec<Page>> {
-		let chapter_id = chapter.key.clone();
-
 		// Step 1: Get image metadata (kids) for this chapter
-		let vars = format!(r#"{{"chapterId":"{}"}}"#, chapter_id);
+		let vars = format!(r#"{{"chapterId":"{}"}}"#, chapter.key);
 		let body = gql(IMAGES_QUERY, &vars)?;
 
+		let Some(images_arr) = json_data_field(&body, "imagesByChapterId") else {
+			bail!("Komiic: no images field for chapter {}", chapter.key);
+		};
 		let mut pages: Vec<Page> = Vec::new();
-
-		if let Some(images_arr) = json_data_field(&body, "imagesByChapterId") {
-			let objects = json_top_level_objects(images_arr);
-			for obj in objects {
-				if let Some(kid) = json_str_value(obj, "kid") {
-					// Encode kid into a custom scheme to be intercepted lazily in get_image_request
-					let url = format!("komiickid://{}", kid);
-					pages.push(Page {
-						content: PageContent::url(url),
-						..Default::default()
-					});
-				}
-			}
+		for obj in json_top_level_objects(images_arr) {
+			// A page without a kid would leave a gap in the chapter.
+			let Some(kid) = json_str_value(obj, "kid") else {
+				bail!("Komiic: image without kid in chapter {}", chapter.key);
+			};
+			// Encode kid into a custom scheme to be intercepted lazily in get_image_request
+			pages.push(Page {
+				content: PageContent::url(format!("komiickid://{kid}")),
+				..Default::default()
+			});
+		}
+		if pages.is_empty() {
+			bail!("Komiic: no images for chapter {}", chapter.key);
 		}
 
 		Ok(pages)
@@ -336,7 +323,6 @@ impl Home for KomiicSource {
 			// A request that cannot be built fails for every row alike; the old per-row path
 			// left the rows empty rather than failing the home.
 			let Ok(request) = graphql_build(query, vars, token.as_deref()) else {
-				println!("[komiic] could not build the home requests");
 				return Ok(HomeLayout::default());
 			};
 			requests.push(request);
@@ -350,19 +336,13 @@ impl Home for KomiicSource {
 		for (query, vars, data_key, listing_id, name) in rows {
 			let body = responses
 				.next()
-				.ok_or_else(|| String::from("no response"))
-				.and_then(|response| response.map_err(|error| format!("{error:?}")))
-				.and_then(|response| read_response(response).map_err(|error| format!("{error:?}")))
+				.and_then(|response| response.ok())
+				.and_then(|response| read_response(response).ok())
 				.and_then(|(status, body)| {
-					graphql_settle(query, vars, status, body, &mut recovered)
-						.map_err(|error| format!("{error:?}"))
+					graphql_settle(query, vars, status, body, &mut recovered).ok()
 				});
-			let body = match body {
-				Ok(body) => body,
-				Err(error) => {
-					println!("[komiic] home row {listing_id} failed: {error}");
-					continue;
-				}
+			let Some(body) = body else {
+				continue;
 			};
 
 			let entries = parse_comic_list(&body, data_key);
@@ -397,7 +377,6 @@ impl BasicLoginHandler for KomiicSource {
 				auth::set_credentials(&username, &password);
 				auth::mark_just_logged_in();
 				auth::mark_session_verified();
-				println!("[komiic] login successful");
 				Ok(true)
 			}
 			auth::LoginOutcome::Rejected => Ok(false),
@@ -503,7 +482,9 @@ impl ImageRequestProvider for KomiicSource {
 					let ticket_objects = json_top_level_objects(tickets_arr);
 					if let Some(ticket_obj) = ticket_objects.first() {
 						if let Some(real_url) = json_str_value(ticket_obj, "url") {
-							let ticket = json_str_value(ticket_obj, "ticket").unwrap_or("");
+							// Without its ticket the image server refuses the request.
+							let ticket = json_str_value(ticket_obj, "ticket")
+								.ok_or_else(|| error!("Komiic: no ticket for image {kid}"))?;
 
 							let request = Request::get(real_url)?
 								.header("Referer", "https://komiic.com")

@@ -62,9 +62,9 @@ impl Source for MsxhmSource {
 				FilterValue::Text { id, value } if id == "author" => author = Some(value),
 				// `filters.json` supplies `ids`, so `value` is already the query value.
 				FilterValue::Select { id, value } => match id.as_str() {
-					"tag" if value != "全部" => browse.tag = Some(value),
+					"tag" => browse.tag = Some(value),
 					// A tapped tag: the site's own name for it, any of which the catalogue takes.
-					"genre" if !value.is_empty() => browse.tag = Some(value),
+					"genre" => browse.tag = Some(value),
 					"area" => browse.area = value,
 					"end" => browse.end = value,
 					_ => {}
@@ -101,23 +101,18 @@ impl Source for MsxhmSource {
 		let html = fetch_html(&manga_url(&base, &manga.key))?;
 
 		if needs_details {
-			match parse_details(&html, &manga.key, &base) {
-				Some(details) => {
-					let chapters = manga.chapters.take();
-					manga = details;
-					manga.chapters = chapters;
-					send_partial_result(&manga);
-				}
-				None => println!("[msxhm] ERROR no details on the page of {}", manga.key),
+			if let Some(details) = parse_details(&html, &manga.key, &base) {
+				let chapters = manga.chapters.take();
+				manga = details;
+				manga.chapters = chapters;
+				send_partial_result(&manga);
 			}
 		}
 
 		if needs_chapters {
 			// One unreadable title must not abort a whole library refresh.
 			let chapters = parse_chapters(&html, &base);
-			if chapters.is_empty() {
-				println!("[msxhm] ERROR no chapters on the page of {}", manga.key);
-			} else {
+			if !chapters.is_empty() {
 				manga.chapters = Some(chapters);
 			}
 		}
@@ -147,7 +142,7 @@ impl ListingProvider for MsxhmSource {
 		};
 		let html = fetch_html(&url)?;
 		Ok(match rank_heading(&listing.id) {
-			Some(heading) => parse_rank(&html, heading, &base),
+			Some(heading) => parse_rank(&html, heading, &base)?,
 			None => parse_manga_list(&html, &base),
 		})
 	}
@@ -181,12 +176,13 @@ impl Home for MsxhmSource {
 		let mut fetched = Vec::new();
 		let mut requests: Vec<Request> = Vec::new();
 		for id in fetches {
-			let Some(Ok(request)) = listing_url(&base, id, 1).map(|url: String| request(&url))
-			else {
-				println!("[msxhm] ERROR building the {id} row");
+			let Some(url) = listing_url(&base, id, 1) else {
 				continue;
 			};
-			fetched.push(id);
+			let Ok(request) = request(&url) else {
+				continue;
+			};
+			fetched.push((id, url));
 			requests.push(request);
 		}
 		let mut responses = Vec::new();
@@ -201,8 +197,8 @@ impl Home for MsxhmSource {
 		let mut responses = responses.into_iter();
 		let mut rank = None;
 		let mut pages = Vec::new();
-		for id in fetched {
-			let html = responses.next().map(|response| response?.get_html());
+		for (id, url) in fetched {
+			let html = responses.next().map(|response| read_html(response?, &url));
 			if id == "rank_hot" {
 				rank = html.and_then(|html| html.ok());
 			} else {
@@ -213,7 +209,10 @@ impl Home for MsxhmSource {
 			// A row that fails stays empty; the others still load.
 			let entries = match rank_heading(id) {
 				Some(heading) => match &rank {
-					Some(html) => parse_rank(html, heading, &base).entries,
+					Some(html) => match parse_rank(html, heading, &base) {
+						Ok(board) => board.entries,
+						Err(_) => continue,
+					},
 					None => continue,
 				},
 				None => match pages
@@ -222,12 +221,7 @@ impl Home for MsxhmSource {
 					.map(|(_, html)| html.take())
 				{
 					Some(Some(Ok(html))) => parse_manga_list(&html, &base).entries,
-					// Its request could not be built, which is already logged above.
-					None => continue,
-					_ => {
-						println!("[msxhm] ERROR loading the {id} row");
-						continue;
-					}
+					_ => continue,
 				},
 			};
 			if entries.is_empty() {

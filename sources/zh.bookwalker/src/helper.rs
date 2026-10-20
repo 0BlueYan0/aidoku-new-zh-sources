@@ -39,7 +39,7 @@ impl BookCard {
 		self.product_ids.last()
 	}
 
-	pub fn to_manga(&self) -> Option<Manga> {
+	pub fn into_manga(self) -> Option<Manga> {
 		let key = self.key()?;
 		let url = match &self.series_id {
 			Some(id) => format!("{BASE_URL}/bookcase/available_book_list/buy?s={id}"),
@@ -49,10 +49,10 @@ impl BookCard {
 			key,
 			title: series_title(&self.name),
 			cover: self.cover_product().map(|pid| cover_url(pid)),
-			authors: (!self.authors.is_empty()).then(|| self.authors.clone()),
-			url: Some(url),
-			tags: self.category.clone().map(|c| vec![c]),
 			viewer: viewer_for(self.category.as_deref()),
+			authors: (!self.authors.is_empty()).then_some(self.authors),
+			url: Some(url),
+			tags: self.category.map(|c| vec![c]),
 			..Default::default()
 		})
 	}
@@ -264,14 +264,14 @@ mod tests {
 	fn parses_bookcase_cards() {
 		let html = aidoku::imports::html::Html::parse(BOOKCASE).unwrap();
 		assert!(is_bookcase(&html));
-		let cards = parse_bookcase(&html);
+		let mut cards = parse_bookcase(&html);
 		assert_eq!(cards.len(), 2);
 
 		let series = &cards[0];
 		assert_eq!(series.key(), Some("s29604".to_string()));
 		assert_eq!(series.product_ids, ["100", "200", "250", "300"]);
 		assert_eq!(series.authors, ["作者一", "作者二"]);
-		let manga = series.to_manga().unwrap();
+		let manga = cards.remove(0).into_manga().unwrap();
 		assert_eq!(manga.title, "系列甲");
 		assert_eq!(
 			manga.cover.as_deref(),
@@ -279,7 +279,7 @@ mod tests {
 		);
 		assert_eq!(manga.viewer, Viewer::RightToLeft);
 
-		let single = &cards[1];
+		let single = &cards[0];
 		assert_eq!(single.key(), Some("p266673".to_string()));
 		assert_eq!(single.category.as_deref(), Some("輕小說"));
 		let chapter = single.to_chapter().unwrap();

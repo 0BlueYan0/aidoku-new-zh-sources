@@ -30,10 +30,8 @@ pub const IMAGES_QUERY: &str = r#"query imagesByChapterId($chapterId: ID!) { ima
 
 pub const IMAGE_TICKETS_QUERY: &str = r#"query getImageTickets($kids: [String!]!) { getImageTickets(kids: $kids) { url ticket kid __typename } }"#;
 
-pub const COMICS_BY_CATEGORY_QUERY: &str = r#"query comicByCategory($categoryId: ID!, $pagination: Pagination!) { comicByCategory(categoryId: $categoryId, pagination: $pagination) { id title status year imageUrl authors { id name __typename } categories { id name __typename } dateUpdated monthViews views favoriteCount lastBookUpdate lastChapterUpdate contentType __typename } }"#;
-
-#[allow(dead_code)]
-pub const ALL_CATEGORY_QUERY: &str = r#"query allCategory { allCategory { id name __typename } }"#;
+/// `categoryId` is a list; several ids return only works in every one of them.
+pub const COMICS_BY_CATEGORIES_QUERY: &str = r#"query comicByCategories($categoryId: [ID!]!, $pagination: Pagination!) { comicByCategories(categoryId: $categoryId, pagination: $pagination) { id title status year imageUrl authors { id name __typename } categories { id name __typename } dateUpdated monthViews views favoriteCount lastBookUpdate lastChapterUpdate contentType __typename } }"#;
 
 /// The only query that reports authentication state. Komiic serves every other
 /// query anonymously when the token is dead, so this one is used to probe it.
@@ -126,15 +124,26 @@ pub fn graphql_settle(
 		let token = recovered.get_or_insert_with(auth::recover_session).clone();
 		if let Some(token) = token {
 			let (retry_status, retry_body) = graphql_once(query, variables, Some(&token))?;
-			if retry_status != 200 {
-				bail!("Komiic HTTP {retry_status}");
-			}
-			return Ok(retry_body);
+			return check_reply(retry_status, retry_body);
 		}
 	}
 
+	check_reply(status, body)
+}
+
+/// Komiic reports a failed query as HTTP 200 with `errors` and `data: null`, which would
+/// otherwise read as an empty result and wipe a library's chapters. `no token` is let
+/// through: it only reaches here when the session could not be renewed, and
+/// `account_footer` reads the missing `account` as that.
+fn check_reply(status: i32, body: String) -> aidoku::Result<String> {
 	if status != 200 {
 		bail!("Komiic HTTP {status}");
+	}
+	if let Some(errors) = json_data_field(&body, "errors") {
+		let message = json_str_value(errors, "message").unwrap_or("");
+		if !json_top_level_objects(errors).is_empty() && message != "no token" {
+			bail!("Komiic GraphQL error: {message}");
+		}
 	}
 	Ok(body)
 }
@@ -223,23 +232,16 @@ pub fn json_str_value<'a>(json: &'a str, key: &str) -> Option<&'a str> {
 	Some(&rest[..end])
 }
 
-/// Extract a JSON number value: `"key":123` → `123`
+/// Extract a JSON number value: `"key":123` → `123`. Anything else is `None`; skipping
+/// ahead to the next digit would read a later field's number.
 pub fn json_num_value(json: &str, key: &str) -> Option<i64> {
 	let search = format!("\"{}\":", key);
 	let pos = json.find(&search)?;
-	let start = pos + search.len();
-	let rest = &json[start..];
-
-	let mut num_str = String::new();
-	for ch in rest.chars() {
-		if ch.is_ascii_digit() || ch == '-' {
-			num_str.push(ch);
-		} else if !num_str.is_empty() {
-			break;
-		}
-	}
-
-	num_str.parse::<i64>().ok()
+	let rest = json[pos + search.len()..].trim_start();
+	let end = rest
+		.find(|c: char| !(c.is_ascii_digit() || c == '-'))
+		.unwrap_or(rest.len());
+	rest[..end].parse::<i64>().ok()
 }
 
 /// Iterate over JSON array objects.
@@ -412,12 +414,19 @@ pub fn parse_comic(obj: &str) -> Option<Manga> {
 /// Chapter type can be "book" (volume) or "chapter".
 pub fn parse_chapter(obj: &str) -> Option<Chapter> {
 	let id = json_str_value(obj, "id")?;
-	let serial = json_num_value(obj, "serial")? as f32;
+	// A string: `"01"`, or `"5.1"` for a chapter split in parts (checked 2026-10-20).
+	let serial = json_str_value(obj, "serial")?;
 	let chapter_type = json_str_value(obj, "type").unwrap_or("chapter");
 
+	let label = serial.trim_start_matches('0');
+	let label = if label.is_empty() || label.starts_with('.') {
+		format!("0{label}")
+	} else {
+		String::from(label)
+	};
 	let title = match chapter_type {
-		"book" => Some(format!("卷 {}", serial as i32)),
-		_ => Some(format!("第 {} 話", serial as i32)),
+		"book" => Some(format!("卷 {label}")),
+		_ => Some(format!("第 {label} 話")),
 	};
 
 	let url = Some(format!("https://komiic.com/chapter/{id}"));
@@ -425,10 +434,25 @@ pub fn parse_chapter(obj: &str) -> Option<Chapter> {
 	Some(Chapter {
 		key: String::from(id),
 		title,
-		chapter_number: Some(serial),
+		chapter_number: serial.parse::<f32>().ok(),
 		url,
 		..Default::default()
 	})
+}
+
+/// The chapters of a `chaptersByComicId` reply, newest first, or `None` when the library
+/// should keep its own: the field is missing, an entry cannot be read (a short list would
+/// read as chapters having been removed), or the list is empty, which is also how an
+/// unknown comic id answers (checked 2026-10-20).
+pub fn parse_chapter_list(body: &str) -> Option<Vec<Chapter>> {
+	let array = json_data_field(body, "chaptersByComicId")?;
+	// The API lists oldest first.
+	json_top_level_objects(array)
+		.into_iter()
+		.rev()
+		.map(parse_chapter)
+		.collect::<Option<Vec<Chapter>>>()
+		.filter(|chapters: &Vec<Chapter>| !chapters.is_empty())
 }
 
 /// Build a JSON array of kid strings for the getImageTickets query.
@@ -459,4 +483,43 @@ pub fn extract_token_from_cookie(cookie_header: &str) -> Option<&str> {
 	let rest = &cookie_header[start..];
 	let end = rest.find(';').unwrap_or(rest.len());
 	Some(&rest[..end])
+}
+
+#[cfg(test)]
+mod test {
+	use super::*;
+	use aidoku_test::aidoku_test;
+
+	#[aidoku_test]
+	fn a_bad_chapter_list_is_rejected() {
+		let good = r#"{"id":"8","serial":"01","type":"chapter"},{"id":"9","serial":"5.1","type":"chapter"}"#;
+		let body = format!(r#"{{"data":{{"chaptersByComicId":[{good}]}}}}"#);
+		let chapters = parse_chapter_list(&body).expect("chapters");
+		let keys: Vec<&str> = chapters.iter().map(|c| c.key.as_str()).collect();
+		assert_eq!(keys, ["9", "8"]);
+		assert_eq!(chapters[0].title.as_deref(), Some("第 5.1 話"));
+		assert_eq!(chapters[1].title.as_deref(), Some("第 1 話"));
+
+		// The field is missing (a GraphQL error answers `data: null`).
+		assert!(parse_chapter_list(r#"{"data":null}"#).is_none());
+		// An unknown comic id.
+		assert!(parse_chapter_list(r#"{"data":{"chaptersByComicId":[]}}"#).is_none());
+		// One entry without a serial.
+		let body = format!(
+			r#"{{"data":{{"chaptersByComicId":[{good},{{"id":"10","type":"chapter"}}]}}}}"#
+		);
+		assert!(parse_chapter_list(&body).is_none());
+	}
+
+	#[aidoku_test]
+	fn numbers_are_read_only_where_the_key_is() {
+		assert_eq!(
+			json_num_value(r#"{"usage":12,"limit":300}"#, "usage"),
+			Some(12)
+		);
+		assert_eq!(
+			json_num_value(r#"{"serial":"x","size":13}"#, "serial"),
+			None
+		);
+	}
 }

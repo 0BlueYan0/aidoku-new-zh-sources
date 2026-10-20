@@ -18,13 +18,21 @@ pub const USER_AGENT: &str = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac O
 ///
 /// Every request goes out as a guest. That is enough for everything this source shows:
 /// listings, search, details, chapter lists and images are all served without a session.
+///
+/// A non-2xx answer is an error: an HTML error page scanned as JSON yields no `data`, and
+/// callers would read that as an empty list.
 pub fn fetch_json(url: &str) -> Result<String> {
-	Request::get(url)?
+	let response = Request::get(url)?
 		.header("User-Agent", USER_AGENT)
 		.header("Referer", BASE_URL)
 		.header("Accept", "application/json, text/javascript, */*; q=0.01")
 		.header("X-Requested-With", "XMLHttpRequest")
-		.string()
+		.send()?;
+	let status = response.status_code();
+	if !(200..300).contains(&status) {
+		bail!("[tibiu] HTTP {status} for {url}");
+	}
+	response.get_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -482,6 +490,17 @@ pub fn parse_chapter(obj: &str) -> Option<Chapter> {
 	})
 }
 
+/// Parse the `data` array of `comic/chapter`. `None` when the field is missing, holds no
+/// chapter, or has an entry without an id, so a refresh keeps the library's list instead
+/// of storing an empty or shortened one.
+pub fn parse_chapter_list(body: &str) -> Option<Vec<Chapter>> {
+	let chapters = json_top_level_objects(json_data_field(body, "data")?)
+		.into_iter()
+		.map(parse_chapter)
+		.collect::<Option<Vec<Chapter>>>()?;
+	(!chapters.is_empty()).then_some(chapters)
+}
+
 /// Order chapters newest first.
 ///
 /// The API order cannot be trusted: for one title it returned the two afterwords, then the
@@ -515,15 +534,14 @@ pub fn page_list_error(body: &str) -> String {
 
 /// Parse the `data` array of a listing response into manga entries.
 pub fn parse_comic_list(body: &str) -> Vec<Manga> {
-	let mut entries: Vec<Manga> = Vec::new();
-	if let Some(array) = json_data_field(body, "data") {
-		for obj in json_top_level_objects(array) {
-			if let Some(manga) = parse_comic(obj) {
-				entries.push(manga);
-			}
-		}
-	}
-	entries
+	json_data_field(body, "data")
+		.map(|array: &str| {
+			json_top_level_objects(array)
+				.into_iter()
+				.filter_map(parse_comic)
+				.collect()
+		})
+		.unwrap_or_default()
 }
 
 // ---------------------------------------------------------------------------
@@ -540,6 +558,27 @@ mod test {
 	const UNBALANCED_BRACKET: &str = r#"{"code":1,"msg":"ok","data":[{"id":"1","name":"A","text":"[未闭合的引言"},{"id":"2","name":"B","text":"正常"}]}"#;
 
 	const BRACE_IN_STRING: &str = r#"{"data":[{"id":"1","name":"{A"},{"id":"2","name":"B}"}]}"#;
+
+	#[aidoku_test]
+	fn parse_chapter_list_rejects_failed_answers() {
+		assert!(parse_chapter_list(r#"{"msg":"章节不存在","code":-1}"#).is_none());
+		assert!(parse_chapter_list(r#"{"code":1,"data":[]}"#).is_none());
+		assert!(parse_chapter_list("<html>502 Bad Gateway</html>").is_none());
+		let chapters = parse_chapter_list(
+			r#"{"code":1,"data":[{"id":"397520","name":"第1话","link":"\/chapter\/1\/397520","addtime":"2025-02-11","vip":0,"cion":0,"pay":0}]}"#,
+		)
+		.expect("one chapter");
+		assert_eq!(chapters.len(), 1);
+		assert_eq!(chapters[0].key, "397520");
+	}
+
+	#[aidoku_test]
+	fn a_chapter_without_an_id_rejects_the_list() {
+		assert!(parse_chapter_list(
+			r#"{"code":1,"data":[{"id":"397520","name":"第1话"},{"name":"第2话"}]}"#
+		)
+		.is_none());
+	}
 
 	#[aidoku_test]
 	fn json_data_field_skips_brackets_inside_strings() {

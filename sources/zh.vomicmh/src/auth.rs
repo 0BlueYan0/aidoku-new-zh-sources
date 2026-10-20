@@ -92,16 +92,9 @@ pub fn login(account: &str, password: &str) -> Result<bool> {
 				LOGGED_IN_AT_KEY,
 				DefaultValue::String(format!("{}", current_date())),
 			);
-			println!("[vomicmh] login successful");
 			Ok(true)
 		}
-		None => {
-			println!(
-				"[vomicmh] login refused: {}",
-				answer.chars().take(120).collect::<String>()
-			);
-			Ok(false)
-		}
+		None => Ok(false),
 	}
 }
 

@@ -66,7 +66,7 @@ impl Source for Mh18Source {
 						None => Ok(empty_page()),
 					};
 				}
-				FilterValue::Select { id, value } if id == "genre" && !value.is_empty() => {
+				FilterValue::Select { id, value } if id == "genre" => {
 					// Paths can't be combined, so there is only the one select. A name that is
 					// not on it gets no results rather than some other list.
 					match category_path(&value) {
@@ -94,7 +94,10 @@ impl Source for Mh18Source {
 
 		if needs_details || (needs_chapters && mid.is_none()) {
 			let html = fetch_html(&manga_url(&manga.key))?;
-			let (details, found) = parse_details(&html, &manga.key);
+			// A page that is not the work's details must not empty the library entry.
+			let Some((details, found)) = parse_details(&html, &manga.key) else {
+				return Ok(manga);
+			};
 			if let Some(found) = found.as_deref() {
 				remember_mid(&manga.key, found);
 			}
@@ -109,12 +112,15 @@ impl Source for Mh18Source {
 
 		if needs_chapters {
 			// One unreadable title must not abort a whole library refresh.
-			match mid {
-				Some(mid) => match fetch_html(&chapters_url(&mid)) {
-					Ok(html) => manga.chapters = Some(parse_chapters(&html, &mid)),
-					Err(_) => println!("[18mh] ERROR fetching chapters for {}", manga.key),
-				},
-				None => println!("[18mh] ERROR no work id on the page of {}", manga.key),
+			if let Some(mid) = mid {
+				if let Ok(html) = fetch_html(&chapters_url(&mid)) {
+					// An empty list is far more likely a wrong page than a work that lost every
+					// chapter, so the library keeps what it had.
+					let chapters = parse_chapters(&html, &mid);
+					if !chapters.is_empty() {
+						manga.chapters = Some(chapters);
+					}
+				}
 			}
 		}
 

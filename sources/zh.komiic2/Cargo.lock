@@ -19,6 +19,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "aidoku-test"
+version = "1.0.0"
+source = "git+https://github.com/Aidoku/aidoku-rs.git?branch=main#ae6485e3c14ecd1fd5497d170eae884c68d04a87"
+dependencies = [
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "allocator-api2"
 version = "0.2.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -314,4 +323,5 @@ name = "zhkomiic"
 version = "0.1.0"
 dependencies = [
  "aidoku",
+ "aidoku-test",
 ]

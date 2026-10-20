@@ -52,9 +52,9 @@ fn fetch_list(path: &str, page: i32) -> Result<MangaPageResult> {
 
 /// The API lists chapters oldest first; Aidoku expects newest first.
 fn build_chapters(list: ChapterList) -> Vec<Chapter> {
-	let mut chapters: Vec<Chapter> = list
-		.chapters
+	list.chapters
 		.iter()
+		.rev()
 		.map(|entry| {
 			let key = format!("{}", entry.id);
 			Chapter {
@@ -66,9 +66,7 @@ fn build_chapters(list: ChapterList) -> Vec<Chapter> {
 				..Default::default()
 			}
 		})
-		.collect();
-	chapters.reverse();
-	chapters
+		.collect()
 }
 
 impl Source for CreativeComicSource {
@@ -96,7 +94,7 @@ impl Source for CreativeComicSource {
 				// `author` parameter takes a numeric id, not a name, while `keyword`
 				// does match author names.
 				FilterValue::Text { id, value } => {
-					if id == "author" && !value.is_empty() {
+					if id == "author" {
 						keyword = Some(value);
 					}
 				}
@@ -113,13 +111,13 @@ impl Source for CreativeComicSource {
 						}
 					}
 					"type" => {
-						if !value.is_empty() && value.chars().all(|c| c.is_ascii_digit()) {
+						if value.chars().all(|c| c.is_ascii_digit()) {
 							genre = Some(value);
 						}
 					}
 					// A tapped tag. The site exposes no tag-name lookup, so this falls
 					// back to full-text search, which does match tags.
-					"genre" if keyword.is_none() && !value.is_empty() => {
+					"genre" if keyword.is_none() => {
 						keyword = Some(value);
 					}
 					_ => {}
@@ -144,17 +142,21 @@ impl Source for CreativeComicSource {
 		if needs_details {
 			// Swallow failures: one unreachable book must not abort a whole library
 			// refresh.
-			match api_get::<Book>(&format!("/book/{}/info", manga.key)) {
-				Ok(book) => manga.copy_from(book.into_manga()),
-				Err(_) => println!("[ccc] ERROR fetching details for book {}", manga.key),
+			if let Ok(book) = api_get::<Book>(&format!("/book/{}/info", manga.key)) {
+				let mut fresh = book.into_manga();
+				// `copy_from` takes the title even when it is empty, and an answer without
+				// `name` would otherwise blank the title the library already shows.
+				if fresh.title.is_empty() {
+					fresh.title = core::mem::take(&mut manga.title);
+				}
+				manga.copy_from(fresh);
 			}
 			send_partial_result(&manga);
 		}
 
 		if needs_chapters {
-			match api_get::<ChapterList>(&format!("/book/{}/chapter", manga.key)) {
-				Ok(list) => manga.chapters = Some(build_chapters(list)),
-				Err(_) => println!("[ccc] ERROR fetching chapters for book {}", manga.key),
+			if let Ok(list) = api_get::<ChapterList>(&format!("/book/{}/chapter", manga.key)) {
+				manga.chapters = Some(build_chapters(list));
 			}
 		}
 
@@ -205,14 +207,11 @@ impl Source for CreativeComicSource {
 				.and_then(|payload| crypto::unwrap_page_key(&payload.key, &secret));
 
 			let mut context = PageContext::new();
-			match unwrapped {
-				Some((key, iv)) => {
-					context.insert(String::from("key"), crypto::to_hex(&key));
-					context.insert(String::from("iv"), crypto::to_hex(&iv));
-				}
-				// Leaving the context empty makes the failure visible as one broken
-				// page rather than a dead chapter.
-				None => println!("[ccc] ERROR unwrapping the key for page {}", proportion.id),
+			// Leaving the context empty makes the failure visible as one broken
+			// page rather than a dead chapter.
+			if let Some((key, iv)) = unwrapped {
+				context.insert(String::from("key"), crypto::to_hex(&key));
+				context.insert(String::from("iv"), crypto::to_hex(&iv));
 			}
 
 			pages.push(Page {
@@ -260,71 +259,68 @@ impl Home for CreativeComicSource {
 			],
 		}));
 
-		match api_get::<HomeV2>("/public/home_v2") {
-			Ok(home) => {
-				// Banners also point at announcements and external pages; only the
-				// ones tied to a book can open anything here.
-				let links: Vec<Link> = home
-					.banner
-					.into_iter()
-					.filter(|banner| banner.kind.as_deref() == Some("book"))
-					.filter_map(|banner| {
-						let key = banner.value.filter(|value| !value.is_empty())?;
-						Some(Link {
-							title: banner.title.clone().unwrap_or_default(),
-							subtitle: None,
-							image_url: banner.image2.or(banner.image1),
-							value: Some(LinkValue::Manga(Manga {
-								key,
-								title: banner.title.unwrap_or_default(),
-								..Default::default()
-							})),
-						})
+		// A failing request should not take the whole home screen down.
+		if let Ok(home) = api_get::<HomeV2>("/public/home_v2") {
+			// Banners also point at announcements and external pages; only the
+			// ones tied to a book can open anything here.
+			let links: Vec<Link> = home
+				.banner
+				.into_iter()
+				.filter(|banner| banner.kind.as_deref() == Some("book"))
+				.filter_map(|banner| {
+					let key = banner.value.filter(|value| !value.is_empty())?;
+					Some(Link {
+						title: banner.title.clone().unwrap_or_default(),
+						subtitle: None,
+						image_url: banner.image2.or(banner.image1),
+						value: Some(LinkValue::Manga(Manga {
+							key,
+							title: banner.title.unwrap_or_default(),
+							..Default::default()
+						})),
 					})
-					.collect();
+				})
+				.collect();
 
-				if !links.is_empty() {
-					send_partial_result(&HomePartialResult::Component(HomeComponent {
-						title: Some(String::from(BANNER_TITLE)),
-						subtitle: None,
-						value: HomeComponentValue::ImageScroller {
-							links,
-							auto_scroll_interval: Some(5.0),
-							// Pinned to the 1.85:1 ratio of `image2`. Leaving these
-							// unset let the banner run off the right of the screen.
-							width: Some(300),
-							height: Some(162),
-						},
-					}));
-				}
-
-				let ranked: Vec<Link> = home
-					.rank
-					.map(|rank| rank.read)
-					.unwrap_or_default()
-					.into_iter()
-					.map(|entry| Link::from(entry.into_manga()))
-					.collect();
-
-				if !ranked.is_empty() {
-					send_partial_result(&HomePartialResult::Component(HomeComponent {
-						title: Some(String::from(RANK_TITLE)),
-						subtitle: None,
-						value: HomeComponentValue::MangaList {
-							ranking: true,
-							page_size: None,
-							entries: ranked,
-							listing: Some(Listing {
-								id: String::from("read"),
-								name: String::from(RANK_TITLE),
-								..Default::default()
-							}),
-						},
-					}));
-				}
+			if !links.is_empty() {
+				send_partial_result(&HomePartialResult::Component(HomeComponent {
+					title: Some(String::from(BANNER_TITLE)),
+					subtitle: None,
+					value: HomeComponentValue::ImageScroller {
+						links,
+						auto_scroll_interval: Some(5.0),
+						// Pinned to the 1.85:1 ratio of `image2`. Leaving these
+						// unset let the banner run off the right of the screen.
+						width: Some(300),
+						height: Some(162),
+					},
+				}));
 			}
-			// A failing row should not take the whole home screen down.
-			Err(_) => println!("[ccc] ERROR fetching the home payload"),
+
+			let ranked: Vec<Link> = home
+				.rank
+				.map(|rank| rank.read)
+				.unwrap_or_default()
+				.into_iter()
+				.map(|entry| Link::from(entry.into_manga()))
+				.collect();
+
+			if !ranked.is_empty() {
+				send_partial_result(&HomePartialResult::Component(HomeComponent {
+					title: Some(String::from(RANK_TITLE)),
+					subtitle: None,
+					value: HomeComponentValue::MangaList {
+						ranking: true,
+						page_size: None,
+						entries: ranked,
+						listing: Some(Listing {
+							id: String::from("read"),
+							name: String::from(RANK_TITLE),
+							..Default::default()
+						}),
+					},
+				}));
+			}
 		}
 
 		Ok(HomeLayout::default())
@@ -377,8 +373,7 @@ impl NotificationHandler for CreativeComicSource {
 			"syncLogin" => {
 				// The settings footer reports the reason when this fails, so there is
 				// nothing to branch on here.
-				let synced = auth::sync_from_web_view();
-				println!("[ccc] session sync succeeded: {synced}");
+				auth::sync_from_web_view();
 			}
 			// The app's own login button never flips to "log out" for this site,
 			// because it tracks state through a callback CCC can never trigger.
@@ -393,20 +388,14 @@ impl DynamicSettings for CreativeComicSource {
 	/// leaves this source's settings screen unusable - the buttons stop responding and
 	/// it reads as a freeze. `account_footer` therefore always has something to say.
 	fn get_dynamic_settings(&self) -> Result<Vec<Setting>> {
-		let mut settings: Vec<Setting> = Vec::new();
-		if let Some(footer) = auth::account_footer() {
-			settings.push(
-				GroupSetting {
-					key: "accountInfo".into(),
-					title: "帳號資訊".into(),
-					footer: Some(footer.into()),
-					items: Vec::new(),
-					..Default::default()
-				}
-				.into(),
-			);
+		Ok(vec![GroupSetting {
+			key: "accountInfo".into(),
+			title: "帳號資訊".into(),
+			footer: Some(auth::account_footer().into()),
+			items: Vec::new(),
+			..Default::default()
 		}
-		Ok(settings)
+		.into()])
 	}
 }
 

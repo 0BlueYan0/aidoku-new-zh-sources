@@ -11,7 +11,7 @@
 //! so two of them can both find the gate open and both send `SignIn`. The second is
 //! refused; `signed_on` keeps that refusal from being shown as a failure.
 
-use aidoku::{alloc::String, imports::defaults::defaults_get, prelude::*};
+use aidoku::{alloc::String, imports::defaults::defaults_get};
 use serde_json::json;
 
 use crate::auth::{get_string, set_string, set_timestamp, timestamp};
@@ -52,28 +52,18 @@ pub fn claim_if_due(now: i64) -> bool {
 		return false;
 	}
 	set_timestamp(NEXT_KEY, now + RETRY);
-	println!("[lightnovel] sign in: attempting, gate -> {}", now + RETRY);
 	true
 }
 
-/// What the site answered to `SignIn`. The raw reply is printed because the reference
-/// doc gives only the success fields; the shape of "already signed today" is unknown.
+/// What the site answered to `SignIn`.
 pub fn record(reply: &Reply, now: i64) {
 	match reply {
-		Reply::Ok(value) => {
-			println!(
-				"[lightnovel] sign in: ok {value}, gate -> {}",
-				next_site_day(now)
-			);
+		Reply::Ok(_) => {
 			set_timestamp(NEXT_KEY, next_site_day(now));
 			set_timestamp(SIGNED_ON_KEY, site_day(now));
 			set_string(LAST_ERROR_KEY, "");
 		}
-		Reply::Refused(status, msg) => {
-			println!(
-				"[lightnovel] sign in: refused {status}: {msg}, gate -> {}",
-				next_site_day(now)
-			);
+		Reply::Refused(_, msg) => {
 			set_timestamp(NEXT_KEY, next_site_day(now));
 			// The site answers `500: 今日已签到` when the day is already signed (device,
 			// 2026-10-01), e.g. after a logout cleared `signed_on`. Nothing to act on.
@@ -88,9 +78,8 @@ pub fn record(reply: &Reply, now: i64) {
 				set_string(LAST_ERROR_KEY, msg);
 			}
 		}
-		Reply::Error(msg) => {
-			println!("[lightnovel] sign in: hub error {msg}, retrying in an hour");
-		}
+		// The gate `claim_if_due` set tries again in an hour.
+		Reply::Error(_) => {}
 	}
 }
 
