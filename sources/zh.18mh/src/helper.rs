@@ -84,7 +84,9 @@ pub fn relay_target(base: &str, url: &str) -> String {
 	let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
 	// The relay files cookies under `/r/<lowercase host>/`, so the host is lowercased and at
 	// least `/` follows it.
-	let (host, path) = rest.find(['/', '?']).map_or((rest, ""), |at| rest.split_at(at));
+	let (host, path) = rest
+		.find(['/', '?'])
+		.map_or((rest, ""), |at| rest.split_at(at));
 	let slash = if path.starts_with('/') { "" } else { "/" };
 	format!("{base}/r/{}{slash}{path}", host.to_lowercase())
 }
@@ -155,9 +157,7 @@ pub fn content_url(mid: &str, cs: &str) -> String {
 
 /// A site path without the host or the slashes around it.
 fn site_path(href: &str) -> &str {
-	href.trim()
-		.trim_start_matches(BASE_URL)
-		.trim_matches('/')
+	href.trim().trim_start_matches(BASE_URL).trim_matches('/')
 }
 
 /// `/manga/<slug>` (absolute or not) → `<slug>`. Reader links `/manga/<slug>/<x>` give
@@ -188,7 +188,10 @@ fn category_name(path: &str) -> Option<&'static str> {
 /// derived from the name, and the site search only matches titles. The slugs are kept
 /// as details pages are opened, which is always before an author can be tapped.
 pub fn remember_author(name: &str, slug: &str) {
-	defaults_set(&format!("author_{name}"), DefaultValue::String(String::from(slug)));
+	defaults_set(
+		&format!("author_{name}"),
+		DefaultValue::String(String::from(slug)),
+	);
 }
 
 pub fn author_slug(name: &str) -> Option<String> {
@@ -198,7 +201,10 @@ pub fn author_slug(name: &str) -> Option<String> {
 /// A work's numeric id never changes, so a chapter-only library refresh can skip the
 /// details page.
 pub fn remember_mid(slug: &str, mid: &str) {
-	defaults_set(&format!("mid_{slug}"), DefaultValue::String(String::from(mid)));
+	defaults_set(
+		&format!("mid_{slug}"),
+		DefaultValue::String(String::from(mid)),
+	);
 }
 
 pub fn cached_mid(slug: &str) -> Option<String> {
@@ -206,7 +212,9 @@ pub fn cached_mid(slug: &str) -> Option<String> {
 }
 
 fn text_of(el: &Element) -> String {
-	el.text().map(|t: String| String::from(t.trim())).unwrap_or_default()
+	el.text()
+		.map(|t: String| String::from(t.trim()))
+		.unwrap_or_default()
 }
 
 /// One cover card: `a[href=/manga/<slug>]` holding `img` and `h3`. The list pages and
@@ -262,12 +270,14 @@ pub fn parse_manga_list(html: Document) -> MangaPageResult {
 /// the pages are keyed by. Both `#firstchap` and `#mangachapters` carry it; either one
 /// is enough.
 pub fn parse_details(html: &Document, slug: &str) -> (Manga, Option<String>) {
-	let mid = ["#firstchap", "#mangachapters"].iter().find_map(|sel: &&str| {
-		html.select_first(sel)
-			.and_then(|el: Element| el.attr("data-mid"))
-			.map(|m: String| String::from(m.trim()))
-			.filter(|m: &String| !m.is_empty())
-	});
+	let mid = ["#firstchap", "#mangachapters"]
+		.iter()
+		.find_map(|sel: &&str| {
+			html.select_first(sel)
+				.and_then(|el: Element| el.attr("data-mid"))
+				.map(|m: String| String::from(m.trim()))
+				.filter(|m: &String| !m.is_empty())
+		});
 
 	// The age warning dialog has its own `h1`, outside `main`.
 	let heading = html.select_first("main h1.text-xl");
@@ -382,14 +392,20 @@ pub fn parse_chapters(html: &Document, mid: &str) -> Vec<Chapter> {
 	let mut chapters: Vec<Chapter> = Vec::new();
 	if let Some(links) = html.select(".chapteritem a[data-cs]") {
 		for link in links {
-			let Some(cs) = link.attr("data-cs").filter(|c: &String| !c.trim().is_empty()) else {
+			let Some(cs) = link
+				.attr("data-cs")
+				.filter(|c: &String| !c.trim().is_empty())
+			else {
 				continue;
 			};
 			let title = link
 				.attr("data-ct")
 				.map(|t: String| String::from(t.trim()))
 				.filter(|t: &String| !t.is_empty())
-				.or_else(|| link.select_first(".chaptertitle").map(|el: Element| text_of(&el)));
+				.or_else(|| {
+					link.select_first(".chaptertitle")
+						.map(|el: Element| text_of(&el))
+				});
 			let url = link
 				.attr("href")
 				.map(|href: String| format!("{BASE_URL}/{}", site_path(&href)));
@@ -420,7 +436,10 @@ pub fn parse_pages(html: &Document) -> Vec<Page> {
 				.or_else(|| img.attr("src").filter(|u: &String| u.starts_with("http")));
 			if let Some(url) = url {
 				let url = String::from(url.trim());
-				if pages.iter().any(|p: &Page| p.content == PageContent::url(url.clone())) {
+				if pages
+					.iter()
+					.any(|p: &Page| p.content == PageContent::url(url.clone()))
+				{
 					continue;
 				}
 				pages.push(Page {
@@ -495,7 +514,10 @@ mod test {
 		let first = &result.entries[0];
 		assert_eq!(first.key, "pengyoudejiejie");
 		assert_eq!(first.title, "朋友的姐姐");
-		assert!(first.cover.as_deref().is_some_and(|c: &str| c.starts_with("https://host-cover.")));
+		assert!(first
+			.cover
+			.as_deref()
+			.is_some_and(|c: &str| c.starts_with("https://host-cover.")));
 	}
 
 	#[aidoku_test]
@@ -507,29 +529,48 @@ mod test {
 
 	#[aidoku_test]
 	fn reads_details_with_mangachapters() {
-		let (manga, mid) = parse_details(&doc(include_str!("fixtures/detail_pengyoudejiejie.html")), "pengyoudejiejie");
+		let (manga, mid) = parse_details(
+			&doc(include_str!("fixtures/detail_pengyoudejiejie.html")),
+			"pengyoudejiejie",
+		);
 		assert_eq!(mid.as_deref(), Some("16"));
 		assert_eq!(manga.title, "朋友的姐姐");
 		assert_eq!(manga.status, MangaStatus::Completed);
 		assert_eq!(manga.viewer, Viewer::Webtoon);
 		assert_eq!(
 			manga.authors,
-			Some(Vec::from([String::from("Sean Kim"), String::from("鍾普林")]))
+			Some(Vec::from([
+				String::from("Sean Kim"),
+				String::from("鍾普林")
+			]))
 		);
 		assert_eq!(
 			manga.tags,
-			Some(Vec::from([String::from("韓漫"), String::from("慾望"), String::from("推薦")]))
+			Some(Vec::from([
+				String::from("韓漫"),
+				String::from("慾望"),
+				String::from("推薦")
+			]))
 		);
-		assert!(manga.description.as_deref().is_some_and(|d: &str| d.starts_with("喜歡偷看")));
+		assert!(manga
+			.description
+			.as_deref()
+			.is_some_and(|d: &str| d.starts_with("喜歡偷看")));
 		assert_eq!(author_slug("鍾普林").as_deref(), Some("zhongpulin"));
 	}
 
 	#[aidoku_test]
 	fn reads_another_works_details() {
-		let (manga, mid) = parse_details(&doc(include_str!("fixtures/detail_toutouai.html")), "toutouai");
+		let (manga, mid) = parse_details(
+			&doc(include_str!("fixtures/detail_toutouai.html")),
+			"toutouai",
+		);
 		assert_eq!(mid.as_deref(), Some("144"));
 		assert_eq!(manga.title, "偷偷愛");
-		assert_eq!(manga.authors, Some(Vec::from([String::from("90's magazine")])));
+		assert_eq!(
+			manga.authors,
+			Some(Vec::from([String::from("90's magazine")]))
+		);
 		assert_eq!(
 			manga.tags,
 			Some(Vec::from([

@@ -27,22 +27,35 @@ struct SessionCookies {
 
 impl SessionCookies {
 	fn from_store(cookies: &[Cookie]) -> Option<Self> {
-		let value = |name: &str| cookies.iter().find(|cookie| {
-			let domain = cookie.domain.trim_start_matches('.');
-			(domain == "webtoons.com" || domain == "www.webtoons.com")
-				&& cookie.name == name
-				&& cookie.expires_date.is_none_or(|expiry| expiry > current_date())
-		}).map(|cookie| cookie.value.trim_matches('"'));
+		let value = |name: &str| {
+			cookies
+				.iter()
+				.find(|cookie| {
+					let domain = cookie.domain.trim_start_matches('.');
+					(domain == "webtoons.com" || domain == "www.webtoons.com")
+						&& cookie.name == name
+						&& cookie
+							.expires_date
+							.is_none_or(|expiry| expiry > current_date())
+				})
+				.map(|cookie| cookie.value.trim_matches('"'))
+		};
 		let session = value("NEO_SES")?;
 		let check = value("NEO_CHK")?;
-		let candidate = Self { session: session.into(), check: check.into() };
+		let candidate = Self {
+			session: session.into(),
+			check: check.into(),
+		};
 		candidate.valid().then_some(candidate)
 	}
 
 	fn valid(&self) -> bool {
 		[&self.session, &self.check].iter().all(|value| {
-			!value.is_empty() && !value.eq_ignore_ascii_case("expired")
-				&& !value.chars().any(|ch| ch.is_control() || matches!(ch, ';' | '"'))
+			!value.is_empty()
+				&& !value.eq_ignore_ascii_case("expired")
+				&& !value
+					.chars()
+					.any(|ch| ch.is_control() || matches!(ch, ';' | '"'))
 		})
 	}
 
@@ -71,17 +84,23 @@ pub fn is_logged_in() -> bool {
 }
 
 pub fn api_cookie() -> Option<String> {
-	if needs_relogin() { return None; }
+	if needs_relogin() {
+		return None;
+	}
 	stored_session().map(|session| session.api_header())
 }
 
 pub fn web_cookie() -> Option<String> {
-	if needs_relogin() { return None; }
+	if needs_relogin() {
+		return None;
+	}
 	stored_session().map(|session| session.web_header())
 }
 
 pub fn with_web_session(request: Request) -> Request {
-	if !request.url().is_some_and(|url| trusted_web_url(url)) { return request; }
+	if !request.url().is_some_and(|url| trusted_web_url(url)) {
+		return request;
+	}
 	match web_cookie() {
 		Some(cookie) => request.header("Cookie", cookie.as_str()),
 		None => request,
@@ -104,7 +123,9 @@ pub fn account_footer() -> String {
 }
 
 fn timestamp(key: &str) -> i64 {
-	defaults_get::<String>(key).and_then(|value| value.parse().ok()).unwrap_or(0)
+	defaults_get::<String>(key)
+		.and_then(|value| value.parse().ok())
+		.unwrap_or(0)
 }
 
 fn set_timestamp(key: &str, value: i64) {
@@ -112,7 +133,9 @@ fn set_timestamp(key: &str, value: i64) {
 }
 
 fn accept_session(session: SessionCookies, nickname: &str) {
-	let Ok(raw) = serde_json::to_string(&session) else { return; };
+	let Ok(raw) = serde_json::to_string(&session) else {
+		return;
+	};
 	defaults_set(SESSION_KEY, DefaultValue::String(raw));
 	defaults_set(NAME_KEY, DefaultValue::String(nickname.into()));
 	defaults_set(NEEDS_RELOGIN_KEY, DefaultValue::Bool(false));
@@ -130,23 +153,32 @@ fn read_web_session() -> Option<SessionCookies> {
 	let cookies = WebView::new().get_cookies().ok()?;
 	let has_session = cookies.iter().any(|cookie| cookie.name == "NEO_SES");
 	let has_check = cookies.iter().any(|cookie| cookie.name == "NEO_CHK");
-	println!("[webtoons] login store: {} cookies, NEO_SES={}, NEO_CHK={}",
-		cookies.len(), has_session, has_check);
+	println!(
+		"[webtoons] login store: {} cookies, NEO_SES={}, NEO_CHK={}",
+		cookies.len(),
+		has_session,
+		has_check
+	);
 	SessionCookies::from_store(&cookies)
 }
 
 /// A callback may carry an empty cookie map because login redirects to another
 /// host and the App filters parent-domain cookies. Read the shared source store.
 pub fn capture_web_login(force_verify: bool) -> bool {
-	let Some(session) = read_web_session() else { return false; };
+	let Some(session) = read_web_session() else {
+		return false;
+	};
 	let header = session.api_header();
 	if !force_verify && api_cookie().as_deref() == Some(header.as_str()) {
 		return true;
 	}
-	let fingerprint: String = Sha1::digest(header.as_bytes()).iter()
-		.map(|byte| format!("{byte:02x}")).collect();
+	let fingerprint: String = Sha1::digest(header.as_bytes())
+		.iter()
+		.map(|byte| format!("{byte:02x}"))
+		.collect();
 	if defaults_get::<String>(FAILED_KEY).as_deref() == Some(fingerprint.as_str())
-		&& current_date() - timestamp(FAILED_AT_KEY) < 15 {
+		&& current_date() - timestamp(FAILED_AT_KEY) < 15
+	{
 		return false;
 	}
 	// Gate before I/O so cookie-change callbacks do not issue duplicate probes.
@@ -180,8 +212,12 @@ pub fn mark_relogin(request_cookie: &str) {
 }
 
 pub fn ensure_session() {
-	let Some(header) = api_cookie() else { return; };
-	if current_date() < timestamp(NEXT_CHECK_KEY) { return; }
+	let Some(header) = api_cookie() else {
+		return;
+	};
+	if current_date() < timestamp(NEXT_CHECK_KEY) {
+		return;
+	}
 	set_timestamp(NEXT_CHECK_KEY, current_date() + 300);
 	match crate::api::member_with_cookie(&header) {
 		Ok(Some(member)) => {
@@ -193,7 +229,9 @@ pub fn ensure_session() {
 			// The login page can have refreshed its cookies since the last capture.
 			if let Some(new_session) = read_web_session() {
 				if new_session.api_header() != header {
-					if let Ok(Some(member)) = crate::api::member_with_cookie(&new_session.api_header()) {
+					if let Ok(Some(member)) =
+						crate::api::member_with_cookie(&new_session.api_header())
+					{
 						if api_cookie().as_deref() == Some(header.as_str()) {
 							accept_session(new_session, &member.nickname);
 						}
@@ -222,7 +260,10 @@ pub fn handle_login_notification() {
 		let result = Request::get("https://www.webtoons.com/member/logout?returnUrl=https%3A%2F%2Fwww.webtoons.com%2Fzh-hant%2F")
 			.map(|request| request.timeout(8.0).header("Cookie", session.web_header().as_str()))
 			.and_then(|request| request.send());
-		println!("[webtoons] official web logout request completed={}", result.is_ok());
+		println!(
+			"[webtoons] official web logout request completed={}",
+			result.is_ok()
+		);
 	}
 	let cleared = WebView::new().delete_all_cookies().is_ok();
 	println!("[webtoons] logout: source web store cleared={cleared}");
@@ -237,8 +278,15 @@ fn login_notification_is_logout() -> bool {
 }
 
 fn clear_local() {
-	for key in [SESSION_KEY, NAME_KEY, NEXT_CHECK_KEY, "auth_logged_in_at",
-		FAILED_KEY, FAILED_AT_KEY, "login"] {
+	for key in [
+		SESSION_KEY,
+		NAME_KEY,
+		NEXT_CHECK_KEY,
+		"auth_logged_in_at",
+		FAILED_KEY,
+		FAILED_AT_KEY,
+		"login",
+	] {
 		// Overwrite first: even a failed deletion must not leave usable credentials.
 		// The current test runner also rejects Null's zero pointer before removing it.
 		defaults_set(key, DefaultValue::String(String::new()));
@@ -255,15 +303,26 @@ mod tests {
 
 	fn cookie(name: &str, value: &str, domain: &str) -> Cookie {
 		Cookie {
-			name: name.into(), value: value.into(), domain: domain.into(),
-			path: "/".into(), expires_date: None, is_secure: true, is_http_only: true,
+			name: name.into(),
+			value: value.into(),
+			domain: domain.into(),
+			path: "/".into(),
+			expires_date: None,
+			is_secure: true,
+			is_http_only: true,
 		}
 	}
 
 	#[aidoku_test]
 	fn manual_sync_and_repeated_login_notifications_keep_the_verified_session() {
 		clear_local();
-		accept_session(SessionCookies { session: "sync".into(), check: "sync".into() }, "測試帳號");
+		accept_session(
+			SessionCookies {
+				session: "sync".into(),
+				check: "sync".into(),
+			},
+			"測試帳號",
+		);
 		assert!(!login_notification_is_logout());
 		assert!(!login_notification_is_logout());
 		assert!(is_logged_in());
@@ -272,7 +331,13 @@ mod tests {
 	#[aidoku_test]
 	fn delayed_login_notification_keeps_session_but_immediate_real_logout_is_honored() {
 		clear_local();
-		accept_session(SessionCookies { session: "auto".into(), check: "auto".into() }, "測試帳號");
+		accept_session(
+			SessionCookies {
+				session: "auto".into(),
+				check: "auto".into(),
+			},
+			"測試帳號",
+		);
 		set_timestamp("auth_logged_in_at", current_date() - 600);
 		assert!(!login_notification_is_logout());
 		// Aidoku clears its login setting before posting the user's logout notification.
@@ -285,7 +350,9 @@ mod tests {
 	#[aidoku_test]
 	fn web_session_never_follows_foreign_or_insecure_urls() {
 		assert!(trusted_web_url("https://www.webtoons.com/zh-hant/"));
-		assert!(trusted_web_url("https://m.webtoons.com/api/v1/webtoon/10568/episodes"));
+		assert!(trusted_web_url(
+			"https://m.webtoons.com/api/v1/webtoon/10568/episodes"
+		));
 		assert!(!trusted_web_url("https://www.webtoons.com.evil.test/"));
 		assert!(!trusted_web_url("http://www.webtoons.com/zh-hant/"));
 	}
@@ -305,21 +372,31 @@ mod tests {
 
 	#[aidoku_test]
 	fn incomplete_expired_or_injected_cookies_are_not_a_login() {
-		assert!(SessionCookies::from_store(&[cookie("NEO_SES", "session", ".webtoons.com")]).is_none());
+		assert!(
+			SessionCookies::from_store(&[cookie("NEO_SES", "session", ".webtoons.com")]).is_none()
+		);
 		assert!(SessionCookies::from_store(&[
 			cookie("NEO_SES", "expired", ".webtoons.com"),
 			cookie("NEO_CHK", "check", ".webtoons.com"),
-		]).is_none());
+		])
+		.is_none());
 		assert!(SessionCookies::from_store(&[
 			cookie("NEO_SES", "x\r\nInjected: y", ".webtoons.com"),
 			cookie("NEO_CHK", "check", ".webtoons.com"),
-		]).is_none());
+		])
+		.is_none());
 	}
 
 	#[aidoku_test]
 	fn real_notification_handler_preserves_session_on_repeated_sync_notifications() {
 		clear_local();
-		accept_session(SessionCookies { session: "sync".into(), check: "sync".into() }, "測試帳號");
+		accept_session(
+			SessionCookies {
+				session: "sync".into(),
+				check: "sync".into(),
+			},
+			"測試帳號",
+		);
 		handle_login_notification();
 		handle_login_notification();
 		assert!(is_logged_in());
@@ -332,7 +409,13 @@ mod tests {
 	#[aidoku_test]
 	fn immediate_real_logout_is_not_hidden_by_a_recent_login() {
 		clear_local();
-		accept_session(SessionCookies { session: "recent".into(), check: "recent".into() }, "測試帳號");
+		accept_session(
+			SessionCookies {
+				session: "recent".into(),
+				check: "recent".into(),
+			},
+			"測試帳號",
+		);
 		defaults_set("login", DefaultValue::String(String::new()));
 		assert!(login_notification_is_logout());
 	}
@@ -340,7 +423,13 @@ mod tests {
 	#[aidoku_test]
 	fn a_stale_request_cannot_expire_a_new_session() {
 		clear_local();
-		accept_session(SessionCookies { session: "new".into(), check: "new".into() }, "測試帳號");
+		accept_session(
+			SessionCookies {
+				session: "new".into(),
+				check: "new".into(),
+			},
+			"測試帳號",
+		);
 		mark_relogin("NEO_SES=\"old\"; NEO_CHK=old");
 		assert!(is_logged_in());
 		let current = api_cookie().unwrap();
@@ -353,10 +442,22 @@ mod tests {
 	#[aidoku_test]
 	fn expired_session_falls_back_to_anonymous_web_reading_without_a_second_open() {
 		clear_local();
-		accept_session(SessionCookies { session: "expired-test".into(), check: "check".into() }, "test");
+		accept_session(
+			SessionCookies {
+				session: "expired-test".into(),
+				check: "check".into(),
+			},
+			"test",
+		);
 		let cookie = api_cookie().unwrap();
-		let chapter = aidoku::Chapter { key: "https://www.webtoons.com/zh-hant/a/b/viewer?title_no=1&episode_no=1".into(), ..Default::default() };
-		let pages = crate::read_chapter(&aidoku::Manga::default(), &chapter, true,
+		let chapter = aidoku::Chapter {
+			key: "https://www.webtoons.com/zh-hant/a/b/viewer?title_no=1&episode_no=1".into(),
+			..Default::default()
+		};
+		let pages = crate::read_chapter(
+			&aidoku::Manga::default(),
+			&chapter,
+			true,
 			|| {
 				// Same state transition as a 1001 response in parse_response.
 				mark_relogin(&cookie);
@@ -366,10 +467,11 @@ mod tests {
 			|_| {
 				assert!(web_cookie().is_none());
 				Ok(aidoku::alloc::vec![aidoku::Page::default()])
-			}).unwrap();
+			},
+		)
+		.unwrap();
 		assert_eq!(pages.len(), 1);
 		assert!(needs_relogin());
 		clear_local();
 	}
-
 }

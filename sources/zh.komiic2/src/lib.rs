@@ -4,11 +4,11 @@ use aidoku::{
 	alloc::{String, Vec},
 	imports::{net::Request, std::send_partial_result},
 	prelude::*,
-	BasicLoginHandler, Chapter, ContentRating, DeepLinkHandler, DeepLinkResult,
-	DynamicSettings, FilterValue, GroupSetting, Home, HomeComponent, HomeComponentValue,
-	HomeLayout, HomePartialResult, ImageRequestProvider, Link, Listing, ListingProvider,
-	Manga, MangaPageResult, MangaStatus, NotificationHandler, Page, PageContent, PageContext,
-	Result, Setting, Source, Viewer,
+	BasicLoginHandler, Chapter, ContentRating, DeepLinkHandler, DeepLinkResult, DynamicSettings,
+	FilterValue, GroupSetting, Home, HomeComponent, HomeComponentValue, HomeLayout,
+	HomePartialResult, ImageRequestProvider, Link, Listing, ListingProvider, Manga,
+	MangaPageResult, MangaStatus, NotificationHandler, Page, PageContent, PageContext, Result,
+	Setting, Source, Viewer,
 };
 
 mod auth;
@@ -85,27 +85,24 @@ impl Source for KomiicSource {
 		let mut status_filter = String::new();
 
 		for filter in filters {
-			match filter {
-				FilterValue::Select { id, value } => {
-					if id == "category" {
-						category_id = value;
-					} else if id == "sort" {
-						order_by = match value.as_str() {
-							"最新更新" => String::from("DATE_UPDATED"),
-							"本月觀看" => String::from("MONTH_VIEWS"),
-							"總觀看數" => String::from("VIEWS"),
-							"收藏人數" => String::from("FAVORITE_COUNT"),
-							_ => String::from("DATE_UPDATED"),
-						};
-					} else if id == "status" {
-						status_filter = match value.as_str() {
-							"連載中" => String::from("ONGOING"),
-							"已完結" => String::from("END"),
-							_ => String::new(),
-						};
-					}
+			if let FilterValue::Select { id, value } = filter {
+				if id == "category" {
+					category_id = value;
+				} else if id == "sort" {
+					order_by = match value.as_str() {
+						"最新更新" => String::from("DATE_UPDATED"),
+						"本月觀看" => String::from("MONTH_VIEWS"),
+						"總觀看數" => String::from("VIEWS"),
+						"收藏人數" => String::from("FAVORITE_COUNT"),
+						_ => String::from("DATE_UPDATED"),
+					};
+				} else if id == "status" {
+					status_filter = match value.as_str() {
+						"連載中" => String::from("ONGOING"),
+						"已完結" => String::from("END"),
+						_ => String::new(),
+					};
 				}
-				_ => {}
 			}
 		}
 
@@ -191,16 +188,18 @@ impl Source for KomiicSource {
 					manga.tags = Some(tags);
 				}
 
-				let is_warning = comic_obj.contains("\"isWarning\":true") 
+				let is_warning = comic_obj.contains("\"isWarning\":true")
 					|| comic_obj.contains("\"isWarning\": true");
-				
+
 				manga.content_rating = if is_warning {
 					ContentRating::NSFW
 				} else {
 					let mut is_suggestive = false;
 					if let Some(ref t) = manga.tags {
 						for tag in t {
-							if ["後宮", "BL", "百合", "耽美", "血腥", "暴力", "獵奇"].contains(&tag.as_str()) {
+							if ["後宮", "BL", "百合", "耽美", "血腥", "暴力", "獵奇"]
+								.contains(&tag.as_str())
+							{
 								is_suggestive = true;
 								break;
 							}
@@ -311,12 +310,16 @@ impl Home for KomiicSource {
 			],
 		}));
 
-		let recent_vars =
-			r#"{"pagination":{"limit":20,"offset":0,"orderBy":"DATE_UPDATED","status":"","asc":true}}"#;
-		let hot_vars =
-			r#"{"pagination":{"limit":20,"offset":0,"orderBy":"MONTH_VIEWS","status":"","asc":true}}"#;
+		let recent_vars = r#"{"pagination":{"limit":20,"offset":0,"orderBy":"DATE_UPDATED","status":"","asc":true}}"#;
+		let hot_vars = r#"{"pagination":{"limit":20,"offset":0,"orderBy":"MONTH_VIEWS","status":"","asc":true}}"#;
 		let rows = [
-			(RECENT_UPDATE_QUERY, recent_vars, "recentUpdate", "recent", "最近更新"),
+			(
+				RECENT_UPDATE_QUERY,
+				recent_vars,
+				"recentUpdate",
+				"recent",
+				"最近更新",
+			),
 			(HOT_COMICS_QUERY, hot_vars, "hotComics", "hot", "本月最夯"),
 		];
 
@@ -386,12 +389,7 @@ impl Home for KomiicSource {
 }
 
 impl BasicLoginHandler for KomiicSource {
-	fn handle_basic_login(
-		&self,
-		_key: String,
-		username: String,
-		password: String,
-	) -> Result<bool> {
+	fn handle_basic_login(&self, _key: String, username: String, password: String) -> Result<bool> {
 		match auth::login(&username, &password) {
 			auth::LoginOutcome::Token(token) => {
 				auth::set_token(&token);
@@ -494,25 +492,19 @@ impl DynamicSettings for KomiicSource {
 }
 
 impl ImageRequestProvider for KomiicSource {
-	fn get_image_request(
-		&self,
-		url: String,
-		_context: Option<PageContext>,
-	) -> Result<Request> {
-		if url.starts_with("komiickid://") {
-			let kid = &url[12..];
-			
+	fn get_image_request(&self, url: String, _context: Option<PageContext>) -> Result<Request> {
+		if let Some(kid) = url.strip_prefix("komiickid://") {
 			// Fetch ticket for this specific image kid (lazy loading)
 			let kids_json = format!(r#"["{}"]"#, kid);
 			let ticket_vars = format!(r#"{{"kids":{}}}"#, kids_json);
-			
+
 			if let Ok(ticket_body) = gql(IMAGE_TICKETS_QUERY, &ticket_vars) {
 				if let Some(tickets_arr) = json_data_field(&ticket_body, "getImageTickets") {
 					let ticket_objects = json_top_level_objects(tickets_arr);
 					if let Some(ticket_obj) = ticket_objects.first() {
 						if let Some(real_url) = json_str_value(ticket_obj, "url") {
 							let ticket = json_str_value(ticket_obj, "ticket").unwrap_or("");
-							
+
 							let request = Request::get(real_url)?
 								.header("Referer", "https://komiic.com")
 								.header("x-image-ticket", ticket);
@@ -523,8 +515,7 @@ impl ImageRequestProvider for KomiicSource {
 			}
 		}
 
-		let request = Request::get(&url)?
-			.header("Referer", "https://komiic.com");
+		let request = Request::get(&url)?.header("Referer", "https://komiic.com");
 
 		Ok(request)
 	}

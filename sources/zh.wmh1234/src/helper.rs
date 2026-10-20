@@ -97,7 +97,12 @@ pub fn reader_url(token: &str) -> String {
 }
 
 /// The catalogue. Every segment combines with the others; `order` defaults to clicks.
-pub fn browse_url(tag: Option<&str>, status: Option<&str>, order: Option<&str>, page: i32) -> String {
+pub fn browse_url(
+	tag: Option<&str>,
+	status: Option<&str>,
+	order: Option<&str>,
+	page: i32,
+) -> String {
 	let mut url = format!("{BASE_URL}/category");
 	if let Some(tag) = tag {
 		url.push_str(&format!("/tags/{tag}"));
@@ -172,7 +177,9 @@ pub fn token_comic_id(token: &str) -> Option<String> {
 }
 
 fn text_of(el: &Element) -> String {
-	el.text().map(|t: String| String::from(t.trim())).unwrap_or_default()
+	el.text()
+		.map(|t: String| String::from(t.trim()))
+		.unwrap_or_default()
 }
 
 /// Image addresses carry `?st=<signature>&e=<expiry>`, valid a day or two, and answer 410
@@ -182,7 +189,9 @@ fn text_of(el: &Element) -> String {
 pub fn cover_url(src: &str) -> String {
 	let src = src.trim();
 	match src.split_once('?') {
-		Some((path, query)) if query.starts_with("st=") || query.contains("&st=") => String::from(path),
+		Some((path, query)) if query.starts_with("st=") || query.contains("&st=") => {
+			String::from(path)
+		}
 		_ => String::from(src),
 	}
 }
@@ -196,7 +205,10 @@ pub const SUGGESTIVE_TAGS: [&str; 6] = ["耽美", "百合", "后宫", "蔷薇", 
 pub fn content_rating<S: AsRef<str>>(tags: &[S]) -> ContentRating {
 	if tags.iter().any(|t: &S| NSFW_TAGS.contains(&t.as_ref())) {
 		ContentRating::NSFW
-	} else if tags.iter().any(|t: &S| SUGGESTIVE_TAGS.contains(&t.as_ref())) {
+	} else if tags
+		.iter()
+		.any(|t: &S| SUGGESTIVE_TAGS.contains(&t.as_ref()))
+	{
 		ContentRating::Suggestive
 	} else {
 		ContentRating::Safe
@@ -349,7 +361,10 @@ pub fn parse_chapters(html: &Document) -> Vec<Chapter> {
 		.into_iter()
 		.flatten()
 	{
-		let Some(key) = link.attr("href").and_then(|href: String| chapter_token(&href)) else {
+		let Some(key) = link
+			.attr("href")
+			.and_then(|href: String| chapter_token(&href))
+		else {
 			continue;
 		};
 		if chapters.iter().any(|c: &Chapter| c.key == key) {
@@ -391,7 +406,10 @@ mod test {
 
 	#[aidoku_test]
 	fn builds_addresses() {
-		assert_eq!(browse_url(None, None, None, 1), "https://m.wmh1234.com/category/page/1");
+		assert_eq!(
+			browse_url(None, None, None, 1),
+			"https://m.wmh1234.com/category/page/1"
+		);
 		assert_eq!(
 			browse_url(Some("17"), Some("2"), Some("addtime"), 3),
 			"https://m.wmh1234.com/category/tags/17/finish/2/order/addtime/page/3"
@@ -401,8 +419,14 @@ mod test {
 			Some("https://m.wmh1234.com/category/order/id/page/2")
 		);
 		assert_eq!(listing_url("top", 1), None);
-		assert_eq!(search_url(" 恋爱 ", 1), "https://m.wmh1234.com/search/%E6%81%8B%E7%88%B1");
-		assert_eq!(search_url("恋爱", 2), "https://m.wmh1234.com/search/%E6%81%8B%E7%88%B1/2");
+		assert_eq!(
+			search_url(" 恋爱 ", 1),
+			"https://m.wmh1234.com/search/%E6%81%8B%E7%88%B1"
+		);
+		assert_eq!(
+			search_url("恋爱", 2),
+			"https://m.wmh1234.com/search/%E6%81%8B%E7%88%B1/2"
+		);
 		assert_eq!(manga_url("47315"), "https://m.wmh1234.com/comic/47315.html");
 		assert_eq!(
 			reader_url("NDczMTUtMzkyNjEwNi1hNWNlMWU3YTZh"),
@@ -413,7 +437,10 @@ mod test {
 	#[aidoku_test]
 	fn reads_ids() {
 		assert_eq!(comic_id("/comic/47315.html").as_deref(), Some("47315"));
-		assert_eq!(comic_id("https://m.wmh1234.com/comic/47315.html?x=1").as_deref(), Some("47315"));
+		assert_eq!(
+			comic_id("https://m.wmh1234.com/comic/47315.html?x=1").as_deref(),
+			Some("47315")
+		);
 		assert_eq!(comic_id("/comic/12a.html"), None);
 		assert_eq!(comic_id("/category/tags/17"), None);
 		assert_eq!(
@@ -421,13 +448,20 @@ mod test {
 			Some("NDczMTUtMzkyNjEwNi1hNWNlMWU3YTZh")
 		);
 		assert_eq!(
-			chapter_token("https://reader.hqread.cc/r/NDczMTUtMzkyNjEwNi1hNWNlMWU3YTZh#top").as_deref(),
+			chapter_token("https://reader.hqread.cc/r/NDczMTUtMzkyNjEwNi1hNWNlMWU3YTZh#top")
+				.as_deref(),
 			Some("NDczMTUtMzkyNjEwNi1hNWNlMWU3YTZh")
 		);
 		assert_eq!(chapter_token("/go/"), None);
-		assert_eq!(token_comic_id("NDczMTUtMzkyNjEwNi1hNWNlMWU3YTZh").as_deref(), Some("47315"));
+		assert_eq!(
+			token_comic_id("NDczMTUtMzkyNjEwNi1hNWNlMWU3YTZh").as_deref(),
+			Some("47315")
+		);
 		// 19天's first chapter: 31 characters, so the padding is missing.
-		assert_eq!(token_comic_id("MTY4MzgtNjMzNzk3LTdlN2RlMDIyMGI").as_deref(), Some("16838"));
+		assert_eq!(
+			token_comic_id("MTY4MzgtNjMzNzk3LTdlN2RlMDIyMGI").as_deref(),
+			Some("16838")
+		);
 		assert_eq!(token_comic_id("not base64!"), None);
 	}
 
@@ -437,8 +471,14 @@ mod test {
 			cover_url("https://wmh1234.wszwhg.net/fmtu/47315/b4.jpg?st=4d39&e=1791763200"),
 			"https://wmh1234.wszwhg.net/fmtu/47315/b4.jpg"
 		);
-		assert_eq!(cover_url("https://example.com/a.jpg?v=2"), "https://example.com/a.jpg?v=2");
-		assert_eq!(cover_url("https://example.com/a.jpg"), "https://example.com/a.jpg");
+		assert_eq!(
+			cover_url("https://example.com/a.jpg?v=2"),
+			"https://example.com/a.jpg?v=2"
+		);
+		assert_eq!(
+			cover_url("https://example.com/a.jpg"),
+			"https://example.com/a.jpg"
+		);
 	}
 
 	#[aidoku_test]
@@ -466,10 +506,14 @@ mod test {
 
 	#[aidoku_test]
 	fn recognises_the_removal_page() {
-		assert!(is_delisted_page(&doc(include_str!("fixtures/delisted.html"))));
+		assert!(is_delisted_page(&doc(include_str!(
+			"fixtures/delisted.html"
+		))));
 		assert!(!is_delisted_page(&doc(include_str!("fixtures/manga.html"))));
 		// A page that is neither, such as the reader's 503, is not a removal.
-		assert!(!is_delisted_page(&doc(include_str!("fixtures/syncing.html"))));
+		assert!(!is_delisted_page(&doc(include_str!(
+			"fixtures/syncing.html"
+		))));
 	}
 
 	#[aidoku_test]
@@ -488,7 +532,8 @@ mod test {
 
 	#[aidoku_test]
 	fn reads_the_details_page() {
-		let manga = parse_details(&doc(include_str!("fixtures/manga.html")), "47315").expect("details");
+		let manga =
+			parse_details(&doc(include_str!("fixtures/manga.html")), "47315").expect("details");
 		assert_eq!(manga.title, "恋爱四选一");
 		assert_eq!(
 			manga.authors,
@@ -504,15 +549,21 @@ mod test {
 			manga.cover.as_deref(),
 			Some("https://wmh1234.wszwhg.net/fmtu/47315/b44744c83d8e4ffdb8c244826de5c7af.jpg")
 		);
-		assert!(manga.description.as_deref().unwrap_or_default().starts_with("认为恋爱是奢侈"));
+		assert!(manga
+			.description
+			.as_deref()
+			.unwrap_or_default()
+			.starts_with("认为恋爱是奢侈"));
 
-		let jp = parse_details(&doc(include_str!("fixtures/manga_jp.html")), "26111").expect("details");
+		let jp =
+			parse_details(&doc(include_str!("fixtures/manga_jp.html")), "26111").expect("details");
 		assert_eq!(jp.title, "蓝色监狱");
 		assert_eq!(jp.authors.as_ref().map(|a: &Vec<String>| a.len()), Some(4));
 		assert_eq!(jp.viewer, Viewer::RightToLeft);
 		assert_eq!(jp.content_rating, ContentRating::Safe);
 
-		let empty = parse_details(&doc(include_str!("fixtures/manga_empty.html")), "1302").expect("details");
+		let empty = parse_details(&doc(include_str!("fixtures/manga_empty.html")), "1302")
+			.expect("details");
 		assert_eq!(empty.title, "降妖伏魔录");
 		assert_eq!(empty.status, MangaStatus::Completed);
 		assert!(parse_chapters(&doc(include_str!("fixtures/manga_empty.html"))).is_empty());

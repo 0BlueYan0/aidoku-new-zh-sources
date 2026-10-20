@@ -121,7 +121,10 @@ pub fn append_page(html: &Document, chapter_id: u64, out: &mut Vec<Segment>) {
 				}
 			}
 			Block::Image(src) => {
-				if !out.iter().any(|s: &Segment| matches!(s, Segment::Image(seen) if *seen == src)) {
+				if !out
+					.iter()
+					.any(|s: &Segment| matches!(s, Segment::Image(seen) if *seen == src))
+				{
 					out.push(Segment::Image(src));
 				}
 			}
@@ -138,7 +141,9 @@ pub fn markdown(segments: &[Segment], mut image: impl FnMut(&str) -> String) -> 
 		}
 		match segment {
 			Segment::Text(text) => out.push_str(text),
-			Segment::Image(src) => out.push_str(&format!("![](<{}>)", image(src).replace('>', "%3E"))),
+			Segment::Image(src) => {
+				out.push_str(&format!("![](<{}>)", image(src).replace('>', "%3E")))
+			}
 		}
 	}
 	out
@@ -156,7 +161,10 @@ fn inline_markdown(html: &str) -> String {
 /// Characters Markdown would treat as syntax at the start of or inside a paragraph.
 fn escape(text: &str, out: &mut String) {
 	for ch in text.chars() {
-		if matches!(ch, '\\' | '`' | '*' | '_' | '[' | ']' | '#' | '<' | '>' | '|' | '~') {
+		if matches!(
+			ch,
+			'\\' | '`' | '*' | '_' | '[' | ']' | '#' | '<' | '>' | '|' | '~'
+		) {
 			out.push('\\');
 		}
 		out.push(ch);
@@ -193,7 +201,9 @@ fn decode_entities(text: &str) -> String {
 			"apos" | "#039" => Some('\''),
 			"nbsp" => Some(' '),
 			_ if name.starts_with("#x") || name.starts_with("#X") => {
-				u32::from_str_radix(&name[2..], 16).ok().and_then(char::from_u32)
+				u32::from_str_radix(&name[2..], 16)
+					.ok()
+					.and_then(char::from_u32)
 			}
 			_ if name.starts_with('#') => name[1..].parse::<u32>().ok().and_then(char::from_u32),
 			_ => None,
@@ -321,7 +331,10 @@ mod test {
 	}
 
 	fn paragraphs(markdown: &str) -> Vec<&str> {
-		markdown.split("\n\n").filter(|p: &&str| !p.is_empty()).collect()
+		markdown
+			.split("\n\n")
+			.filter(|p: &&str| !p.is_empty())
+			.collect()
 	}
 
 	#[aidoku_test]
@@ -344,8 +357,14 @@ mod test {
 		let p = paragraphs(&out);
 		// 118 paragraphs and the one illustration the browser shows.
 		assert_eq!(p.len(), 119);
-		assert_eq!(p[20], "「不過啊，會說『女人味』這種話，更代表你是個蕩婦。」");
-		assert_eq!(p[50], "反觀雪之下，她的頭腦靈活又伶牙俐齒，胸前則像一塊洗衣板。");
+		assert_eq!(
+			p[20],
+			"「不過啊，會說『女人味』這種話，更代表你是個蕩婦。」"
+		);
+		assert_eq!(
+			p[50],
+			"反觀雪之下，她的頭腦靈活又伶牙俐齒，胸前則像一塊洗衣板。"
+		);
 		assert_eq!(p[118], "「就、就是說嘛，很奇怪呢～～」");
 		assert!(p.contains(&"![](<https://img3.readpai.com/0/2/109088/199061.jpg>)"));
 	}
@@ -375,7 +394,9 @@ mod test {
 			.collect();
 		// The six on the page and the eighteen hidden ones.
 		assert_eq!(images.len(), 24);
-		assert!(images.iter().all(|src: &&String| src.starts_with("https://img3.readpai.com/")));
+		assert!(images
+			.iter()
+			.all(|src: &&String| src.starts_with("https://img3.readpai.com/")));
 	}
 
 	#[aidoku_test]
@@ -387,8 +408,14 @@ mod test {
 
 	#[aidoku_test]
 	fn inline_html_to_text() {
-		assert_eq!(inline_markdown("A&amp;B <ruby>漢<rp>(</rp><rt>かん</rt><rp>)</rp></ruby>*"), "A&B 漢（かん）\\*");
+		assert_eq!(
+			inline_markdown("A&amp;B <ruby>漢<rp>(</rp><rt>かん</rt><rp>)</rp></ruby>*"),
+			"A&B 漢（かん）\\*"
+		);
 		assert_eq!(inline_markdown("一<br>二"), "一  \n二");
-		assert_eq!(plain_text("「我的青春」<br />\n<br />\n高中生"), "「我的青春」\n高中生");
+		assert_eq!(
+			plain_text("「我的青春」<br />\n<br />\n高中生"),
+			"「我的青春」\n高中生"
+		);
 	}
 }

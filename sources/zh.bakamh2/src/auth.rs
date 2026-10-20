@@ -20,8 +20,8 @@ use aidoku::{
 };
 
 use crate::helper::{
-	base_url, fetch_html, fetch_text, is_challenge, is_signed_in, is_site_page,
-	login_nonce, logout_url, relay_url, site_get, site_post, user_name, check_relay_status,
+	base_url, check_relay_status, fetch_html, fetch_text, is_challenge, is_signed_in, is_site_page,
+	login_nonce, logout_url, relay_url, site_get, site_post, user_name,
 };
 
 const USERNAME_KEY: &str = "auth_username";
@@ -94,7 +94,10 @@ pub fn note_site_session(signed_in: bool) {
 	}
 	let marked = defaults_get::<String>(LOGIN_ITEM_KEY).is_some_and(|v| !v.is_empty());
 	if signed_in && !marked {
-		defaults_set(LOGIN_ITEM_KEY, DefaultValue::String(String::from("logged_in")));
+		defaults_set(
+			LOGIN_ITEM_KEY,
+			DefaultValue::String(String::from("logged_in")),
+		);
 	} else if !signed_in && marked {
 		set_timestamp(MARK_CLEARED_AT_KEY, current_date());
 		defaults_set(LOGIN_ITEM_KEY, DefaultValue::Null);
@@ -209,7 +212,10 @@ pub fn login(username: &str, password: &str) -> LoginOutcome {
 		return LoginOutcome::Unreachable;
 	};
 	let Ok(response) = request
-		.header("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+		.header(
+			"Content-Type",
+			"application/x-www-form-urlencoded; charset=UTF-8",
+		)
 		.header("Referer", &format!("{}/", base_url()))
 		.body(body.as_bytes())
 		.send()
@@ -308,7 +314,9 @@ fn end_site_session(base: &str) {
 	let page = site_get(&home)
 		.ok()
 		.and_then(|request| request.timeout(LOGOUT_TIMEOUT).send().ok())
-		.filter(|response| relay_url(&home).is_none() || check_relay_status(&home, response).is_ok())
+		.filter(|response| {
+			relay_url(&home).is_none() || check_relay_status(&home, response).is_ok()
+		})
 		.and_then(|response| response.get_string().ok())
 		.and_then(|text| Html::parse_with_url(&text, &home).ok())
 		.filter(|doc| !is_challenge(doc));

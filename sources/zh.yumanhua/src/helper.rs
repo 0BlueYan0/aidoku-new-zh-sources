@@ -73,7 +73,10 @@ pub const HOME_TITLES: [(&str, &str); 5] = [
 pub const SUGGESTIVE_TAGS: [&str; 2] = ["耽美", "后宫"];
 
 pub fn content_rating<S: AsRef<str>>(tags: &[S]) -> ContentRating {
-	if tags.iter().any(|t: &S| SUGGESTIVE_TAGS.contains(&t.as_ref())) {
+	if tags
+		.iter()
+		.any(|t: &S| SUGGESTIVE_TAGS.contains(&t.as_ref()))
+	{
 		ContentRating::Suggestive
 	} else {
 		ContentRating::Safe
@@ -121,7 +124,10 @@ pub fn post_list_with(path: &str, form: &str, retry: bool) -> Result<Option<Stri
 	let url = format!("{BASE_URL}{path}");
 	let build = || {
 		Ok(Request::post(&url)?
-			.header("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+			.header(
+				"Content-Type",
+				"application/x-www-form-urlencoded; charset=UTF-8",
+			)
 			.body(form.as_bytes()))
 	};
 	let response = if retry {
@@ -287,7 +293,10 @@ pub fn json_string(obj: &str, key: &str) -> Option<String> {
 
 /// The string elements of a top-level JSON array, e.g. the decoded image list.
 pub fn json_top_strings(array: &str) -> Vec<String> {
-	json_items(array).into_iter().filter_map(as_string).collect()
+	json_items(array)
+		.into_iter()
+		.filter_map(as_string)
+		.collect()
 }
 
 /// Decode JSON string escapes, including surrogate pairs.
@@ -375,7 +384,15 @@ fn site_path(href: &str) -> &str {
 /// The site's own pages and endpoints, which share the shape of a work's address
 /// (`/rank/`, `/s`). Work ids are not checked by length: only 7-letter ones were seen.
 const SITE_PATHS: [&str; 9] = [
-	"rank", "sort", "data", "static", "user", "s", "login", "register", "morechapter",
+	"rank",
+	"sort",
+	"data",
+	"static",
+	"user",
+	"s",
+	"login",
+	"register",
+	"morechapter",
 ];
 
 /// `/trsKtGi/` → `trsKtGi`; a shared address may lack the final slash. Site pages such as
@@ -400,7 +417,9 @@ pub fn chapter_keys(href: &str) -> Option<(String, String)> {
 // ---------------------------------------------------------------------------
 
 fn text_of(el: &Element) -> String {
-	el.text().map(|t: String| String::from(t.trim())).unwrap_or_default()
+	el.text()
+		.map(|t: String| String::from(t.trim()))
+		.unwrap_or_default()
 }
 
 /// Covers are lazily loaded: `src` is a placeholder and `data-src` the image.
@@ -467,7 +486,10 @@ pub fn page_result(data: &str, page: i32) -> MangaPageResult {
 pub fn parse_home(html: &Document) -> Vec<(String, Vec<Manga>)> {
 	let mut sections = Vec::new();
 	for section in html.select(".mults").into_iter().flatten() {
-		let Some(heading) = section.select_first(".mult-head").map(|el: Element| text_of(&el)) else {
+		let Some(heading) = section
+			.select_first(".mult-head")
+			.map(|el: Element| text_of(&el))
+		else {
 			continue;
 		};
 		let title = HOME_TITLES
@@ -476,7 +498,11 @@ pub fn parse_home(html: &Document) -> Vec<(String, Vec<Manga>)> {
 			.map(|(_, shown): &(&str, &str)| String::from(*shown))
 			.unwrap_or(heading);
 		let mut entries: Vec<Manga> = Vec::new();
-		for link in section.select(".mult-body li a[href]").into_iter().flatten() {
+		for link in section
+			.select(".mult-body li a[href]")
+			.into_iter()
+			.flatten()
+		{
 			let Some(key) = link.attr("href").and_then(|h: String| manga_key(&h)) else {
 				continue;
 			};
@@ -488,7 +514,9 @@ pub fn parse_home(html: &Document) -> Vec<(String, Vec<Manga>)> {
 			if name.is_empty() || entries.iter().any(|m: &Manga| m.key == key) {
 				continue;
 			}
-			let cover = link.select_first("img").and_then(|img: Element| lazy_src(&img));
+			let cover = link
+				.select_first("img")
+				.and_then(|img: Element| lazy_src(&img));
 			entries.push(card(key, name, cover, Vec::new()));
 		}
 		sections.push((title, entries));
@@ -506,7 +534,10 @@ pub fn parse_rank_html(html: &Document) -> Vec<Manga> {
 		let Some(key) = link.attr("href").and_then(|h: String| manga_key(&h)) else {
 			continue;
 		};
-		let title = link.select_first("h2").map(|el: Element| text_of(&el)).unwrap_or_default();
+		let title = link
+			.select_first("h2")
+			.map(|el: Element| text_of(&el))
+			.unwrap_or_default();
 		if title.is_empty() || entries.iter().any(|m: &Manga| m.key == key) {
 			continue;
 		}
@@ -515,7 +546,9 @@ pub fn parse_rank_html(html: &Document) -> Vec<Manga> {
 			.select_first("p")
 			.map(|el: Element| split_authors(&text_of(&el)))
 			.unwrap_or_default();
-		let cover = item.select_first("img.cartoon-poster").and_then(|img: Element| lazy_src(&img));
+		let cover = item
+			.select_first("img.cartoon-poster")
+			.and_then(|img: Element| lazy_src(&img));
 		entries.push(card(key, title, cover, authors));
 	}
 	entries
@@ -601,7 +634,11 @@ pub fn has_more_chapters(html: &Document) -> bool {
 /// The chapters on the details page, newest first, as the app wants.
 pub fn parse_page_chapters(html: &Document, manga_key: &str) -> Vec<Chapter> {
 	let mut chapters: Vec<Chapter> = Vec::new();
-	for link in html.select(".chaplist-box li a[href]").into_iter().flatten() {
+	for link in html
+		.select(".chaplist-box li a[href]")
+		.into_iter()
+		.flatten()
+	{
 		let Some((manga, key)) = link.attr("href").and_then(|h: String| chapter_keys(&h)) else {
 			continue;
 		};
@@ -657,11 +694,17 @@ mod test {
 	#[aidoku_test]
 	fn reads_keys() {
 		assert_eq!(manga_key("/trsKtGi/").as_deref(), Some("trsKtGi"));
-		assert_eq!(manga_key("http://yumanhua.com/trsKtGi/?a=1").as_deref(), Some("trsKtGi"));
+		assert_eq!(
+			manga_key("http://yumanhua.com/trsKtGi/?a=1").as_deref(),
+			Some("trsKtGi")
+		);
 		assert_eq!(manga_key("/rank/1"), None);
 		assert_eq!(manga_key("http://yumanhua.com/rank/"), None);
 		assert_eq!(manga_key("/sort/"), None);
-		assert_eq!(manga_key("http://yumanhua.com/trsKtGi").as_deref(), Some("trsKtGi"));
+		assert_eq!(
+			manga_key("http://yumanhua.com/trsKtGi").as_deref(),
+			Some("trsKtGi")
+		);
 		assert_eq!(manga_key("/rank"), None);
 		assert_eq!(manga_key("http://yumanhua.com/s"), None);
 		assert_eq!(chapter_keys("/rank/1.html"), None);
@@ -674,16 +717,28 @@ mod test {
 		assert_eq!(chapter_keys("/trsKtGi/"), None);
 		assert_eq!(chapter_keys("/static/js/all.js"), None);
 		assert_eq!(manga_url("trsKtGi"), "http://yumanhua.com/trsKtGi/");
-		assert_eq!(chapter_url("trsKtGi", "IVpdIdWF"), "http://yumanhua.com/trsKtGi/IVpdIdWF.html");
-		assert_eq!(search_form("斗破 苍穹"), "k=%E6%96%97%E7%A0%B4%20%E8%8B%8D%E7%A9%B9");
+		assert_eq!(
+			chapter_url("trsKtGi", "IVpdIdWF"),
+			"http://yumanhua.com/trsKtGi/IVpdIdWF.html"
+		);
+		assert_eq!(
+			search_form("斗破 苍穹"),
+			"k=%E6%96%97%E7%A0%B4%20%E8%8B%8D%E7%A9%B9"
+		);
 		assert_eq!(sort_form("6", 2), "s=6&p=2");
 	}
 
 	#[aidoku_test]
 	fn splits_authors() {
-		assert_eq!(split_authors("Fleecy cloud · 2love/SHYATAN"), ["Fleecy cloud", "2love", "SHYATAN"]);
+		assert_eq!(
+			split_authors("Fleecy cloud · 2love/SHYATAN"),
+			["Fleecy cloud", "2love", "SHYATAN"]
+		);
 		assert_eq!(split_authors("J·K·罗琳"), ["J·K·罗琳"]);
-		assert_eq!(split_authors("DUBU（REDICE STUDIO)"), ["DUBU（REDICE STUDIO)"]);
+		assert_eq!(
+			split_authors("DUBU（REDICE STUDIO)"),
+			["DUBU（REDICE STUDIO)"]
+		);
 	}
 
 	#[aidoku_test]
@@ -718,8 +773,15 @@ mod test {
 		assert_eq!(list.len(), 20);
 		assert_eq!(list[0].key, "CmLCgCl");
 		assert_eq!(list[0].title, "无根之树");
-		assert_eq!(list[0].authors.as_deref(), Some(&[String::from("mark")][..]));
-		assert!(list[0].cover.as_deref().unwrap().starts_with("https://p6.ecombdimg.com/"));
+		assert_eq!(
+			list[0].authors.as_deref(),
+			Some(&[String::from("mark")][..])
+		);
+		assert!(list[0]
+			.cover
+			.as_deref()
+			.unwrap()
+			.starts_with("https://p6.ecombdimg.com/"));
 		let data = json_field(sort, "data").unwrap();
 		assert!(page_result(data, 1).has_next_page);
 		assert!(!page_result(data, MAX_PAGES).has_next_page);
@@ -735,16 +797,25 @@ mod test {
 		assert!(list.iter().all(|m: &Manga| m.title.contains("斗破")));
 		assert!(list.len() < PAGE_SIZE);
 
-		for empty in [include_str!("fixtures/sort_end.json"), include_str!("fixtures/search_empty.json")] {
+		for empty in [
+			include_str!("fixtures/sort_end.json"),
+			include_str!("fixtures/search_empty.json"),
+		] {
 			let code = json_string(empty, "code");
-			assert!(matches!(code.as_deref(), Some("-1") | Some("201")), "{code:?}");
+			assert!(
+				matches!(code.as_deref(), Some("-1") | Some("201")),
+				"{code:?}"
+			);
 		}
 	}
 
 	#[aidoku_test]
 	fn parses_home() {
 		let sections = parse_home(&doc(include_str!("fixtures/home.html")));
-		let titles: Vec<&str> = sections.iter().map(|(t, _): &(String, Vec<Manga>)| t.as_str()).collect();
+		let titles: Vec<&str> = sections
+			.iter()
+			.map(|(t, _): &(String, Vec<Manga>)| t.as_str())
+			.collect();
 		let shown: Vec<&str> = HOME_TITLES.iter().map(|(_, s): &(&str, &str)| *s).collect();
 		assert_eq!(titles, shown);
 		for (title, entries) in &sections {
@@ -762,7 +833,9 @@ mod test {
 		assert_eq!(list[0].key, "TREEcUf");
 		assert_eq!(list[0].title, "我获得了神级装备");
 		assert!(list.iter().all(|m: &Manga| m.cover.is_some()));
-		assert!(list.iter().all(|m: &Manga| m.content_rating == ContentRating::Safe));
+		assert!(list
+			.iter()
+			.all(|m: &Manga| m.content_rating == ContentRating::Safe));
 	}
 
 	#[aidoku_test]
@@ -770,20 +843,36 @@ mod test {
 		let html = doc(include_str!("fixtures/details.html"));
 		let manga = parse_details(&html, "trsKtGi").expect("details");
 		assert_eq!(manga.title, "火影忍者");
-		assert_eq!(manga.authors.as_deref(), Some(&[String::from("岸本齐史")][..]));
+		assert_eq!(
+			manga.authors.as_deref(),
+			Some(&[String::from("岸本齐史")][..])
+		);
 		assert_eq!(
 			manga.tags.as_deref(),
-			Some(&[String::from("冒险"), String::from("热血"), String::from("少年")][..])
+			Some(
+				&[
+					String::from("冒险"),
+					String::from("热血"),
+					String::from("少年")
+				][..]
+			)
 		);
 		assert_eq!(manga.content_rating, ContentRating::Safe);
-		assert!(manga.description.as_deref().unwrap().starts_with("从小身上封印着"));
+		assert!(manga
+			.description
+			.as_deref()
+			.unwrap()
+			.starts_with("从小身上封印着"));
 		assert!(manga.cover.is_some());
 
 		assert!(has_more_chapters(&html));
 		let mut chapters = parse_page_chapters(&html, "trsKtGi");
 		assert_eq!(chapters.len(), 20);
 		assert_eq!(chapters[0].key, "IVpdIdWF");
-		assert_eq!(chapters[0].title.as_deref(), Some("702 701-2 漩涡中的旋风②"));
+		assert_eq!(
+			chapters[0].title.as_deref(),
+			Some("702 701-2 漩涡中的旋风②")
+		);
 		let more = include_str!("fixtures/morechapter.json");
 		append_more_chapters(&mut chapters, json_field(more, "data").unwrap(), "trsKtGi");
 		assert_eq!(chapters.len(), 546);

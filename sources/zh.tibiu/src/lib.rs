@@ -3,10 +3,7 @@
 use aidoku::{
 	alloc::{String, Vec},
 	helpers::uri::encode_uri_component,
-	imports::{
-		net::Request,
-		std::send_partial_result,
-	},
+	imports::{net::Request, std::send_partial_result},
 	prelude::*,
 	Chapter, DeepLinkHandler, DeepLinkResult, FilterValue, Home, HomeComponent, HomeComponentValue,
 	HomeLayout, HomePartialResult, ImageRequestProvider, Link, Listing, ListingProvider, Manga,
@@ -332,10 +329,7 @@ impl DeepLinkHandler for TibiuSource {
 }
 
 fn trim_url_tail(segment: &str) -> &str {
-	segment
-		.split(['?', '#'])
-		.next()
-		.unwrap_or(segment)
+	segment.split(['?', '#']).next().unwrap_or(segment)
 }
 
 register_source!(

@@ -30,10 +30,12 @@ fn api_page_with(path: &str, number: &str, page: i32, retry: bool) -> Result<Man
 	if page > MAX_PAGES {
 		return Ok(empty_page());
 	}
-	Ok(match post_list_with(path, &sort_form(number, page), retry)? {
-		Some(data) => page_result(&data, page),
-		None => empty_page(),
-	})
+	Ok(
+		match post_list_with(path, &sort_form(number, page), retry)? {
+			Some(data) => page_result(&data, page),
+			None => empty_page(),
+		},
+	)
 }
 
 struct YumanhuaSource;
@@ -280,7 +282,9 @@ mod test {
 		);
 		assert_eq!(
 			source
-				.handle_deep_link(String::from("http://www.yumanhua.com/trsKtGi/IVpdIdWF.html"))
+				.handle_deep_link(String::from(
+					"http://www.yumanhua.com/trsKtGi/IVpdIdWF.html"
+				))
 				.unwrap(),
 			Some(DeepLinkResult::Chapter {
 				manga_key: String::from("trsKtGi"),

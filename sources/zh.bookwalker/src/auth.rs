@@ -174,7 +174,10 @@ fn refresh_archived_if_stale() {
 	}
 	// Advance the gate before the request, so several manga updating at once fetch the
 	// shelf only once (the zh.komiic2 rule).
-	defaults_set(ARCHIVED_AT_KEY, DefaultValue::String(current_date().to_string()));
+	defaults_set(
+		ARCHIVED_AT_KEY,
+		DefaultValue::String(current_date().to_string()),
+	);
 
 	let url = format!("{BASE_URL}{ARCHIVE_PATH}");
 	let Some(html) = bookcase_request(&url, &cookie)
@@ -192,13 +195,19 @@ fn refresh_archived_if_stale() {
 		.into_iter()
 		.flat_map(|card| card.product_ids)
 		.collect();
-	println!("[bookwalker] archive shelf has {} archived volumes", ids.len());
+	println!(
+		"[bookwalker] archive shelf has {} archived volumes",
+		ids.len()
+	);
 	defaults_set(ARCHIVED_IDS_KEY, DefaultValue::String(ids.join(",")));
 }
 
 /// Reads the bookcase with `header`; `Some(count)` when the page really is the bookcase.
 fn verify(header: &str) -> Option<i32> {
-	let html = bookcase_request(&bookcase_url(), header).ok()?.html().ok()?;
+	let html = bookcase_request(&bookcase_url(), header)
+		.ok()?
+		.html()
+		.ok()?;
 	is_bookcase(&html).then(|| parse_bookcase(&html).len() as i32)
 }
 

@@ -61,13 +61,19 @@ pub fn claim_if_due(now: i64) -> bool {
 pub fn record(reply: &Reply, now: i64) {
 	match reply {
 		Reply::Ok(value) => {
-			println!("[lightnovel] sign in: ok {value}, gate -> {}", next_site_day(now));
+			println!(
+				"[lightnovel] sign in: ok {value}, gate -> {}",
+				next_site_day(now)
+			);
 			set_timestamp(NEXT_KEY, next_site_day(now));
 			set_timestamp(SIGNED_ON_KEY, site_day(now));
 			set_string(LAST_ERROR_KEY, "");
 		}
 		Reply::Refused(status, msg) => {
-			println!("[lightnovel] sign in: refused {status}: {msg}, gate -> {}", next_site_day(now));
+			println!(
+				"[lightnovel] sign in: refused {status}: {msg}, gate -> {}",
+				next_site_day(now)
+			);
 			set_timestamp(NEXT_KEY, next_site_day(now));
 			// The site answers `500: 今日已签到` when the day is already signed (device,
 			// 2026-10-01), e.g. after a logout cleared `signed_on`. Nothing to act on.

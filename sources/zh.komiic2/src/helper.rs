@@ -39,18 +39,15 @@ pub const ALL_CATEGORY_QUERY: &str = r#"query allCategory { allCategory { id nam
 /// query anonymously when the token is dead, so this one is used to probe it.
 pub const ACCOUNT_QUERY: &str = r#"query account { account { id email nickname __typename } }"#;
 
-pub const IMAGE_LIMIT_QUERY: &str = r#"query getImageLimit { getImageLimit { limit usage resetInSeconds __typename } }"#;
+pub const IMAGE_LIMIT_QUERY: &str =
+	r#"query getImageLimit { getImageLimit { limit usage resetInSeconds __typename } }"#;
 
 // ---------------------------------------------------------------------------
 // GraphQL request helper
 // ---------------------------------------------------------------------------
 
 /// Build a single GraphQL POST to the Komiic API without sending it.
-pub fn graphql_build(
-	query: &str,
-	variables: &str,
-	token: Option<&str>,
-) -> aidoku::Result<Request> {
+pub fn graphql_build(query: &str, variables: &str, token: Option<&str>) -> aidoku::Result<Request> {
 	let ts = current_date();
 	let api_url = format!("{API_URL}?_={ts}");
 
@@ -369,7 +366,7 @@ pub fn parse_comic(obj: &str) -> Option<Manga> {
 	let title = json_str_value(obj, "title")?;
 
 	let image_url = json_str_value(obj, "imageUrl");
-	let cover = image_url.map(|u| String::from(u));
+	let cover = image_url.map(String::from);
 
 	let status_str = json_str_value(obj, "status").unwrap_or("UNKNOWN");
 	let status = match status_str {

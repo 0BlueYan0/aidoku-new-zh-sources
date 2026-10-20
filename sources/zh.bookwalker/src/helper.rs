@@ -185,8 +185,14 @@ mod tests {
 
 	#[aidoku_test]
 	fn strips_volume_suffix() {
-		assert_eq!(series_title("ATRI -My Dear Moments- (4)"), "ATRI -My Dear Moments-");
-		assert_eq!(series_title("靠死亡遊戲混飯吃。 (12)"), "靠死亡遊戲混飯吃。");
+		assert_eq!(
+			series_title("ATRI -My Dear Moments- (4)"),
+			"ATRI -My Dear Moments-"
+		);
+		assert_eq!(
+			series_title("靠死亡遊戲混飯吃。 (12)"),
+			"靠死亡遊戲混飯吃。"
+		);
 		assert_eq!(series_title("沒有集數的書"), "沒有集數的書");
 		assert_eq!(series_title("書名 (上)"), "書名 (上)");
 		assert_eq!(volume_number("敗北女角太多了！@comic (3)"), Some(3.0));
@@ -196,10 +202,19 @@ mod tests {
 	#[aidoku_test]
 	fn reads_query_values() {
 		assert_eq!(
-			query_value("https://www.bookwalker.com.tw/bookcase/available_book_list?s=29604", "s"),
+			query_value(
+				"https://www.bookwalker.com.tw/bookcase/available_book_list?s=29604",
+				"s"
+			),
 			Some("29604".to_string())
 		);
-		assert_eq!(query_value("https://www.bookwalker.com.tw/browserViewer/266673/read", "s"), None);
+		assert_eq!(
+			query_value(
+				"https://www.bookwalker.com.tw/browserViewer/266673/read",
+				"s"
+			),
+			None
+		);
 	}
 
 	/// Structure copied from the live bookcase (`buy?sd=1`, 2026-09-23), names replaced.
@@ -288,7 +303,10 @@ mod tests {
 
 	#[aidoku_test]
 	fn login_page_is_not_a_bookcase() {
-		let html = aidoku::imports::html::Html::parse("<html><body><form id=\"login\"></form></body></html>").unwrap();
+		let html = aidoku::imports::html::Html::parse(
+			"<html><body><form id=\"login\"></form></body></html>",
+		)
+		.unwrap();
 		assert!(!is_bookcase(&html));
 		assert!(parse_bookcase(&html).is_empty());
 	}

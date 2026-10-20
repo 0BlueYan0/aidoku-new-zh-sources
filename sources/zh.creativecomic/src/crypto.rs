@@ -130,11 +130,11 @@ mod test {
 
 	// A synthetic key pair and the matching fixtures, produced offline with openssl so
 	// the tests never depend on live site data (which would rot when keys rotate).
-	const TEST_KEY_HEX: &str =
-		"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+	const TEST_KEY_HEX: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 	const TEST_IV_HEX: &str = "fedcba9876543210fedcba9876543210";
 	const WRAPPED_KEY: &str = "VWRsoDe26w2k/hJKuCOJ6fv75y38gXRENC7XB/sWaiZZvGowQCWhKCJAjmcAGwGletfjFcG4SwDbvsVgC6v5uaIpe5YrL278Qogn1WshBK/VeD+gBWcvXiWd4YQU1x1vZKGZWIwpMkRaqmclpUCxEQ==";
-	const PAGE_CIPHERTEXT: &str = "x0W4dbklvjwJh2RBLHzrKOQQkUFwbLlDNKo3ET75U+eyDdChtWE9W4glCQBR0CDn";
+	const PAGE_CIPHERTEXT: &str =
+		"x0W4dbklvjwJh2RBLHzrKOQQkUFwbLlDNKo3ET75U+eyDdChtWE9W4glCQBR0CDn";
 
 	/// SHA-512 of a fixed string never changes, so these constants pin the derivation
 	/// permanently. The iv starting mid-byte-15 is the easiest part to get wrong.

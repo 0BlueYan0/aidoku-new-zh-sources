@@ -204,7 +204,10 @@ mod test {
 	fn listing_names_match_source_json() {
 		let json = include_str!("../res/source.json");
 		for (title, id) in HOME_ROWS {
-			assert!(json.contains(&format!("\"id\": \"{id}\",\n\t\t\t\"name\": \"{title}\"")), "{id}");
+			assert!(
+				json.contains(&format!("\"id\": \"{id}\",\n\t\t\t\"name\": \"{title}\"")),
+				"{id}"
+			);
 			assert!(listing_url(id).is_some(), "{id}");
 		}
 	}

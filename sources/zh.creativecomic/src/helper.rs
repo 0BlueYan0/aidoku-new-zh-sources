@@ -290,8 +290,7 @@ pub fn encode_component(value: &str) -> String {
 	const HEX: &[u8; 16] = b"0123456789ABCDEF";
 	let mut out = String::new();
 	for byte in value.as_bytes() {
-		let unreserved = byte.is_ascii_alphanumeric()
-			|| matches!(byte, b'-' | b'_' | b'.' | b'~');
+		let unreserved = byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~');
 		if unreserved {
 			out.push(*byte as char);
 		} else {
@@ -414,8 +413,7 @@ pub fn chapter_number(vol_name: Option<&str>) -> Option<f32> {
 			if character.is_ascii_digit() {
 				index += 1;
 			} else if character == '.'
-				&& !seen_dot
-				&& characters.get(index + 1).is_some_and(char::is_ascii_digit)
+				&& !seen_dot && characters.get(index + 1).is_some_and(char::is_ascii_digit)
 			{
 				seen_dot = true;
 				index += 1;

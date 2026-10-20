@@ -34,7 +34,10 @@ fn empty_page() -> MangaPageResult {
 }
 
 fn rank_heading(id: &str) -> Option<&'static str> {
-	RANKS.iter().find(|(rank, _)| *rank == id).map(|(_, heading)| *heading)
+	RANKS
+		.iter()
+		.find(|(rank, _)| *rank == id)
+		.map(|(_, heading)| *heading)
 }
 
 struct MsxhmSource;
@@ -76,8 +79,14 @@ impl Source for MsxhmSource {
 		match query {
 			// The search has one page of 20 and ignores `page`; a second page would repeat it.
 			Some(_) if page > 1 => Ok(empty_page()),
-			Some(query) => Ok(parse_manga_list(&fetch_html(&search_url(&base, &query))?, &base)),
-			None => Ok(parse_manga_list(&fetch_html(&browse_url(&base, &browse, page))?, &base)),
+			Some(query) => Ok(parse_manga_list(
+				&fetch_html(&search_url(&base, &query))?,
+				&base,
+			)),
+			None => Ok(parse_manga_list(
+				&fetch_html(&browse_url(&base, &browse, page))?,
+				&base,
+			)),
 		}
 	}
 
@@ -266,7 +275,13 @@ impl ImageRequestProvider for MsxhmSource {
 	}
 }
 
-register_source!(MsxhmSource, ListingProvider, Home, DeepLinkHandler, ImageRequestProvider);
+register_source!(
+	MsxhmSource,
+	ListingProvider,
+	Home,
+	DeepLinkHandler,
+	ImageRequestProvider
+);
 
 #[cfg(test)]
 mod test {
@@ -277,7 +292,10 @@ mod test {
 	fn listing_names_match_source_json() {
 		let json = include_str!("../res/source.json");
 		for (title, id) in HOME_ROWS {
-			assert!(json.contains(&format!("\"id\": \"{id}\",\n\t\t\t\"name\": \"{title}\"")), "{id}");
+			assert!(
+				json.contains(&format!("\"id\": \"{id}\",\n\t\t\t\"name\": \"{title}\"")),
+				"{id}"
+			);
 			assert!(listing_url(BASE_URL, id, 1).is_some(), "{id}");
 		}
 		for id in ["latest", "ongoing", "completed"] {
@@ -289,7 +307,14 @@ mod test {
 	#[aidoku_test]
 	fn filter_ids_are_site_values() {
 		let json = include_str!("../res/filters.json");
-		for id in ["\"end\"", "\"tag\"", "\"area\"", "\"长腿\"", "\"都市\"", "\"-1\""] {
+		for id in [
+			"\"end\"",
+			"\"tag\"",
+			"\"area\"",
+			"\"长腿\"",
+			"\"都市\"",
+			"\"-1\"",
+		] {
 			assert!(json.contains(id), "{id}");
 		}
 	}

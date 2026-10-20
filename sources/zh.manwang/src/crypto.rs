@@ -113,7 +113,10 @@ fn scalar_field(json: &str, name: &str) -> Option<String> {
 		let (value, _) = rest.split_once('"')?;
 		Some(unescape(value))
 	} else {
-		let value: String = rest.chars().take_while(|c: &char| c.is_ascii_digit()).collect();
+		let value: String = rest
+			.chars()
+			.take_while(|c: &char| c.is_ascii_digit())
+			.collect();
 		(!value.is_empty()).then_some(value)
 	}
 }
@@ -154,11 +157,16 @@ mod test {
 
 	#[aidoku_test]
 	fn reads_the_json() {
-		let list = parse_image_list(r#"{"host":"x","source_id":12,"images":["\/a\/b.jpg", "cA"],"lazy":false}"#)
-			.expect("list");
+		let list = parse_image_list(
+			r#"{"host":"x","source_id":12,"images":["\/a\/b.jpg", "cA"],"lazy":false}"#,
+		)
+		.expect("list");
 		assert_eq!(list.source_id, "12");
 		assert_eq!(list.images, ["/a/b.jpg", "cA"]);
-		assert_eq!(parse_image_list(r#"{"images":[]}"#).map(|l| l.images.len()), Some(0));
+		assert_eq!(
+			parse_image_list(r#"{"images":[]}"#).map(|l| l.images.len()),
+			Some(0)
+		);
 		assert!(decrypt_params("not base64!").is_none());
 		assert!(params_of("<script>var x = 1;</script>").is_none());
 	}

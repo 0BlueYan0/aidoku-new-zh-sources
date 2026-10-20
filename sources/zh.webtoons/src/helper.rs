@@ -109,8 +109,6 @@ pub fn parse_manga_item(item: &Element) -> Option<Manga> {
 	Some(manga)
 }
 
-
-
 // --- Mobile web API: used only to preserve already-published chapter keys. ---
 
 #[derive(serde::Deserialize)]
@@ -136,23 +134,34 @@ struct MobileEpisode {
 }
 
 pub fn parse_episodes_json(body: &str) -> aidoku::Result<Vec<Chapter>> {
-	let envelope: MobileEnvelope = serde_json::from_str(body)
-		.map_err(|_| aidoku::error!("無法解析網頁章節清單"))?;
+	let envelope: MobileEnvelope =
+		serde_json::from_str(body).map_err(|_| aidoku::error!("無法解析網頁章節清單"))?;
 	if !envelope.success {
 		return Err(aidoku::error!("網頁章節清單請求失敗"));
 	}
-	let mut chapters: Vec<Chapter> = envelope.result.episode_list.into_iter().map(|episode| {
-		let url = episode.viewer_link.map(|link| absolute_url("https://www.webtoons.com", &link));
-		Chapter {
-			key: url.clone().unwrap_or_else(|| aidoku::alloc::format!("{}", episode.episode_no)),
-			title: episode.episode_title,
-			chapter_number: Some(episode.episode_no as f32),
-			date_uploaded: episode.exposure_date_millis.map(|ms| ms / 1000),
-			url,
-			thumbnail: episode.thumbnail.map(|path| absolute_url("https://webtoon-phinf.pstatic.net", &path)),
-			..Default::default()
-		}
-	}).collect();
+	let mut chapters: Vec<Chapter> = envelope
+		.result
+		.episode_list
+		.into_iter()
+		.map(|episode| {
+			let url = episode
+				.viewer_link
+				.map(|link| absolute_url("https://www.webtoons.com", &link));
+			Chapter {
+				key: url
+					.clone()
+					.unwrap_or_else(|| aidoku::alloc::format!("{}", episode.episode_no)),
+				title: episode.episode_title,
+				chapter_number: Some(episode.episode_no as f32),
+				date_uploaded: episode.exposure_date_millis.map(|ms| ms / 1000),
+				url,
+				thumbnail: episode
+					.thumbnail
+					.map(|path| absolute_url("https://webtoon-phinf.pstatic.net", &path)),
+				..Default::default()
+			}
+		})
+		.collect();
 	chapters.reverse();
 	Ok(chapters)
 }
@@ -161,15 +170,20 @@ pub fn absolute_url(base: &str, path: &str) -> String {
 	if path.starts_with("https://") || path.starts_with("http://") {
 		String::from(path)
 	} else {
-		aidoku::alloc::format!("{}/{}", base.trim_end_matches('/'), path.trim_start_matches('/'))
+		aidoku::alloc::format!(
+			"{}/{}",
+			base.trim_end_matches('/'),
+			path.trim_start_matches('/')
+		)
 	}
 }
 
 /// Existing chapter keys can be viewer URLs or bare episode IDs.
 pub fn episode_no(key: &str) -> Option<i32> {
-	let raw = key.split_once("episode_no=").map(|(_, tail)| {
-		tail.split(['&', '#']).next().unwrap_or_default()
-	}).unwrap_or(key);
+	let raw = key
+		.split_once("episode_no=")
+		.map(|(_, tail)| tail.split(['&', '#']).next().unwrap_or_default())
+		.unwrap_or(key);
 	raw.parse::<i32>().ok().filter(|n| *n > 0)
 }
 
@@ -187,6 +201,9 @@ mod tests {
 	#[aidoku_test]
 	fn mobile_absolute_links_keep_the_existing_chapter_key() {
 		let chapters = parse_episodes_json(r#"{"result":{"episodeList":[{"episodeNo":1,"viewerLink":"https://www.webtoons.com/zh-hant/viewer?title_no=10568&episode_no=1"}]},"success":true}"#).unwrap();
-		assert_eq!(chapters[0].key, "https://www.webtoons.com/zh-hant/viewer?title_no=10568&episode_no=1");
+		assert_eq!(
+			chapters[0].key,
+			"https://www.webtoons.com/zh-hant/viewer?title_no=10568&episode_no=1"
+		);
 	}
 }

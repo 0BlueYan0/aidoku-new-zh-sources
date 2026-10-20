@@ -273,7 +273,10 @@ mod test {
 	fn listing_names_match_source_json() {
 		let json = include_str!("../res/source.json");
 		for (title, id) in HOME_ROWS {
-			assert!(json.contains(&format!("\"id\": \"{id}\",\n\t\t\t\"name\": \"{title}\"")), "{id}");
+			assert!(
+				json.contains(&format!("\"id\": \"{id}\",\n\t\t\t\"name\": \"{title}\"")),
+				"{id}"
+			);
 			assert!(board_url(id).is_some(), "{id}");
 		}
 	}
@@ -288,7 +291,11 @@ mod test {
 			names.push_str(&format!(",\n\t\t\t\"{name}\""));
 			ids.push_str(&format!(",\n\t\t\t\"{id}\""));
 			assert_eq!(tags::tag_id(name), Some(id), "{name}");
-			assert_eq!(tags::TAGS.iter().filter(|(_, n)| *n == name).count(), 1, "{name}");
+			assert_eq!(
+				tags::TAGS.iter().filter(|(_, n)| *n == name).count(),
+				1,
+				"{name}"
+			);
 		}
 		assert!(json.contains(&format!("[\n\t\t\t{names}\n\t\t]")));
 		assert!(json.contains(&format!("[\n\t\t\t{ids}\n\t\t]")));
@@ -308,7 +315,9 @@ mod test {
 		);
 		assert_eq!(
 			source
-				.handle_deep_link(String::from("https://www.manwang.net/chapter/503735-185808"))
+				.handle_deep_link(String::from(
+					"https://www.manwang.net/chapter/503735-185808"
+				))
 				.unwrap(),
 			Some(DeepLinkResult::Chapter {
 				manga_key: String::from("503735"),

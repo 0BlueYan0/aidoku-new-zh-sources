@@ -137,7 +137,12 @@ fn persist_sequence() {
 	defaults_set(SEQUENCE_KEY, DefaultValue::String(format!("{n}")));
 }
 
-fn request(method_post: bool, url: &str, body: Option<&str>, token: Option<&str>) -> core::result::Result<String, Failure> {
+fn request(
+	method_post: bool,
+	url: &str,
+	body: Option<&str>,
+	token: Option<&str>,
+) -> core::result::Result<String, Failure> {
 	// Polls repeat the same URL, and a repeated URL can be answered from a cache (the
 	// test runner handed a second negotiate the first one's connection id; a shared
 	// connection would mix signed-in and signed-out callers), so every request gets a
@@ -145,16 +150,27 @@ fn request(method_post: bool, url: &str, body: Option<&str>, token: Option<&str>
 	let sep = if url.contains('?') { '&' } else { '?' };
 	let url = format!("{url}{sep}_={}", next_sequence());
 	let url = url.as_str();
-	let req = if method_post { Request::post(url) } else { Request::get(url) };
-	let mut req = req.map_err(|_| Failure::Other("bad url".to_string()))?.timeout(TIMEOUT);
+	let req = if method_post {
+		Request::post(url)
+	} else {
+		Request::get(url)
+	};
+	let mut req = req
+		.map_err(|_| Failure::Other("bad url".to_string()))?
+		.timeout(TIMEOUT);
 	if let Some(token) = token {
 		req = req.header("Authorization", format!("Bearer {token}").as_str());
 	}
 	if let Some(body) = body {
-		req = req.header("Content-Type", "text/plain;charset=UTF-8").body(body.as_bytes());
+		req = req
+			.header("Content-Type", "text/plain;charset=UTF-8")
+			.body(body.as_bytes());
 	}
 	let response = req.send().map_err(|e| {
-		println!("[lightnovel] {} {url} failed: {e:?}", if method_post { "POST" } else { "GET" });
+		println!(
+			"[lightnovel] {} {url} failed: {e:?}",
+			if method_post { "POST" } else { "GET" }
+		);
 		// A poll now and then never gets its answer; a new connection usually does.
 		if method_post {
 			Failure::Other("request failed".to_string())
@@ -174,12 +190,28 @@ fn request(method_post: bool, url: &str, body: Option<&str>, token: Option<&str>
 impl Connection {
 	fn open(token: Option<&str>) -> core::result::Result<Self, Failure> {
 		persist_sequence();
-		let negotiated = request(true, &format!("{}/hub/api/negotiate?negotiateVersion=1", api_base()), None, token)?;
+		let negotiated = request(
+			true,
+			&format!("{}/hub/api/negotiate?negotiateVersion=1", api_base()),
+			None,
+			token,
+		)?;
 		let id = serde_json::from_str::<Value>(&negotiated)
 			.ok()
-			.and_then(|v: Value| v.get("connectionToken").and_then(Value::as_str).map(String::from))
+			.and_then(|v: Value| {
+				v.get("connectionToken")
+					.and_then(Value::as_str)
+					.map(String::from)
+			})
 			.ok_or_else(|| Failure::Other("negotiate without connectionToken".to_string()))?;
-		println!("[lightnovel] hub connection {id} ({})", if token.is_some() { "signed in" } else { "anonymous" });
+		println!(
+			"[lightnovel] hub connection {id} ({})",
+			if token.is_some() {
+				"signed in"
+			} else {
+				"anonymous"
+			}
+		);
 		let conn = Self {
 			url: format!("{}/hub/api?id={id}", api_base()),
 			token: token.map(String::from),
@@ -241,9 +273,14 @@ impl Connection {
 			buffer = rest;
 		}
 		if pending > 0 {
-			return Err(Failure::Other(format!("{pending} invocations never completed")));
+			return Err(Failure::Other(format!(
+				"{pending} invocations never completed"
+			)));
 		}
-		Ok(replies.into_iter().map(|r: Option<Reply>| r.unwrap_or(Reply::Error(String::new()))).collect())
+		Ok(replies
+			.into_iter()
+			.map(|r: Option<Reply>| r.unwrap_or(Reply::Error(String::new())))
+			.collect())
 	}
 }
 
@@ -259,13 +296,20 @@ fn parse_completion(frame: &str) -> Option<(usize, Reply)> {
 		return Some((index, Reply::Error(error.to_string())));
 	}
 	let result = value.get("result")?;
-	let success = result.get("success").and_then(Value::as_bool).unwrap_or(false);
+	let success = result
+		.get("success")
+		.and_then(Value::as_bool)
+		.unwrap_or(false);
 	if success {
 		let response = result.get("response").cloned().unwrap_or(Value::Null);
 		Some((index, Reply::Ok(response)))
 	} else {
 		let status = result.get("status").and_then(Value::as_i64).unwrap_or(0);
-		let msg = result.get("msg").and_then(Value::as_str).unwrap_or("").to_string();
+		let msg = result
+			.get("msg")
+			.and_then(Value::as_str)
+			.unwrap_or("")
+			.to_string();
 		Some((index, Reply::Refused(status, msg)))
 	}
 }
@@ -301,9 +345,15 @@ mod tests {
 			_ => panic!("ok frame"),
 		}
 		let refused = r#"{"type":3,"invocationId":"0","result":{"response":null,"status":403,"success":false,"msg":"x"}}"#;
-		assert!(matches!(parse_completion(refused), Some((0, Reply::Refused(403, _)))));
+		assert!(matches!(
+			parse_completion(refused),
+			Some((0, Reply::Refused(403, _)))
+		));
 		let error = r#"{"type":3,"invocationId":"1","error":"Failed to invoke 'GetBookInfo' because user is unauthorized"}"#;
-		assert!(matches!(parse_completion(error), Some((1, Reply::Error(_)))));
+		assert!(matches!(
+			parse_completion(error),
+			Some((1, Reply::Error(_)))
+		));
 		let push = r#"{"type":1,"target":"OnMessage","arguments":["hi"]}"#;
 		assert!(parse_completion(push).is_none());
 	}
@@ -314,13 +364,18 @@ mod tests {
 		let replies = invoke_all(
 			None,
 			&[
-				Call::new("GetLatestBookList", serde_json::json!({ "Page": 1, "Size": 6 })),
+				Call::new(
+					"GetLatestBookList",
+					serde_json::json!({ "Page": 1, "Size": 6 }),
+				),
 				Call::new("GetBookInfo", serde_json::json!({ "Id": 19367 })),
 			],
 		)
 		.expect("hub");
 		match &replies[0] {
-			Reply::Ok(value) => assert!(value["data"].as_array().is_some_and(|a: &Vec<Value>| !a.is_empty())),
+			Reply::Ok(value) => assert!(value["data"]
+				.as_array()
+				.is_some_and(|a: &Vec<Value>| !a.is_empty())),
 			_ => panic!("latest list"),
 		}
 		assert!(matches!(&replies[1], Reply::Error(msg) if msg.contains("unauthorized")));

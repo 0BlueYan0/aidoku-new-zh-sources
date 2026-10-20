@@ -8,10 +8,9 @@ use aidoku::{
 	},
 	prelude::*,
 	BasicLoginHandler, Chapter, DeepLinkHandler, DeepLinkResult, DynamicSettings, FilterValue,
-	GroupSetting, Home, HomeComponent, HomeComponentValue, HomeLayout, HomePartialResult, Link,
-	ImageRequestProvider, Listing, ListingProvider, Manga, MangaPageResult, NotificationHandler,
-	Page, PageContext, Result, Setting,
-	HashMap, Source, WebLoginHandler,
+	GroupSetting, HashMap, Home, HomeComponent, HomeComponentValue, HomeLayout, HomePartialResult,
+	ImageRequestProvider, Link, Listing, ListingProvider, Manga, MangaPageResult,
+	NotificationHandler, Page, PageContext, Result, Setting, Source, WebLoginHandler,
 };
 
 mod auth;
@@ -219,7 +218,9 @@ impl Home for BakamhSource {
 			for (title, id, url) in blocked {
 				match fetch_page(&url, None) {
 					Ok(Some(html)) => send_home_row(title, id, parse_manga_list(&html).entries),
-					Ok(None) => println!("[bakamh] ERROR the {id} row is still blocked after a retry"),
+					Ok(None) => {
+						println!("[bakamh] ERROR the {id} row is still blocked after a retry")
+					}
 					Err(_) => println!("[bakamh] ERROR loading the {id} row"),
 				}
 			}
@@ -340,9 +341,9 @@ impl DynamicSettings for BakamhSource {
 					String::from("上次登入失敗：帳號或密碼錯誤，請重新登入。")
 				}
 				Some(_) => String::from("上次登入失敗：無法連線到巴卡漫畫，請稍後再登入一次。"),
-				None => String::from(
-					"尚未登入。登入後可閱讀標示「需登入」的章節，這裡會顯示帳號名稱。",
-				),
+				None => {
+					String::from("尚未登入。登入後可閱讀標示「需登入」的章節，這裡會顯示帳號名稱。")
+				}
 			}
 		};
 		Ok(vec![GroupSetting {
@@ -402,7 +403,10 @@ mod test {
 	fn listing_names_match_source_json() {
 		let json = include_str!("../res/source.json");
 		for (title, id) in HOME_ROWS {
-			assert!(json.contains(&format!("\"id\": \"{id}\",\n\t\t\t\"name\": \"{title}\"")), "{id}");
+			assert!(
+				json.contains(&format!("\"id\": \"{id}\",\n\t\t\t\"name\": \"{title}\"")),
+				"{id}"
+			);
 			assert!(listing_url(id, 1).is_some(), "{id}");
 		}
 	}
@@ -427,13 +431,19 @@ mod test {
 		let source = BakamhSource::new();
 		let mut cookies: HashMap<String, String> = HashMap::new();
 		for (key, _) in CLOUDFLARE_BUTTONS {
-			assert!(!source.handle_web_login(String::from(key), cookies.clone()).unwrap());
+			assert!(!source
+				.handle_web_login(String::from(key), cookies.clone())
+				.unwrap());
 		}
 		cookies.insert(String::from("cf_clearance"), String::from("token"));
 		for (key, _) in CLOUDFLARE_BUTTONS {
-			assert!(source.handle_web_login(String::from(key), cookies.clone()).unwrap());
+			assert!(source
+				.handle_web_login(String::from(key), cookies.clone())
+				.unwrap());
 		}
-		assert!(source.handle_web_login(String::from("login"), cookies).is_err());
+		assert!(source
+			.handle_web_login(String::from("login"), cookies)
+			.is_err());
 
 		// One button per domain of `urls`, in the same order, each opening its own domain.
 		let settings = include_str!("../res/settings.json");

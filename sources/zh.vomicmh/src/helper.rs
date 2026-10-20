@@ -90,7 +90,10 @@ pub fn category_url(id: &str, page: i32) -> String {
 
 /// The search matches titles and authors loosely and does not say when it runs out.
 pub fn search_url(query: &str, page: i32) -> String {
-	format!("{BASE_URL}/so/key/{}/{page}", encode_uri_component(query.trim()))
+	format!(
+		"{BASE_URL}/so/key/{}/{page}",
+		encode_uri_component(query.trim())
+	)
 }
 
 pub fn fetch_html(url: &str) -> Result<String> {
@@ -158,7 +161,10 @@ pub fn ids_after<'a>(url: &'a str, kind: &str) -> Vec<&'a str> {
 	};
 	let rest = rest.split(['?', '#']).next().unwrap_or("");
 	let ids: Vec<&str> = rest.split('/').filter(|s: &&str| !s.is_empty()).collect();
-	if ids.iter().all(|s: &&str| s.bytes().all(|b: u8| b.is_ascii_digit())) {
+	if ids
+		.iter()
+		.all(|s: &&str| s.bytes().all(|b: u8| b.is_ascii_digit()))
+	{
 		ids
 	} else {
 		Vec::new()
@@ -405,7 +411,9 @@ fn parse_manga(obj: &str) -> Option<Manga> {
 		authors: json_string(obj, "author").map(|a: String| vec![String::from(a.trim())]),
 		description: json_string(obj, "intro").map(|d: String| String::from(d.trim())),
 		tags: (!tags.is_empty()).then_some(tags),
-		status: json_string(obj, "process").map(|p: String| status_of(&p)).unwrap_or_default(),
+		status: json_string(obj, "process")
+			.map(|p: String| status_of(&p))
+			.unwrap_or_default(),
 		content_rating: ContentRating::Safe,
 		viewer: match json_string(obj, "dis_type").as_deref() {
 			Some("页漫") => Viewer::RightToLeft,
@@ -426,7 +434,9 @@ pub fn parse_manga_list(payload: &str) -> Vec<Manga> {
 }
 
 fn text_of(el: &Element) -> String {
-	el.text().map(|t: String| String::from(t.trim())).unwrap_or_default()
+	el.text()
+		.map(|t: String| String::from(t.trim()))
+		.unwrap_or_default()
 }
 
 /// The status in the page's structured data, which the payload carries as
@@ -528,7 +538,10 @@ pub fn parse_chapters(payload: &str, manga_key: &str) -> Vec<Chapter> {
 		.filter_map(|obj: &str| {
 			let key = String::from(json_field(obj, "id")?);
 			let title = json_string(obj, "name").map(|t: String| String::from(t.trim()));
-			let (chapter, volume) = title.as_deref().map(chapter_numbers).unwrap_or((None, None));
+			let (chapter, volume) = title
+				.as_deref()
+				.map(chapter_numbers)
+				.unwrap_or((None, None));
 			// Only the `单行本` group holds volumes; elsewhere `第3卷` would number an extra.
 			let is_volume = json_string(obj, "group_name").as_deref() == Some("单行本");
 			Some(Chapter {
@@ -572,7 +585,11 @@ pub fn parse_pages(payload: &str, original: bool) -> Vec<Page> {
 		.filter_map(|img: &str| json_string(img, "url"))
 		.filter(|url: &String| url.starts_with("http"))
 		.map(|url: String| Page {
-			content: PageContent::url(if original { String::from(original_image(&url)) } else { url }),
+			content: PageContent::url(if original {
+				String::from(original_image(&url))
+			} else {
+				url
+			}),
 			..Default::default()
 		})
 		.collect()
@@ -590,8 +607,14 @@ mod test {
 			search_url(" 哪咤 ", 1),
 			"https://www.vomicmh.com/so/key/%E5%93%AA%E5%92%A4/1"
 		);
-		assert_eq!(chapter_url("27035", "25743"), "https://www.vomicmh.com/chapter/27035/25743");
-		assert_eq!(ids_after("https://www.vomicmh.com/detail/27035", "detail"), vec!["27035"]);
+		assert_eq!(
+			chapter_url("27035", "25743"),
+			"https://www.vomicmh.com/chapter/27035/25743"
+		);
+		assert_eq!(
+			ids_after("https://www.vomicmh.com/detail/27035", "detail"),
+			vec!["27035"]
+		);
 		assert_eq!(
 			ids_after("https://www.vomicmh.com/chapter/27035/25743?x=1", "chapter"),
 			vec!["27035", "25743"]
@@ -638,7 +661,14 @@ mod test {
 			let entries = parse_manga_list(fixture);
 			assert_eq!(entries.len(), count);
 			for manga in &entries {
-				assert!(manga.cover.as_deref().is_some_and(|c: &str| c.contains("sign=")), "{}", manga.title);
+				assert!(
+					manga
+						.cover
+						.as_deref()
+						.is_some_and(|c: &str| c.contains("sign=")),
+					"{}",
+					manga.title
+				);
 				assert_eq!(manga.url, Some(manga_url(&manga.key)));
 			}
 		}
@@ -651,9 +681,16 @@ mod test {
 		assert_eq!(first.viewer, Viewer::Webtoon);
 		assert_eq!(
 			first.tags,
-			Some(vec![String::from("冒險"), String::from("動作"), String::from("奇幻")])
+			Some(vec![
+				String::from("冒險"),
+				String::from("動作"),
+				String::from("奇幻")
+			])
 		);
-		assert!(first.description.as_deref().is_some_and(|d: &str| d.starts_with("苍茫大地上")));
+		assert!(first
+			.description
+			.as_deref()
+			.is_some_and(|d: &str| d.starts_with("苍茫大地上")));
 		// A page-by-page work, and a nested `id` that is not a work.
 		let paged = parse_manga_list(
 			"x:{\"id\":12418,\"name\":\"你喜欢哪对情侣？\",\"cover\":\"https://c\",\"process\":\"已完结\",\"dis_type\":\"页漫\",\"cat\":[{\"id\":13,\"name\":\"百合\"}]}",
@@ -671,12 +708,25 @@ mod test {
 		assert_eq!(manga.authors, Some(vec![String::from("藤奇")]));
 		assert_eq!(
 			manga.tags,
-			Some(vec![String::from("冒險"), String::from("動作"), String::from("奇幻")])
+			Some(vec![
+				String::from("冒險"),
+				String::from("動作"),
+				String::from("奇幻")
+			])
 		);
 		assert_eq!(manga.status, MangaStatus::Ongoing);
-		assert!(manga.cover.as_deref().is_some_and(|c: &str| c.contains("-cover?sign=")));
-		assert!(manga.description.as_deref().is_some_and(|d: &str| d.starts_with("苍茫大地上")));
-		assert_eq!(manga.url.as_deref(), Some("https://www.vomicmh.com/detail/27035"));
+		assert!(manga
+			.cover
+			.as_deref()
+			.is_some_and(|c: &str| c.contains("-cover?sign=")));
+		assert!(manga
+			.description
+			.as_deref()
+			.is_some_and(|d: &str| d.starts_with("苍茫大地上")));
+		assert_eq!(
+			manga.url.as_deref(),
+			Some("https://www.vomicmh.com/detail/27035")
+		);
 	}
 
 	#[aidoku_test]
@@ -709,7 +759,8 @@ mod test {
 		};
 		let pages = parse_pages(include_str!("fixtures/reader.flight"), false);
 		assert_eq!(pages.len(), 22);
-		assert!(url(&pages[0]).starts_with("https://cdm.vomicer.com/27035/68d4e911030bd140a0c6a72569da49ee-1?sign="));
+		assert!(url(&pages[0])
+			.starts_with("https://cdm.vomicer.com/27035/68d4e911030bd140a0c6a72569da49ee-1?sign="));
 		assert!(url(&pages[0]).ends_with("&imageMogr2/thumbnail/800x/format/webp/quality/75"));
 		assert!(url(&pages[21]).contains("-22?sign="));
 		let original = parse_pages(include_str!("fixtures/reader.flight"), true);
@@ -722,7 +773,10 @@ mod test {
 			original_image("https://cdm.vomicer.com/x-1?sign=a&t=1&imageMogr2/thumbnail/800x"),
 			"https://cdm.vomicer.com/x-1?sign=a&t=1"
 		);
-		assert_eq!(original_image("https://cdm.vomicer.com/x-1?sign=a&t=1"), "https://cdm.vomicer.com/x-1?sign=a&t=1");
+		assert_eq!(
+			original_image("https://cdm.vomicer.com/x-1?sign=a&t=1"),
+			"https://cdm.vomicer.com/x-1?sign=a&t=1"
+		);
 	}
 
 	#[aidoku_test]
@@ -744,18 +798,37 @@ mod test {
 		assert_eq!(keys, ["25740", "25741", "25742", "25743"]);
 		assert_eq!(chapters[0].title.as_deref(), Some("3.2话"));
 		assert_eq!(chapters[0].chapter_number, Some(3.2));
-		assert_eq!(chapters[3].url.as_deref(), Some("https://www.vomicmh.com/chapter/27035/25743"));
+		assert_eq!(
+			chapters[3].url.as_deref(),
+			Some("https://www.vomicmh.com/chapter/27035/25743")
+		);
 		// 2024-11-18 05:42:13 China time.
 		assert_eq!(chapters[3].date_uploaded, Some(1731879733));
 
 		let volumes = parse_chapters(include_str!("fixtures/detail_volumes.flight"), "56100");
 		assert_eq!(volumes.len(), 36);
 		assert_eq!(volumes[0].title.as_deref(), Some("27话"));
-		let find = |title: &str| volumes.iter().find(|c: &&Chapter| c.title.as_deref() == Some(title)).unwrap();
-		assert_eq!((find("2卷").chapter_number, find("2卷").volume_number), (None, Some(2.0)));
-		assert_eq!((find("第3卷番外").chapter_number, find("第3卷番外").volume_number), (None, None));
+		let find = |title: &str| {
+			volumes
+				.iter()
+				.find(|c: &&Chapter| c.title.as_deref() == Some(title))
+				.unwrap()
+		};
+		assert_eq!(
+			(find("2卷").chapter_number, find("2卷").volume_number),
+			(None, Some(2.0))
+		);
+		assert_eq!(
+			(
+				find("第3卷番外").chapter_number,
+				find("第3卷番外").volume_number
+			),
+			(None, None)
+		);
 		assert_eq!(find("14话").chapter_number, Some(14.0));
 
-		assert!(parse_chapters(include_str!("fixtures/detail_app_only.flight"), "19701").is_empty());
+		assert!(
+			parse_chapters(include_str!("fixtures/detail_app_only.flight"), "19701").is_empty()
+		);
 	}
 }

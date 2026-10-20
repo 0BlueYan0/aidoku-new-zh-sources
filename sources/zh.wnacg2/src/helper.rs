@@ -648,7 +648,9 @@ pub fn parse_home_sections(html: &Document) -> Vec<HomeSection> {
 	};
 
 	for (index, header) in headers.into_iter().enumerate() {
-		let Some(block) = blocks.get(index) else { break };
+		let Some(block) = blocks.get(index) else {
+			break;
+		};
 		let Some(href) = header.attr("href") else {
 			continue;
 		};
@@ -760,7 +762,8 @@ document.writeln("var imglist = [{ url: fast_img_host+\"/data/1/001.jpg\", capti
 
 	#[aidoku_test]
 	fn steps_over_a_leading_event_group() {
-		let (artists, authors) = parse_authors("(C108) [Milk+ (みなつきひな)] 結婚初夜 (サマーポケッツ)");
+		let (artists, authors) =
+			parse_authors("(C108) [Milk+ (みなつきひな)] 結婚初夜 (サマーポケッツ)");
 		assert_eq!(artists, ["Milk+"]);
 		assert_eq!(authors, ["みなつきひな"]);
 	}
@@ -778,7 +781,10 @@ document.writeln("var imglist = [{ url: fast_img_host+\"/data/1/001.jpg\", capti
 			parse_authors("コミック エグゼ 73 [中国翻訳] [DL版]"),
 			(Vec::new(), Vec::new())
 		);
-		assert_eq!(parse_authors("為民服務App 25-26話"), (Vec::new(), Vec::new()));
+		assert_eq!(
+			parse_authors("為民服務App 25-26話"),
+			(Vec::new(), Vec::new())
+		);
 	}
 
 	#[aidoku_test]
@@ -808,7 +814,10 @@ document.writeln("var imglist = [{ url: fast_img_host+\"/data/1/001.jpg\", capti
 
 	#[aidoku_test]
 	fn strips_search_highlighting() {
-		assert_eq!(strip_em("爆乳<em>姉妹</em>に教えこむ"), "爆乳姉妹に教えこむ");
+		assert_eq!(
+			strip_em("爆乳<em>姉妹</em>に教えこむ"),
+			"爆乳姉妹に教えこむ"
+		);
 	}
 
 	#[aidoku_test]
@@ -835,7 +844,10 @@ document.writeln("var imglist = [{ url: fast_img_host+\"/data/1/001.jpg\", capti
 	fn picks_the_viewer_from_the_category_label() {
 		assert_eq!(viewer_for_category("韓漫／漢化"), Some(Viewer::Webtoon));
 		assert_eq!(viewer_for_category("韓漫／其他"), Some(Viewer::Webtoon));
-		assert_eq!(viewer_for_category("同人誌／漢化"), Some(Viewer::RightToLeft));
+		assert_eq!(
+			viewer_for_category("同人誌／漢化"),
+			Some(Viewer::RightToLeft)
+		);
 		assert_eq!(viewer_for_category(""), None);
 	}
 
@@ -872,14 +884,20 @@ document.writeln("var imglist = [{ url: fast_img_host+\"/data/1/001.jpg\", capti
 			normalize_url("/photos-index-aid-1.html"),
 			format!("{}/photos-index-aid-1.html", base_url())
 		);
-		assert_eq!(normalize_url("https://x.test/a.jpg"), "https://x.test/a.jpg");
+		assert_eq!(
+			normalize_url("https://x.test/a.jpg"),
+			"https://x.test/a.jpg"
+		);
 		assert_eq!(normalize_url("  "), "");
 	}
 
 	#[aidoku_test]
 	fn builds_list_urls() {
 		let base = base_url();
-		assert_eq!(album_list_url(2), format!("{base}/albums-index-page-2.html"));
+		assert_eq!(
+			album_list_url(2),
+			format!("{base}/albums-index-page-2.html")
+		);
 		assert_eq!(
 			cate_list_url("5", 3),
 			format!("{base}/albums-index-page-3-cate-5.html")
@@ -916,7 +934,10 @@ document.writeln("var imglist = [{ url: fast_img_host+\"/data/1/001.jpg\", capti
 	#[aidoku_test]
 	fn maps_home_more_links_to_listings() {
 		assert_eq!(home_listing_id("/albums.html"), Some("update"));
-		assert_eq!(home_listing_id("/albums-index-cate-19.html"), Some("cate_19"));
+		assert_eq!(
+			home_listing_id("/albums-index-cate-19.html"),
+			Some("cate_19")
+		);
 		assert_eq!(home_listing_id("/albums-index-cate-3.html"), Some("cate_3"));
 		assert_eq!(home_listing_id("/albums-index-cate-99.html"), None);
 	}

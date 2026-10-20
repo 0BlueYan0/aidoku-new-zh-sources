@@ -48,7 +48,9 @@ fn bookcase_page(category: &str, query: Option<&str>) -> Result<MangaPageResult>
 	let url = format!("{BASE_URL}/bookcase/available_book_list/buy?sd=1&d=0&sort=0&c={category}");
 	let cards = fetch_bookcase(&url)?.unwrap_or_default();
 	// The site's bookcase has no keyword parameter that works, so titles are matched here.
-	let needle = query.map(|q| q.trim().to_lowercase()).filter(|q| !q.is_empty());
+	let needle = query
+		.map(|q| q.trim().to_lowercase())
+		.filter(|q| !q.is_empty());
 	let entries = cards
 		.iter()
 		.filter(|card| match &needle {
@@ -175,7 +177,10 @@ impl PageImageProcessor for BookwalkerSource {
 		context: Option<PageContext>,
 	) -> Result<ImageRef> {
 		let bytes = response.image.data();
-		match context.as_ref().and_then(|ctx| reader::descramble(&bytes, ctx)) {
+		match context
+			.as_ref()
+			.and_then(|ctx| reader::descramble(&bytes, ctx))
+		{
 			Some(image) => Ok(image),
 			// Fall back to the raw image rather than failing the page.
 			None => Ok(ImageRef::new(&bytes)),

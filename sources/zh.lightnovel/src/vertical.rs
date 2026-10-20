@@ -99,7 +99,17 @@ fn no_column_start(cell: &str) -> bool {
 	let (Some(ch), None) = (chars.next(), chars.next()) else {
 		return false;
 	};
-	matches!(ch, '，' | '。' | '、' | '：' | '；' | '！' | '？' | '﹂' | '﹄' | '︶' | '︾' | '﹀' | '︼' | ',' | '.')
+	matches!(
+		ch,
+		'，' | '。'
+			| '、' | '：'
+			| '；' | '！'
+			| '？' | '﹂'
+			| '﹄' | '︶'
+			| '︾' | '﹀'
+			| '︼' | ','
+			| '.'
+	)
 }
 
 /// The text of each cell: one character, or a run of one or two ASCII digits set
@@ -113,7 +123,10 @@ fn cells(text: &str) -> Vec<String> {
 	let mut out = Vec::with_capacity(chars.len());
 	let mut i = 0;
 	while i < chars.len() {
-		let run = chars[i..].iter().take_while(|c: &&char| c.is_ascii_digit()).count();
+		let run = chars[i..]
+			.iter()
+			.take_while(|c: &&char| c.is_ascii_digit())
+			.count();
 		if run == 2 {
 			out.push(chars[i..i + 2].iter().collect());
 			i += 2;
@@ -160,7 +173,10 @@ impl Painter {
 	fn canvas(&mut self) -> &mut Canvas {
 		self.canvas.get_or_insert_with(|| {
 			let mut canvas = Canvas::new(WIDTH, HEIGHT);
-			canvas.fill(&Path::rect(&Rect::new(0.0, 0.0, WIDTH, HEIGHT)), &Color::white());
+			canvas.fill(
+				&Path::rect(&Rect::new(0.0, 0.0, WIDTH, HEIGHT)),
+				&Color::white(),
+			);
 			canvas
 		})
 	}
@@ -212,7 +228,8 @@ impl Painter {
 		}
 		let s = self.size;
 		// Top left of the cell.
-		let cell_x = WIDTH - MARGIN_X - (self.column as f32 + 1.0) * self.column_width + (self.column_width - s) / 2.0;
+		let cell_x = WIDTH - MARGIN_X - (self.column as f32 + 1.0) * self.column_width
+			+ (self.column_width - s) / 2.0;
 		let cell_y = MARGIN_TOP + self.row * s;
 		let count = cell.chars().count();
 		if count == 2 {
@@ -285,7 +302,9 @@ mod tests {
 		let md = "### 序章\n\n![](<https://img.lightnovel.life/a.jpg?t=1>)\n\n第一行\\*\n第二行";
 		let blocks = blocks(md);
 		assert_eq!(blocks.len(), 4);
-		assert!(matches!(&blocks[1], Block::Image(url) if url == "https://img.lightnovel.life/a.jpg?t=1"));
+		assert!(
+			matches!(&blocks[1], Block::Image(url) if url == "https://img.lightnovel.life/a.jpg?t=1")
+		);
 		assert!(matches!(&blocks[2], Block::Text(t) if t == "第一行*"));
 	}
 }

@@ -16,7 +16,11 @@ use helper::*;
 
 /// The home page's rows: heading and the listing behind it. The names must match
 /// `res/source.json`; the streamed components are matched to the skeleton by title.
-const HOME_ROWS: [(&str, &str); 3] = [("最近更新", "update"), ("人氣排行", "hits"), ("最新上架", "new")];
+const HOME_ROWS: [(&str, &str); 3] = [
+	("最近更新", "update"),
+	("人氣排行", "hits"),
+	("最新上架", "new"),
+];
 
 /// Requests per `send_all`: the app runs at most 5 at once, and more in one call can hang (docs/aidoku-rs-api.md).
 const HOME_BATCH: usize = 5;
@@ -257,7 +261,10 @@ mod test {
 		// A Windows checkout may turn the file's line endings into CRLF.
 		let json = include_str!("../res/source.json").replace("\r\n", "\n");
 		for (title, id) in HOME_ROWS {
-			assert!(json.contains(&format!("\"id\": \"{id}\",\n\t\t\t\"name\": \"{title}\"")), "{id}");
+			assert!(
+				json.contains(&format!("\"id\": \"{id}\",\n\t\t\t\"name\": \"{title}\"")),
+				"{id}"
+			);
 			assert!(listing_url(id, 1).is_some(), "{id}");
 		}
 		assert_eq!(json.matches("\"id\": ").count(), HOME_ROWS.len() + 1);
@@ -274,7 +281,11 @@ mod test {
 			names.push_str(&format!(",\n\t\t\t\"{name}\""));
 			ids.push_str(&format!(",\n\t\t\t\"{id}\""));
 			assert_eq!(tags::tag_id(name), Some(id), "{name}");
-			assert_eq!(tags::TAGS.iter().filter(|(_, n)| *n == name).count(), 1, "{name}");
+			assert_eq!(
+				tags::TAGS.iter().filter(|(_, n)| *n == name).count(),
+				1,
+				"{name}"
+			);
 		}
 		assert!(json.contains(&format!("[\n\t\t\t{names}\n\t\t]")));
 		assert!(json.contains(&format!("[\n\t\t\t{ids}\n\t\t]")));

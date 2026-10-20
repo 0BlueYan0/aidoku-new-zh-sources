@@ -4,11 +4,10 @@ use aidoku::{
 	alloc::{vec, String, Vec},
 	imports::{canvas::ImageRef, net::Request, std::send_partial_result},
 	prelude::*,
-	Chapter, DeepLinkHandler, DeepLinkResult, DynamicSettings, FilterValue, GroupSetting,
-	HashMap, Home, HomeComponent, HomeComponentValue, HomeLayout, HomePartialResult,
-	ImageResponse, Link, LinkValue, Listing, ListingProvider, Manga, MangaPageResult,
-	NotificationHandler, Page, PageContent, PageContext, PageImageProcessor, Result,
-	Setting, Source, WebLoginHandler,
+	Chapter, DeepLinkHandler, DeepLinkResult, DynamicSettings, FilterValue, GroupSetting, HashMap,
+	Home, HomeComponent, HomeComponentValue, HomeLayout, HomePartialResult, ImageResponse, Link,
+	LinkValue, Listing, ListingProvider, Manga, MangaPageResult, NotificationHandler, Page,
+	PageContent, PageContext, PageImageProcessor, Result, Setting, Source, WebLoginHandler,
 };
 
 mod auth;
@@ -351,8 +350,8 @@ impl PageImageProcessor for CreativeComicSource {
 		// The body is AES ciphertext, so the app cannot decode it as an image and
 		// hands back the untouched wire bytes here.
 		let ciphertext = response.image.data();
-		let image = crypto::decrypt_page(&ciphertext, &key, &iv)
-			.ok_or_else(|| error!("頁面解密失敗"))?;
+		let image =
+			crypto::decrypt_page(&ciphertext, &key, &iv).ok_or_else(|| error!("頁面解密失敗"))?;
 
 		Ok(ImageRef::new(&image))
 	}

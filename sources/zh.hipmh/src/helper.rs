@@ -190,7 +190,10 @@ pub fn json_f64(obj: &str, key: &str) -> Option<f64> {
 
 /// The string elements of a top-level JSON array, e.g. the decoded image list.
 pub fn json_top_strings(array: &str) -> Vec<String> {
-	json_items(array).into_iter().filter_map(as_string).collect()
+	json_items(array)
+		.into_iter()
+		.filter_map(as_string)
+		.collect()
 }
 
 /// A field holding either `["a","b"]` or `[{"name":"a"},{"name":"b"}]`. The list and
@@ -481,9 +484,7 @@ pub fn parse_chapter(obj: &str) -> Option<Chapter> {
 	let reader_hid = json_string(obj, "hid")?;
 	let (_, key) = api_hid(&reader_hid)?;
 	let title = json_string(obj, "title");
-	let chapter_number = title
-		.as_deref()
-		.and_then(chapter_number_from_title);
+	let chapter_number = title.as_deref().and_then(chapter_number_from_title);
 	// `2026-02-07T18:24:45.755357Z`: the fraction varies in length, so parse the first
 	// 19 characters, which are UTC. The `T` becomes a space because aidoku-test-runner
 	// does not understand the quoted `'T'` literal the app's DateFormatter would accept.
@@ -509,7 +510,10 @@ mod test {
 	#[aidoku_test]
 	fn fields_are_read_from_the_top_level_only() {
 		let detail = r#"{"first_chapter":{"title":"第1话"},"id":8083,"title":"我！天命大反派"}"#;
-		assert_eq!(json_string(detail, "title").as_deref(), Some("我！天命大反派"));
+		assert_eq!(
+			json_string(detail, "title").as_deref(),
+			Some("我！天命大反派")
+		);
 		assert_eq!(json_i64(detail, "id"), Some(8083));
 	}
 
@@ -517,14 +521,23 @@ mod test {
 	fn brackets_inside_strings_do_not_end_values() {
 		let obj = r#"{"description":"【独家】 {x] \"q\"","title":"A"}"#;
 		assert_eq!(json_string(obj, "title").as_deref(), Some("A"));
-		assert_eq!(json_string(obj, "description").as_deref(), Some("【独家】 {x] \"q\""));
+		assert_eq!(
+			json_string(obj, "description").as_deref(),
+			Some("【独家】 {x] \"q\"")
+		);
 	}
 
 	#[aidoku_test]
 	fn names_read_both_shapes() {
-		assert_eq!(json_names(r#"{"genres":["古风","少年"]}"#, "genres"), ["古风", "少年"]);
 		assert_eq!(
-			json_names(r#"{"authors":[{"id":2178,"name":" Chira","role":null}]}"#, "authors"),
+			json_names(r#"{"genres":["古风","少年"]}"#, "genres"),
+			["古风", "少年"]
+		);
+		assert_eq!(
+			json_names(
+				r#"{"authors":[{"id":2178,"name":" Chira","role":null}]}"#,
+				"authors"
+			),
 			["Chira"]
 		);
 	}
@@ -538,21 +551,39 @@ mod test {
 	fn api_hid_is_derived_from_the_reader_hid() {
 		assert_eq!(
 			api_hid("bTo4MDgzLWM6OTIwMw-ODA4MzoxLjAw"),
-			Some((String::from("bTo4MDgz"), String::from("Yzo5MjAz-ODA4MzoxLjAw")))
+			Some((
+				String::from("bTo4MDgz"),
+				String::from("Yzo5MjAz-ODA4MzoxLjAw")
+			))
 		);
 		assert_eq!(
 			api_hid("bTo4MDgzLWM6MTkyMzc1-ODA4MzozNjEuMDA"),
-			Some((String::from("bTo4MDgz"), String::from("YzoxOTIzNzU-ODA4MzozNjEuMDA")))
+			Some((
+				String::from("bTo4MDgz"),
+				String::from("YzoxOTIzNzU-ODA4MzozNjEuMDA")
+			))
 		);
 		assert_eq!(api_hid("bTo4MDgz"), None);
 	}
 
 	#[aidoku_test]
 	fn content_rating_reads_numbers_and_strings() {
-		assert_eq!(content_rating(r#"{"content_rating":1}"#), ContentRating::Safe);
-		assert_eq!(content_rating(r#"{"content_rating":2}"#), ContentRating::NSFW);
-		assert_eq!(content_rating(r#"{"content_rating":"safe"}"#), ContentRating::Safe);
-		assert_eq!(content_rating(r#"{"content_rating":"adult"}"#), ContentRating::NSFW);
+		assert_eq!(
+			content_rating(r#"{"content_rating":1}"#),
+			ContentRating::Safe
+		);
+		assert_eq!(
+			content_rating(r#"{"content_rating":2}"#),
+			ContentRating::NSFW
+		);
+		assert_eq!(
+			content_rating(r#"{"content_rating":"safe"}"#),
+			ContentRating::Safe
+		);
+		assert_eq!(
+			content_rating(r#"{"content_rating":"adult"}"#),
+			ContentRating::NSFW
+		);
 		assert_eq!(content_rating(r#"{"title":"A"}"#), ContentRating::Unknown);
 	}
 
@@ -562,8 +593,14 @@ mod test {
 		let search = r#"[{"id":"bToyODU1MQ-dai-zun-mi-lu-dm-2827-21341","title":"怠尊秘录"},{"id":"bToyODU1MQ-dai-zun-mi-lu-dongman-2827-21341","title":"怠尊秘录"}]"#;
 		let from_list = parse_manga_list(list);
 		assert_eq!(from_list[0].key, "bToyODU1MQ");
-		assert_eq!(from_list[0].cover.as_deref(), Some("https://cover.s3imgs.top/dongman/vertical/x.webp"));
-		assert_eq!(from_list[0].url.as_deref(), Some("https://m.hipmh.com/works/bToyODU1MQ"));
+		assert_eq!(
+			from_list[0].cover.as_deref(),
+			Some("https://cover.s3imgs.top/dongman/vertical/x.webp")
+		);
+		assert_eq!(
+			from_list[0].url.as_deref(),
+			Some("https://m.hipmh.com/works/bToyODU1MQ")
+		);
 		let from_search = parse_manga_list(search);
 		assert_eq!(from_search.len(), 1);
 		assert_eq!(from_search[0].key, "bToyODU1MQ");
@@ -571,7 +608,10 @@ mod test {
 
 	#[aidoku_test]
 	fn chapter_numbers_come_from_the_title() {
-		assert_eq!(chapter_number_from_title("第359话 她一定很想我吧？"), Some(359.0));
+		assert_eq!(
+			chapter_number_from_title("第359话 她一定很想我吧？"),
+			Some(359.0)
+		);
 		assert_eq!(chapter_number_from_title("第三季 第2話"), Some(2.0));
 		assert_eq!(chapter_number_from_title("番外"), None);
 	}

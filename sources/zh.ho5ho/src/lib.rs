@@ -227,7 +227,10 @@ mod test {
 	fn listing_names_match_source_json() {
 		let json = include_str!("../res/source.json");
 		for (title, id) in HOME_ROWS {
-			assert!(json.contains(&format!("\"id\": \"{id}\",\n\t\t\t\"name\": \"{title}\"")), "{id}");
+			assert!(
+				json.contains(&format!("\"id\": \"{id}\",\n\t\t\t\"name\": \"{title}\"")),
+				"{id}"
+			);
 			assert!(listing_url(id, 1).is_some(), "{id}");
 		}
 	}
@@ -236,7 +239,11 @@ mod test {
 	fn filters_match_filters_json() {
 		let json = include_str!("../res/filters.json");
 		for name in CATEGORIES {
-			assert!(json.contains(&format!("\t\t\t\"{name}\",")) || json.contains(&format!("\t\t\t\"{name}\"\n")), "{name}");
+			assert!(
+				json.contains(&format!("\t\t\t\"{name}\","))
+					|| json.contains(&format!("\t\t\t\"{name}\"\n")),
+				"{name}"
+			);
 		}
 		for order in ORDERS {
 			assert!(json.contains(&format!("\"{order}\"")), "{order}");

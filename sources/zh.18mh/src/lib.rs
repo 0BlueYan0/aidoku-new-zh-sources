@@ -5,9 +5,9 @@ use aidoku::{
 	helpers::uri::encode_uri_component,
 	imports::{html::Element, std::send_partial_result},
 	prelude::*,
-	Chapter, DeepLinkHandler, DeepLinkResult, FilterValue, Home, HomeComponent, HomeComponentValue,
-	HashMap, HomeLayout, HomePartialResult, Link, Listing, ListingProvider, Manga, MangaPageResult,
-	Page, Result, Source, WebLoginHandler,
+	Chapter, DeepLinkHandler, DeepLinkResult, FilterValue, HashMap, Home, HomeComponent,
+	HomeComponentValue, HomeLayout, HomePartialResult, Link, Listing, ListingProvider, Manga,
+	MangaPageResult, Page, Result, Source, WebLoginHandler,
 };
 
 mod helper;
@@ -178,7 +178,11 @@ impl Home for Mh18Source {
 			}));
 		};
 
-		send(RECENT_TITLE, parse_cards(&root, ".pb-unit-md a.slicarda"), None);
+		send(
+			RECENT_TITLE,
+			parse_cards(&root, ".pb-unit-md a.slicarda"),
+			None,
+		);
 
 		if let Some(lists) = root.select(".cardlist") {
 			for ((title, id), list) in HOME_ROWS.iter().zip(lists) {
@@ -211,7 +215,10 @@ impl DeepLinkHandler for Mh18Source {
 			.trim_end_matches('/')
 			.contains('/');
 		if is_chapter {
-			let reader = format!("{BASE_URL}/manga/{}", rest.split(['?', '#']).next().unwrap_or(rest));
+			let reader = format!(
+				"{BASE_URL}/manga/{}",
+				rest.split(['?', '#']).next().unwrap_or(rest)
+			);
 			if let Some(key) = reader_chapter_key(&fetch_html(&reader)?) {
 				return Ok(Some(DeepLinkResult::Chapter {
 					manga_key: slug,
@@ -236,7 +243,13 @@ impl WebLoginHandler for Mh18Source {
 	}
 }
 
-register_source!(Mh18Source, ListingProvider, Home, DeepLinkHandler, WebLoginHandler);
+register_source!(
+	Mh18Source,
+	ListingProvider,
+	Home,
+	DeepLinkHandler,
+	WebLoginHandler
+);
 
 #[cfg(test)]
 mod test {
@@ -269,7 +282,10 @@ mod test {
 	fn listing_names_match_source_json() {
 		let json = include_str!("../res/source.json");
 		for (title, id) in HOME_ROWS {
-			assert!(json.contains(&format!("\"id\": \"{id}\",\n\t\t\t\"name\": \"{title}\"")), "{id}");
+			assert!(
+				json.contains(&format!("\"id\": \"{id}\",\n\t\t\t\"name\": \"{title}\"")),
+				"{id}"
+			);
 		}
 	}
 
@@ -277,11 +293,17 @@ mod test {
 	fn the_check_is_done_once_the_clearance_cookie_appears() {
 		let source = Mh18Source::new();
 		let mut cookies: HashMap<String, String> = HashMap::new();
-		assert!(!source.handle_web_login(String::from(CLOUDFLARE_KEY), cookies.clone()).unwrap());
+		assert!(!source
+			.handle_web_login(String::from(CLOUDFLARE_KEY), cookies.clone())
+			.unwrap());
 		cookies.insert(String::from("__cf_bm"), String::from("x"));
-		assert!(!source.handle_web_login(String::from(CLOUDFLARE_KEY), cookies.clone()).unwrap());
+		assert!(!source
+			.handle_web_login(String::from(CLOUDFLARE_KEY), cookies.clone())
+			.unwrap());
 		cookies.insert(String::from(CLEARANCE_COOKIE), String::from("abc"));
-		assert!(source.handle_web_login(String::from(CLOUDFLARE_KEY), cookies).unwrap());
+		assert!(source
+			.handle_web_login(String::from(CLOUDFLARE_KEY), cookies)
+			.unwrap());
 	}
 
 	#[aidoku_test]

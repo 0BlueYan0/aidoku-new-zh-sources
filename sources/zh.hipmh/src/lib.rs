@@ -5,8 +5,8 @@ use aidoku::{
 	imports::std::send_partial_result,
 	prelude::*,
 	Chapter, DeepLinkHandler, DeepLinkResult, FilterValue, Home, HomeComponent, HomeComponentValue,
-	HomeLayout, HomePartialResult, Link, LinkValue, Listing, ListingProvider, Manga, MangaPageResult, Page,
-	PageContent, Result, Source,
+	HomeLayout, HomePartialResult, Link, LinkValue, Listing, ListingProvider, Manga,
+	MangaPageResult, Page, PageContent, Result, Source,
 };
 
 mod decoder;
@@ -30,10 +30,22 @@ const HOME_ROWS: [(&str, &str, Option<ListingRef>); 7] = [
 	("featured", "精選", None),
 	("recent_updates", "近期更新", Some(("update", "近期更新"))),
 	("weekly_hot", "本週熱門", Some(("weekly", "本週熱門"))),
-	("popularity_ranking", "人氣排名", Some(("popular", "人氣排名"))),
-	("high_rated_korean", "高分韓漫", Some(("korean", "高分韓漫"))),
+	(
+		"popularity_ranking",
+		"人氣排名",
+		Some(("popular", "人氣排名")),
+	),
+	(
+		"high_rated_korean",
+		"高分韓漫",
+		Some(("korean", "高分韓漫")),
+	),
 	("new_releases", "最新上架", Some(("latest", "最新上架"))),
-	("completed_recommendations", "完結推薦", Some(("completed", "完結"))),
+	(
+		"completed_recommendations",
+		"完結推薦",
+		Some(("completed", "完結")),
+	),
 ];
 
 struct HipmhSource;
@@ -41,7 +53,9 @@ struct HipmhSource;
 /// A `/v1/mangas`-shaped page: `data.items` plus `total_pages`.
 fn fetch_list_page(url: &str, page: i32) -> Result<MangaPageResult> {
 	let data = fetch_data(url)?;
-	let entries = json_field(&data, "items").map(parse_manga_list).unwrap_or_default();
+	let entries = json_field(&data, "items")
+		.map(parse_manga_list)
+		.unwrap_or_default();
 	let total_pages = json_i64(&data, "total_pages").unwrap_or(0);
 	Ok(MangaPageResult {
 		has_next_page: !entries.is_empty() && i64::from(page) < total_pages,
@@ -52,7 +66,9 @@ fn fetch_list_page(url: &str, page: i32) -> Result<MangaPageResult> {
 /// A `/v1/search` page: `data.data` plus `total_pages`.
 fn fetch_search_page(query: &str, page: i32) -> Result<MangaPageResult> {
 	let data = fetch_data(&search_url(query, page, SEARCH_PAGE_SIZE))?;
-	let entries = json_field(&data, "data").map(parse_manga_list).unwrap_or_default();
+	let entries = json_field(&data, "data")
+		.map(parse_manga_list)
+		.unwrap_or_default();
 	let total_pages = json_i64(&data, "total_pages").unwrap_or(0);
 	Ok(MangaPageResult {
 		has_next_page: !entries.is_empty() && i64::from(page) < total_pages,
@@ -68,9 +84,14 @@ fn author_search(name: &str) -> Result<MangaPageResult> {
 	let mut entries: Vec<Manga> = Vec::new();
 	for page in 1..=AUTHOR_SEARCH_MAX_PAGES {
 		let data = fetch_data(&search_url(name, page, AUTHOR_SEARCH_PAGE_SIZE))?;
-		let rows = json_field(&data, "data").map(json_items).unwrap_or_default();
+		let rows = json_field(&data, "data")
+			.map(json_items)
+			.unwrap_or_default();
 		for row in rows.iter() {
-			if !json_names(row, "authors").iter().any(|author: &String| author == name) {
+			if !json_names(row, "authors")
+				.iter()
+				.any(|author: &String| author == name)
+			{
 				continue;
 			}
 			if let Some(manga) = parse_manga(row, None) {
@@ -129,9 +150,8 @@ impl Source for HipmhSource {
 			return author_search(&author);
 		}
 
-		let mut url = format!(
-			"{API_URL}/v1/mangas?sort={sort}&page={page}&per_page={LIST_PER_PAGE}"
-		);
+		let mut url =
+			format!("{API_URL}/v1/mangas?sort={sort}&page={page}&per_page={LIST_PER_PAGE}");
 		if !genre.is_empty() {
 			// A tapped tag arrives as its name rather than the option id. The genre filter
 			// is the only one marked `isGenre`, so only names from its list get here.
@@ -187,7 +207,9 @@ impl Source for HipmhSource {
 					Ok(data) => data,
 					Err(_) => break false,
 				};
-				let items = json_field(&data, "items").map(json_items).unwrap_or_default();
+				let items = json_field(&data, "items")
+					.map(json_items)
+					.unwrap_or_default();
 				chapters.extend(items.iter().filter_map(|obj: &&str| parse_chapter(obj)));
 				let total_pages = json_i64(&data, "total_pages").unwrap_or(0);
 				if items.is_empty() || i64::from(page) >= total_pages {
@@ -199,7 +221,10 @@ impl Source for HipmhSource {
 				manga.chapters = Some(chapters);
 			} else {
 				// One unreachable title must not abort a whole library refresh.
-				println!("[hipmh] ERROR fetching chapters for {} at page {page}", manga.key);
+				println!(
+					"[hipmh] ERROR fetching chapters for {} at page {page}",
+					manga.key
+				);
 			}
 		}
 
@@ -319,7 +344,10 @@ impl Home for HipmhSource {
 				continue;
 			};
 			let mangas = if field == "featured" {
-				json_items(array).into_iter().filter_map(parse_home_link).collect()
+				json_items(array)
+					.into_iter()
+					.filter_map(parse_home_link)
+					.collect()
 			} else {
 				parse_manga_list(array)
 			};
@@ -438,7 +466,10 @@ mod test {
 		let chapters = manga.chapters.expect("chapters");
 		// 361 on 2026-09-24; more than one page of 50 either way.
 		assert!(chapters.len() >= 361);
-		assert_eq!(chapters.last().map(|c: &Chapter| c.key.as_str()), Some("Yzo5MjAz-ODA4MzoxLjAw"));
+		assert_eq!(
+			chapters.last().map(|c: &Chapter| c.key.as_str()),
+			Some("Yzo5MjAz-ODA4MzoxLjAw")
+		);
 	}
 
 	#[aidoku_test]
@@ -474,16 +505,23 @@ mod test {
 			)
 			.expect("author search");
 		assert!(result.entries.iter().any(|m: &Manga| m.key == "bTo4MDgz"));
-		assert!(result
-			.entries
-			.iter()
-			.all(|m: &Manga| m.authors.as_ref().is_some_and(|a: &Vec<String>| a.iter().any(|n: &String| n == "六芒"))));
+		assert!(result.entries.iter().all(|m: &Manga| m
+			.authors
+			.as_ref()
+			.is_some_and(|a: &Vec<String>| a.iter().any(|n: &String| n == "六芒"))));
 	}
 
 	#[aidoku_test]
 	fn every_listing_loads() {
 		let source = HipmhSource::new();
-		for id in ["update", "popular", "weekly", "latest", "completed", "korean"] {
+		for id in [
+			"update",
+			"popular",
+			"weekly",
+			"latest",
+			"completed",
+			"korean",
+		] {
 			let result = source
 				.get_manga_list(
 					Listing {

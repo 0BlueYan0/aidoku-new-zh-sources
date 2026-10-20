@@ -98,7 +98,9 @@ mod test {
 
 	#[aidoku_test]
 	fn recognizes_container_magic_bytes() {
-		assert!(is_plain_image(&[0xFF, 0xD8, 0xFF, 0xE0, 0, 0, 0, 0, 0, 0, 0, 0]));
+		assert!(is_plain_image(&[
+			0xFF, 0xD8, 0xFF, 0xE0, 0, 0, 0, 0, 0, 0, 0, 0
+		]));
 		assert!(is_plain_image(b"RIFF\0\0\0\0WEBPVP8 "));
 		assert!(is_plain_image(&[
 			0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0

@@ -303,7 +303,11 @@ fn request_token(pairs: &[(&str, &str)]) -> TokenOutcome {
 	let Ok(parsed) = response.get_json_owned::<TokenResponse>() else {
 		return refused(status);
 	};
-	let Some(access) = parsed.access_token.clone().filter(|value| !value.is_empty()) else {
+	let Some(access) = parsed
+		.access_token
+		.clone()
+		.filter(|value| !value.is_empty())
+	else {
 		return refused(status);
 	};
 
@@ -440,7 +444,12 @@ pub fn sync_from_web_view() -> bool {
 }
 
 /// Keys written by versions 8 to 12 that no later version reads.
-const ORPHAN_KEYS: [&str; 4] = ["tokenExpiresAt", "tokenFailedAt", "needsRelogin", "loggedIn"];
+const ORPHAN_KEYS: [&str; 4] = [
+	"tokenExpiresAt",
+	"tokenFailedAt",
+	"needsRelogin",
+	"loggedIn",
+];
 /// Marks that the cleanup below has already run on this device.
 const STATE_PURGED_KEY: &str = "statePurged";
 
@@ -577,7 +586,9 @@ pub fn account_footer() -> Option<String> {
 			}
 			match fetch_member() {
 				MemberResult::Ok(member) => Some(describe(member)),
-				_ => Some(String::from("登入已失效，稍後會自動重試，請稍後再回來看看。")),
+				_ => Some(String::from(
+					"登入已失效，稍後會自動重試，請稍後再回來看看。",
+				)),
 			}
 		}
 	}

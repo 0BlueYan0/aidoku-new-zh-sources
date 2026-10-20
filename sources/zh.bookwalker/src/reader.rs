@@ -37,14 +37,23 @@ use aidoku::{
 };
 
 use crate::crypto::decrypt_config;
-use crate::descramble::{page_file_and_tiles_from_info, page_file_name, page_order, parse_page_info};
+use crate::descramble::{
+	page_file_and_tiles_from_info, page_file_name, page_order, parse_page_info,
+};
 use crate::helper::{BASE_URL, USER_AGENT};
 
 const READER_BASE: &str = "https://pcreader.bookwalker.com.tw";
 const READSTORAGE_HOST: &str = "readstorage.bookwalker.com.tw";
 /// The auth_info fields, in the order the viewer sends them as query parameters.
 const AUTH_FIELDS: [&str; 8] = [
-	"hti", "cfg", "bid", "uuid", "pfCd", "Policy", "Signature", "Key-Pair-Id",
+	"hti",
+	"cfg",
+	"bid",
+	"uuid",
+	"pfCd",
+	"Policy",
+	"Signature",
+	"Key-Pair-Id",
 ];
 
 /// Captures the viewer's own `c` request URL and response body onto separate window
@@ -69,7 +78,8 @@ pub fn get_pages(pid: &str) -> Result<Vec<Page>> {
 		return Ok(pages);
 	}
 	let cap = open_and_capture(pid)?;
-	let c = parse_c(&cap.req, &cap.res).ok_or_else(|| error!("could not read the reader authorisation"))?;
+	let c = parse_c(&cap.req, &cap.res)
+		.ok_or_else(|| error!("could not read the reader authorisation"))?;
 	if c.status != "200" || c.auth_query.is_empty() {
 		// The reader refuses the book. Observed on device 2026-09-23:
 		//   991 = the book is archived on the site (封存), or a just-closed reading
@@ -95,7 +105,10 @@ fn reuse_session(pid: &str) -> Option<Vec<Page>> {
 	let auth = refresh_auth(pid, position.as_deref())?;
 	match load_pages(pid, &url, &auth) {
 		Ok(pages) => {
-			println!("[bookwalker] reader reused the stored session, pages={}", pages.len());
+			println!(
+				"[bookwalker] reader reused the stored session, pages={}",
+				pages.len()
+			);
 			Some(pages)
 		}
 		Err(error) => {
@@ -113,10 +126,14 @@ fn load_pages(pid: &str, base_url: &str, auth: &str) -> Result<Vec<Page>> {
 		.header("User-Agent", USER_AGENT)
 		.string()?;
 	let data = json_field(&body, "data").ok_or_else(|| error!("configuration_pack had no data"))?;
-	let (json, a, z, t) = decrypt_config(&data).ok_or_else(|| error!("could not decrypt the configuration"))?;
+	let (json, a, z, t) =
+		decrypt_config(&data).ok_or_else(|| error!("could not decrypt the configuration"))?;
 
 	let order = page_order(&json);
-	println!("[bookwalker] reader configuration decoded, pages={}", order.len());
+	println!(
+		"[bookwalker] reader configuration decoded, pages={}",
+		order.len()
+	);
 	// A reopen refreshes through `pb`, which writes the site bookmark at the position it
 	// is given. Until an image request records a real one, the first page stands in, so
 	// that position is at least a page of this book.
@@ -214,8 +231,18 @@ pub fn descramble(scrambled_bytes: &[u8], ctx: &PageContext) -> Option<ImageRef>
 		// output, so read src_rect = dest, write dst_rect = src.
 		canvas.copy_image(
 			&scrambled,
-			Rect::new(tile.dest_x as f32, tile.dest_y as f32, tile.width as f32, tile.height as f32),
-			Rect::new(tile.src_x as f32, tile.src_y as f32, tile.width as f32, tile.height as f32),
+			Rect::new(
+				tile.dest_x as f32,
+				tile.dest_y as f32,
+				tile.width as f32,
+				tile.height as f32,
+			),
+			Rect::new(
+				tile.src_x as f32,
+				tile.src_y as f32,
+				tile.width as f32,
+				tile.height as f32,
+			),
 		);
 	}
 	Some(canvas.get_image())
@@ -362,9 +389,7 @@ fn refresh_auth(pid: &str, position: Option<&str>) -> Option<String> {
 	};
 
 	let position = position.unwrap_or("item/xhtml/p-001.xhtml");
-	let bookmark = format!(
-		"{{\"position\":\"{position}\",\"type\":\"epub\",\"bookmarks\":[]}}"
-	);
+	let bookmark = format!("{{\"position\":\"{position}\",\"type\":\"epub\",\"bookmarks\":[]}}");
 	let body = format!(
 		"cid={cid}&u1={u1}&bookmark={}&timestamp=&BID={bid}",
 		encode_uri_component(&bookmark)
@@ -374,7 +399,10 @@ fn refresh_auth(pid: &str, position: Option<&str>) -> Option<String> {
 	let pb_url = format!("{READER_BASE}/browserWebApi/pb");
 	let response = Request::post(&pb_url).map_err(|_| ()).and_then(|request| {
 		request
-			.header("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+			.header(
+				"Content-Type",
+				"application/x-www-form-urlencoded; charset=UTF-8",
+			)
 			.header("Referer", referer.as_str())
 			.header("Cookie", cookie.as_str())
 			.header("User-Agent", USER_AGENT)
@@ -411,7 +439,9 @@ fn refresh_auth(pid: &str, position: Option<&str>) -> Option<String> {
 const PIDS_KEY: &str = "rd_pids";
 /// Every per-book key name written by `store_session`, `set_at`, `load_pages` and
 /// `image_request`.
-const SESSION_FIELDS: [&str; 9] = ["auth", "cid", "u1", "bid", "uuid", "ses", "at", "url", "pos"];
+const SESSION_FIELDS: [&str; 9] = [
+	"auth", "cid", "u1", "bid", "uuid", "ses", "at", "url", "pos",
+];
 
 fn key(pid: &str, name: &str) -> String {
 	format!("rd_{name}_{pid}")
@@ -422,7 +452,10 @@ fn set_at(pid: &str, at: i64) {
 }
 
 fn store_session(pid: &str, c: &CInfo, session: &str) {
-	defaults_set(&key(pid, "auth"), DefaultValue::String(c.auth_query.clone()));
+	defaults_set(
+		&key(pid, "auth"),
+		DefaultValue::String(c.auth_query.clone()),
+	);
 	defaults_set(&key(pid, "cid"), DefaultValue::String(c.cid.clone()));
 	defaults_set(&key(pid, "u1"), DefaultValue::String(c.u1.clone()));
 	defaults_set(&key(pid, "bid"), DefaultValue::String(c.bid.clone()));

@@ -491,12 +491,14 @@ pub fn parse_chapter(obj: &str) -> Option<Chapter> {
 /// bottom in reverse API order, which is the site's rough oldest-first order for them.
 pub fn sort_chapters_newest_first(chapters: &mut [Chapter]) {
 	chapters.reverse();
-	chapters.sort_by(|a: &Chapter, b: &Chapter| match (a.chapter_number, b.chapter_number) {
-		(Some(x), Some(y)) => y.partial_cmp(&x).unwrap_or(Ordering::Equal),
-		(Some(_), None) => Ordering::Less,
-		(None, Some(_)) => Ordering::Greater,
-		(None, None) => Ordering::Equal,
-	});
+	chapters.sort_by(
+		|a: &Chapter, b: &Chapter| match (a.chapter_number, b.chapter_number) {
+			(Some(x), Some(y)) => y.partial_cmp(&x).unwrap_or(Ordering::Equal),
+			(Some(_), None) => Ordering::Less,
+			(None, Some(_)) => Ordering::Greater,
+			(None, None) => Ordering::Equal,
+		},
+	);
 }
 
 /// Explain an empty page list. A bad or missing chapter id comes back as
@@ -576,7 +578,10 @@ mod test {
 
 	#[aidoku_test]
 	fn json_unescape_restores_php_escaped_slashes() {
-		assert_eq!(json_unescape(r#"https:\/\/a.example\/b.webp"#), "https://a.example/b.webp");
+		assert_eq!(
+			json_unescape(r#"https:\/\/a.example\/b.webp"#),
+			"https://a.example/b.webp"
+		);
 		assert_eq!(json_unescape(r#"say \"hi\""#), "say \"hi\"");
 	}
 
@@ -597,10 +602,16 @@ mod test {
 
 	#[aidoku_test]
 	fn json_num_value_reads_bare_quoted_and_negative_numbers() {
-		assert_eq!(json_num_value(r#"{"total_pages":5767}"#, "total_pages"), Some(5767));
+		assert_eq!(
+			json_num_value(r#"{"total_pages":5767}"#, "total_pages"),
+			Some(5767)
+		);
 		assert_eq!(json_num_value(r#"{"cadult":"1"}"#, "cadult"), Some(1));
 		assert_eq!(json_num_value(r#"{"page": 3}"#, "page"), Some(3));
-		assert_eq!(json_num_value(r#"{"msg":"章节不存在","code":-1}"#, "code"), Some(-1));
+		assert_eq!(
+			json_num_value(r#"{"msg":"章节不存在","code":-1}"#, "code"),
+			Some(-1)
+		);
 	}
 
 	#[aidoku_test]
@@ -617,8 +628,17 @@ mod test {
 	#[aidoku_test]
 	fn chapters_sort_newest_first_with_extras_at_the_bottom() {
 		let api_order = [
-			"後記", "第二季後記", "第176话", "第178话", "第179话", "第180话", "第181话", "第01话",
-			"第03话", "第175话", "第177话",
+			"後記",
+			"第二季後記",
+			"第176话",
+			"第178话",
+			"第179话",
+			"第180话",
+			"第181话",
+			"第01话",
+			"第03话",
+			"第175话",
+			"第177话",
 		];
 		let mut chapters: Vec<Chapter> = api_order
 			.iter()
@@ -638,8 +658,17 @@ mod test {
 		assert_eq!(
 			titles,
 			[
-				"第181话", "第180话", "第179话", "第178话", "第177话", "第176话", "第175话", "第03话",
-				"第01话", "第二季後記", "後記",
+				"第181话",
+				"第180话",
+				"第179话",
+				"第178话",
+				"第177话",
+				"第176话",
+				"第175话",
+				"第03话",
+				"第01话",
+				"第二季後記",
+				"後記",
 			]
 		);
 	}
@@ -651,12 +680,18 @@ mod test {
 		let detail = r#"{"id":417,"name":"A","tags":[{"id":92,"name":"美人受"}]}"#;
 		let listing = r#"{"id":"1","name":"B","tags":["韩国","条漫"]}"#;
 		assert_eq!(parse_comic(detail).expect("detail").viewer, Viewer::Webtoon);
-		assert_eq!(parse_comic(listing).expect("listing").viewer, Viewer::Webtoon);
+		assert_eq!(
+			parse_comic(listing).expect("listing").viewer,
+			Viewer::Webtoon
+		);
 	}
 
 	#[aidoku_test]
 	fn page_list_error_prefers_the_server_message() {
-		assert_eq!(page_list_error(r#"{"msg":"章节不存在","code":-1}"#), "章节不存在");
+		assert_eq!(
+			page_list_error(r#"{"msg":"章节不存在","code":-1}"#),
+			"章节不存在"
+		);
 		assert_eq!(
 			page_list_error(r#"{"code":1,"msg":"图片列表","data":[]}"#),
 			"此章節需要 VIP 或金幣，本來源不支援登入"
