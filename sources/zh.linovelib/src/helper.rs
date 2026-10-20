@@ -374,6 +374,10 @@ pub fn parse_details(html: &Document, key: &str, base: &str) -> Option<Manga> {
 	})
 }
 
+/// Put in front of the title of a chapter the site does not let anyone read: the app shows
+/// one line of title and cuts the end off, so a note at the end could be lost.
+const LOCKED_NOTE: &str = "【站方未開放】";
+
 /// Key of a chapter the catalogue lists without a link (`javascript:cid(1)`, about one
 /// in twenty): its volume and place there. The volume page has the real link, so the
 /// id is looked up when the chapter is opened.
@@ -440,14 +444,22 @@ pub fn parse_catalog(html: &Document, key: &str, base: &str) -> Vec<Chapter> {
 					None => return Vec::new(),
 				},
 			};
-			// A link without text has no title rather than an empty one.
+			// A link without text has no title rather than an empty one. The site marks the
+			// chapters it keeps from every reader with a heart (`不相容的異種族妻子們`, all four
+			// checked on 2026-10-20 said `沒有可閱讀的章節`), so the title says so before the
+			// reader opens one and takes the failure for the source's.
 			let title = Some(title)
 				.filter(|title: &String| !title.is_empty())
 				.map(|title| {
-					if label.is_empty() {
-						title
+					let note = if title.contains('❤') {
+						LOCKED_NOTE
 					} else {
-						format!("【{label}】{title}")
+						""
+					};
+					if label.is_empty() {
+						format!("{note}{title}")
+					} else {
+						format!("{note}【{label}】{title}")
 					}
 				});
 			chapters.push(Chapter {
@@ -492,6 +504,28 @@ mod test {
 	use super::*;
 	use aidoku::imports::html::Html;
 	use aidoku_test::aidoku_test;
+
+	#[aidoku_test]
+	fn a_hearted_chapter_says_the_site_keeps_it() {
+		let html = r#"<div id="chapterNav"><h1>書</h1></div>
+			<div class="catalog-volume"><ul>
+			<li class="chapter-bar"><a href="/novel/2/vol_9.html">書 番外篇</a></li>
+			<li class="chapter-li jsChapter"><a href="/novel/2/403.html">第240話 參戰（2）</a></li>
+			<li class="chapter-li jsChapter"><a href="/novel/2/404.html">❤️第241話 參戰（3）</a></li>
+			</ul></div>"#;
+		let doc = Html::parse_with_url(html, "https://tw.linovelib.com/novel/2/catalog").unwrap();
+		let titles: Vec<Option<String>> = parse_catalog(&doc, "2", TW_URL)
+			.into_iter()
+			.map(|chapter| chapter.title)
+			.collect();
+		assert_eq!(
+			titles,
+			[
+				Some(String::from("【站方未開放】【番外篇】❤️第241話 參戰（3）")),
+				Some(String::from("【番外篇】第240話 參戰（2）")),
+			]
+		);
+	}
 
 	#[aidoku_test]
 	fn an_unreachable_row_rejects_the_catalog() {
