@@ -2,7 +2,7 @@
 	"info": {
 		"id": "zh.wmh1234",
 		"name": "漫畫1234",
-		"version": 3,
+		"version": 4,
 		"url": "https://m.wmh1234.com",
 		"contentRating": 1,
 		"languages": [
@@ -11,6 +11,7 @@
 		"minAppVersion": "0.8.3"
 	},
 	"config": {
+		"breakingChangeVersion": 4,
 		"hidesFiltersWhileSearching": true,
 		"supportsAuthorSearch": true,
 		"supportsTagSearch": true
