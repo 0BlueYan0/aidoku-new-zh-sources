@@ -6,7 +6,7 @@ use aidoku::{
 	prelude::*,
 	Chapter, DeepLinkHandler, DeepLinkResult, FilterValue, Home, HomeComponent, HomeComponentValue,
 	HomeLayout, HomePartialResult, Link, Listing, ListingProvider, Manga, MangaPageResult,
-	MangaStatus, Page, Result, Source,
+	MangaStatus, MigrationHandler, Page, Result, Source,
 };
 
 mod helper;
@@ -132,9 +132,16 @@ impl Source for Wmh1234Source {
 		Ok(manga)
 	}
 
-	fn get_page_list(&self, _manga: Manga, chapter: Chapter) -> Result<Vec<Page>> {
+	fn get_page_list(&self, manga: Manga, chapter: Chapter) -> Result<Vec<Page>> {
+		// Chapter keys are chapter ids since version 4. A token key is one the app kept
+		// when the user declined (or failed) the key migration; it opens the reader as before.
+		let reader = if is_id(&chapter.key) {
+			fetch_reader_url(&manga.key, &chapter.key)?
+		} else {
+			reader_url(&chapter.key)
+		};
 		// A chapter the site is still copying answers 503 "内容准备中"; `fetch_html` fails on it.
-		let pages = parse_pages(&fetch_html(&reader_url(&chapter.key))?)?;
+		let pages = parse_pages(&fetch_html(&reader)?)?;
 		if pages.is_empty() {
 			bail!("[wmh1234] no images for chapter {}", chapter.key);
 		}
@@ -219,12 +226,13 @@ impl Home for Wmh1234Source {
 
 impl DeepLinkHandler for Wmh1234Source {
 	fn handle_deep_link(&self, url: String) -> Result<Option<DeepLinkResult>> {
-		if let Some(key) = chapter_token(&url) {
-			// The token names its work, so no request is needed.
-			if let Some(manga_key) = token_comic_id(&key) {
-				return Ok(Some(DeepLinkResult::Chapter { manga_key, key }));
-			}
-			return Ok(None);
+		if let Some((manga_key, key)) = chapter_path(&url) {
+			return Ok(Some(DeepLinkResult::Chapter { manga_key, key }));
+		}
+		if let Some(token) = chapter_token(&url) {
+			// The token names its work and chapter, so no request is needed.
+			return Ok(token_ids(&token)
+				.map(|(manga_key, key)| DeepLinkResult::Chapter { manga_key, key }));
 		}
 		if let Some(key) = comic_id(&url) {
 			return Ok(Some(DeepLinkResult::Manga { key }));
@@ -233,7 +241,33 @@ impl DeepLinkHandler for Wmh1234Source {
 	}
 }
 
-register_source!(Wmh1234Source, ListingProvider, Home, DeepLinkHandler);
+/// Version 4 changed chapter keys from the site's `/go/` token to the chapter id, after the
+/// site stopped linking tokens (2026-10-24). `breakingChangeVersion` in `source.json` makes
+/// the app offer this migration, which keeps reading history. Work keys did not change.
+impl MigrationHandler for Wmh1234Source {
+	fn handle_manga_migration(&self, key: String) -> Result<String> {
+		Ok(key)
+	}
+
+	fn handle_chapter_migration(&self, _manga_key: String, chapter_key: String) -> Result<String> {
+		if is_id(&chapter_key) {
+			return Ok(chapter_key);
+		}
+		match token_ids(&chapter_key) {
+			Some((_, chapter_id)) => Ok(chapter_id),
+			// The app keeps the old key, which still opens through the reader.
+			None => bail!("[wmh1234] cannot read chapter key {chapter_key}"),
+		}
+	}
+}
+
+register_source!(
+	Wmh1234Source,
+	ListingProvider,
+	Home,
+	DeepLinkHandler,
+	MigrationHandler
+);
 
 #[cfg(test)]
 mod test {
@@ -296,15 +330,57 @@ mod test {
 				source.handle_deep_link(String::from(url)).unwrap(),
 				Some(DeepLinkResult::Chapter {
 					manga_key: String::from("47315"),
-					key: String::from("NDczMTUtMzkyNjEwNi1hNWNlMWU3YTZh")
+					key: String::from("3926106")
 				})
 			);
 		}
 		assert_eq!(
 			source
+				.handle_deep_link(String::from(
+					"https://m.wmh1234.com/comic/47315/3954661.html"
+				))
+				.unwrap(),
+			Some(DeepLinkResult::Chapter {
+				manga_key: String::from("47315"),
+				key: String::from("3954661")
+			})
+		);
+		assert_eq!(
+			source
+				.handle_deep_link(String::from("https://m.wmh1234.com/go/NDczMTU="))
+				.unwrap(),
+			None
+		);
+		assert_eq!(
+			source
 				.handle_deep_link(String::from("https://m.wmh1234.com/category/tags/17"))
 				.unwrap(),
 			None
+		);
+	}
+
+	#[aidoku_test]
+	fn migrates_token_keys_to_chapter_ids() {
+		let source = Wmh1234Source::new();
+		let migrate =
+			|key: &str| source.handle_chapter_migration(String::from("47315"), String::from(key));
+		assert_eq!(
+			migrate("NDczMTUtMzkyNjEwNi1hNWNlMWU3YTZh").ok().as_deref(),
+			Some("3926106")
+		);
+		// Unpadded token.
+		assert_eq!(
+			migrate("MTY4MzgtNjMzNzk3LTdlN2RlMDIyMGI").ok().as_deref(),
+			Some("633797")
+		);
+		assert_eq!(migrate("3954661").ok().as_deref(), Some("3954661"));
+		assert!(migrate("not base64!").is_err());
+		assert_eq!(
+			source
+				.handle_manga_migration(String::from("47315"))
+				.ok()
+				.as_deref(),
+			Some("47315")
 		);
 	}
 }

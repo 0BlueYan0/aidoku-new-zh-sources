@@ -16,8 +16,9 @@ use base64::{
 
 pub const BASE_URL: &str = "https://m.wmh1234.com";
 
-/// Where `/go/<token>` sends the reader (a script redirect, 2026-10-10). Going there
-/// directly saves a request per chapter; if the site moves its reader, chapters fail here.
+/// Where `/go/<token>` sends the reader (a script redirect, 2026-10-10). Only chapter keys
+/// left over from before the 2026-10-24 redesign (tokens the app did not migrate) still go
+/// here directly; current keys follow the redirect the site hands out.
 pub const READER_URL: &str = "https://reader.hqread.cc";
 
 /// The listings: id and the catalogue order behind it. `/custom/top` lists the same 30
@@ -45,6 +46,21 @@ pub fn read_html(response: Response, url: &str) -> Result<Document> {
 		bail!("[wmh1234] HTTP {status} for {url}");
 	}
 	Ok(response.get_html()?)
+}
+
+/// The reader page's address for a chapter id: the chapter link answers 302 to
+/// `/go/<token>`, a page that sends the browser on with a script.
+pub fn fetch_reader_url(manga_key: &str, chapter_id: &str) -> Result<String> {
+	let url = chapter_url(manga_key, chapter_id);
+	let response = request(&url)?.send()?;
+	let status = response.status_code();
+	if !(200..300).contains(&status) {
+		bail!("[wmh1234] HTTP {status} for {url}");
+	}
+	match reader_redirect(&response.get_string()?) {
+		Some(reader) => Ok(reader),
+		None => bail!("[wmh1234] no reader address behind {url}"),
+	}
 }
 
 /// The details page, or `None` when the site has removed the work. Removal needs positive
@@ -87,9 +103,9 @@ pub fn manga_url(key: &str) -> String {
 	format!("{BASE_URL}/comic/{key}.html")
 }
 
-/// The chapter link the site itself shows.
-pub fn chapter_url(token: &str) -> String {
-	format!("{BASE_URL}/go/{token}")
+/// The chapter link the site itself shows. It answers 302 to `/go/<token>`.
+pub fn chapter_url(manga_key: &str, chapter_id: &str) -> String {
+	format!("{BASE_URL}/comic/{manga_key}/{chapter_id}.html")
 }
 
 pub fn reader_url(token: &str) -> String {
@@ -138,7 +154,20 @@ pub fn search_url(query: &str, page: i32) -> String {
 pub fn comic_id(href: &str) -> Option<String> {
 	let (_, rest) = href.split_once("/comic/")?;
 	let (id, _) = rest.split_once(".html")?;
-	(!id.is_empty() && id.chars().all(|c: char| c.is_ascii_digit())).then(|| String::from(id))
+	is_id(id).then(|| String::from(id))
+}
+
+/// `/comic/47315/3954661.html` (relative or absolute) → `("47315", "3954661")`. The details
+/// page links chapters this way since 2026-10-24; it used to link `/go/<token>`.
+pub fn chapter_path(href: &str) -> Option<(String, String)> {
+	let (_, rest) = href.split_once("/comic/")?;
+	let (path, _) = rest.split_once(".html")?;
+	let (work, chapter) = path.split_once('/')?;
+	(is_id(work) && is_id(chapter)).then(|| (String::from(work), String::from(chapter)))
+}
+
+pub fn is_id(text: &str) -> bool {
+	!text.is_empty() && text.chars().all(|c: char| c.is_ascii_digit())
 }
 
 /// The token after `/go/` or `/r/`: the details page links `/go/`, the reader `/r/`.
@@ -155,9 +184,10 @@ pub fn chapter_token(href: &str) -> Option<String> {
 	(!token.is_empty() && matches!(next, None | Some('/' | '?' | '#'))).then_some(token)
 }
 
-/// A chapter token is base64 of `<work id>-<chapter id>-<hash>`; the hash is the
-/// server's, so the token is the chapter key and the work id is read back from it.
-pub fn token_comic_id(token: &str) -> Option<String> {
+/// A chapter token is base64 of `<work id>-<chapter id>-<hash>`; the hash is the server's
+/// and cannot be rebuilt, so a chapter key (the chapter id) cannot be turned back into a
+/// token without asking the site. Returns the work id and the chapter id.
+pub fn token_ids(token: &str) -> Option<(String, String)> {
 	let engine = GeneralPurpose::new(
 		&alphabet::STANDARD,
 		GeneralPurposeConfig::new().with_decode_padding_mode(DecodePaddingMode::Indifferent),
@@ -172,8 +202,17 @@ pub fn token_comic_id(token: &str) -> Option<String> {
 		.collect();
 	let bytes = engine.decode(normalised).ok()?;
 	let text = String::from_utf8(bytes).ok()?;
-	let id = text.split('-').next()?;
-	(!id.is_empty() && id.chars().all(|c: char| c.is_ascii_digit())).then(|| String::from(id))
+	let mut parts = text.split('-');
+	let work = parts.next()?;
+	let chapter = parts.next()?;
+	(is_id(work) && is_id(chapter)).then(|| (String::from(work), String::from(chapter)))
+}
+
+/// The address `/go/<token>` sends the reader to with `location.replace("…")`.
+pub fn reader_redirect(page: &str) -> Option<String> {
+	let (_, rest) = page.split_once("location.replace(\"")?;
+	let (url, _) = rest.split_once('"')?;
+	(url.starts_with("http") && url.contains("/r/")).then(|| String::from(url))
 }
 
 fn text_of(el: &Element) -> String {
@@ -353,9 +392,9 @@ pub fn chapter_number(title: &str) -> Option<f32> {
 }
 
 /// The details page lists every chapter, newest first, as the app wants. Titles repeat
-/// (two `第35话`); the site's order and titles are kept as they are. A chapter link whose
-/// token cannot be read empties the whole list, so the library keeps its chapters instead
-/// of a list with one missing.
+/// (two `第35话`); the site's order and titles are kept as they are. The key is the chapter
+/// id. A chapter link that names no chapter empties the whole list, so the library keeps
+/// its chapters instead of a list with one missing.
 pub fn parse_chapters(html: &Document) -> Vec<Chapter> {
 	let mut chapters: Vec<Chapter> = Vec::new();
 	for link in html
@@ -363,10 +402,10 @@ pub fn parse_chapters(html: &Document) -> Vec<Chapter> {
 		.into_iter()
 		.flatten()
 	{
-		let Some(key) = link
-			.attr("href")
-			.and_then(|href: String| chapter_token(&href))
-		else {
+		let Some((work, key)) = link.attr("href").and_then(|href: String| {
+			// The old `/go/<token>` links are still read, in case the site goes back.
+			chapter_path(&href).or_else(|| chapter_token(&href).and_then(|t| token_ids(&t)))
+		}) else {
 			return Vec::new();
 		};
 		if chapters.iter().any(|c: &Chapter| c.key == key) {
@@ -374,7 +413,7 @@ pub fn parse_chapters(html: &Document) -> Vec<Chapter> {
 		}
 		let title = text_of(&link);
 		chapters.push(Chapter {
-			url: Some(chapter_url(&key)),
+			url: Some(chapter_url(&work, &key)),
 			chapter_number: chapter_number(&title),
 			title: (!title.is_empty()).then_some(title),
 			key,
@@ -441,6 +480,10 @@ mod test {
 		);
 		assert_eq!(manga_url("47315"), "https://m.wmh1234.com/comic/47315.html");
 		assert_eq!(
+			chapter_url("47315", "3954661"),
+			"https://m.wmh1234.com/comic/47315/3954661.html"
+		);
+		assert_eq!(
 			reader_url("NDczMTUtMzkyNjEwNi1hNWNlMWU3YTZh"),
 			"https://reader.hqread.cc/r/NDczMTUtMzkyNjEwNi1hNWNlMWU3YTZh"
 		);
@@ -466,15 +509,34 @@ mod test {
 		);
 		assert_eq!(chapter_token("/go/"), None);
 		assert_eq!(
-			token_comic_id("NDczMTUtMzkyNjEwNi1hNWNlMWU3YTZh").as_deref(),
-			Some("47315")
+			token_ids("NDczMTUtMzkyNjEwNi1hNWNlMWU3YTZh"),
+			Some((String::from("47315"), String::from("3926106")))
 		);
 		// 19天's first chapter: 31 characters, so the padding is missing.
 		assert_eq!(
-			token_comic_id("MTY4MzgtNjMzNzk3LTdlN2RlMDIyMGI").as_deref(),
-			Some("16838")
+			token_ids("MTY4MzgtNjMzNzk3LTdlN2RlMDIyMGI"),
+			Some((String::from("16838"), String::from("633797")))
 		);
-		assert_eq!(token_comic_id("not base64!"), None);
+		assert_eq!(token_ids("not base64!"), None);
+		// base64 of "47315" alone: no chapter id.
+		assert_eq!(token_ids("NDczMTU="), None);
+		assert_eq!(
+			chapter_path("/comic/47315/3954661.html"),
+			Some((String::from("47315"), String::from("3954661")))
+		);
+		assert_eq!(
+			chapter_path("https://m.wmh1234.com/comic/47315/3954661.html?x=1"),
+			Some((String::from("47315"), String::from("3954661")))
+		);
+		assert_eq!(chapter_path("/comic/47315.html"), None);
+		assert_eq!(chapter_path("/comic/47315/3954661a.html"), None);
+		assert_eq!(comic_id("/comic/47315/3954661.html"), None);
+		assert_eq!(
+			reader_redirect(include_str!("fixtures/go.html")).as_deref(),
+			Some("https://reader.hqread.cc/r/NDczMTUtMzk1NDY2MS0wODcwMWI1OGQ5")
+		);
+		assert_eq!(reader_redirect("<html><body>维护中</body></html>"), None);
+		assert_eq!(reader_redirect(r#"location.replace("/login")"#), None);
 	}
 
 	#[aidoku_test]
@@ -583,25 +645,32 @@ mod test {
 
 	#[aidoku_test]
 	fn a_bad_chapter_link_rejects_the_list() {
-		let html = r#"<div class="mint-chapter-grid"><a href="/go/NDczMTUtMQ==" data-chapter-id="2">第2话</a><a href="/comic/1" data-chapter-id="1">第1话</a></div>"#;
+		let html = r#"<div class="mint-chapter-grid"><a href="/comic/47315/2.html" data-chapter-id="2">第2话</a><a href="/comic/1" data-chapter-id="1">第1话</a></div>"#;
 		assert!(parse_chapters(&doc(html)).is_empty());
-		let html = r#"<div class="mint-chapter-grid"><a href="/go/NDczMTUtMg==" data-chapter-id="2">第2话</a><a href="/go/NDczMTUtMQ==" data-chapter-id="1">第1话</a></div>"#;
-		assert_eq!(parse_chapters(&doc(html)).len(), 2);
+		// The links from before 2026-10-24 (base64 of "47315-2-x" and "47315-1-x").
+		let html = r#"<div class="mint-chapter-grid"><a href="/go/NDczMTUtMi14" data-chapter-id="2">第2话</a><a href="/go/NDczMTUtMS14" data-chapter-id="1">第1话</a></div>"#;
+		let chapters = parse_chapters(&doc(html));
+		assert_eq!(chapters.len(), 2);
+		assert_eq!(chapters[0].key, "2");
+		assert_eq!(
+			chapters[1].url.as_deref(),
+			Some("https://m.wmh1234.com/comic/47315/1.html")
+		);
 	}
 
 	#[aidoku_test]
 	fn lists_chapters_newest_first() {
 		let chapters = parse_chapters(&doc(include_str!("fixtures/manga.html")));
-		assert_eq!(chapters.len(), 45);
-		assert_eq!(chapters[0].key, "NDczMTUtMzkyNjEwNi1hNWNlMWU3YTZh");
-		assert_eq!(chapters[0].title.as_deref(), Some("第40话 暴风雨前夕"));
-		assert_eq!(chapters[0].chapter_number, Some(40.0));
+		assert_eq!(chapters.len(), 47);
+		assert_eq!(chapters[0].key, "3954661");
+		assert_eq!(chapters[0].title.as_deref(), Some("第42话"));
+		assert_eq!(chapters[0].chapter_number, Some(42.0));
 		assert_eq!(
 			chapters[0].url.as_deref(),
-			Some("https://m.wmh1234.com/go/NDczMTUtMzkyNjEwNi1hNWNlMWU3YTZh")
+			Some("https://m.wmh1234.com/comic/47315/3954661.html")
 		);
-		assert_eq!(chapters[44].title.as_deref(), Some("1"));
-		assert_eq!(chapters[44].chapter_number, Some(1.0));
+		assert_eq!(chapters[46].title.as_deref(), Some("1"));
+		assert_eq!(chapters[46].chapter_number, Some(1.0));
 		assert_eq!(chapter_number("特别篇"), None);
 		assert_eq!(chapter_number("第154话 (AI翻译)"), Some(154.0));
 		assert_eq!(chapter_number("最终话 来战吧！怪物"), None);
