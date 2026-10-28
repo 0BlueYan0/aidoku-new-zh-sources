@@ -533,22 +533,32 @@ fn viewer_of(categories: &[String]) -> Viewer {
 	}
 }
 
-/// A card on a listing (`.page-item-detail`) or search page (`.c-tabs-item__content`).
-/// Only search cards name the work's categories; the others are rated NSFW until the
-/// details page is opened.
+/// Work cards, newest layout first. On 2026-10-28 the search, listing and tag pages switched
+/// from Madara's `.c-tabs-item__content` / `.page-item-detail` to the child theme's
+/// `article.mkjp-sr__item`; the old ones stay so either layout reads.
+const CARD_SELECTOR: &str = "article.mkjp-sr__item, .page-item-detail, .c-tabs-item__content";
+
+fn cover_of(el: &Element) -> Option<String> {
+	el.attr("src")
+		.or_else(|| el.attr("data-src"))
+		.filter(|src: &String| src.starts_with("http"))
+}
+
+/// One card. Old search cards list every category; the 2026-10-28 cards show one, and listing
+/// cards none, so most works are rated NSFW until the details page is opened.
 pub fn parse_card(card: &Element) -> Option<Manga> {
-	let link = card.select_first(".post-title a")?;
+	let link = card.select_first(".mkjp-sr__title a, .post-title a")?;
 	let (key, _) = work_keys(&link.attr("href")?)?;
 	let title = text_of(&link);
 	if title.is_empty() {
 		return None;
 	}
 	let cover = card
-		.select_first("img")
-		.and_then(|el: Element| el.attr("src").or_else(|| el.attr("data-src")))
-		.filter(|src: &String| src.starts_with("http"));
+		.select_first(".mkjp-sr__cover img")
+		.or_else(|| card.select_first("img"))
+		.and_then(|el: Element| cover_of(&el));
 	let categories: Vec<String> = card
-		.select(".mg_genres .summary-content a")
+		.select(".mkjp-sr__genre, .mg_genres .summary-content a")
 		.map(|links| links.map(|a: Element| text_of(&a)).collect())
 		.unwrap_or_default();
 	Some(Manga {
@@ -562,9 +572,51 @@ pub fn parse_card(card: &Element) -> Option<Manga> {
 	})
 }
 
-pub fn parse_manga_list(html: &Document) -> MangaPageResult {
+/// Works in the results area found by their links alone, for when the site renames the card
+/// classes again: every link to a work page (not a chapter) in `#loop-content`, titled by the
+/// first one with text and covered by the first image inside one.
+fn parse_work_links(results: &Element) -> Vec<Manga> {
 	let mut entries: Vec<Manga> = Vec::new();
-	if let Some(cards) = html.select(".page-item-detail, .c-tabs-item__content") {
+	let Some(links) = results.select("a[href]") else {
+		return entries;
+	};
+	for link in links {
+		let Some((key, None)) = link.attr("href").and_then(|href| work_keys(&href)) else {
+			continue;
+		};
+		let index = match entries.iter().position(|m: &Manga| m.key == key) {
+			Some(index) => index,
+			None => {
+				entries.push(Manga {
+					url: Some(manga_url(&key)),
+					key,
+					content_rating: ContentRating::NSFW,
+					viewer: Viewer::Webtoon,
+					..Default::default()
+				});
+				entries.len() - 1
+			}
+		};
+		let manga = &mut entries[index];
+		if manga.title.is_empty() {
+			manga.title = text_of(&link);
+		}
+		if manga.cover.is_none() {
+			manga.cover = link
+				.select_first("img")
+				.and_then(|el: Element| cover_of(&el));
+		}
+	}
+	entries.retain(|m: &Manga| !m.title.is_empty());
+	entries
+}
+
+/// A listing, search or tag page. A page without `#loop-content` has no results (an empty
+/// search); a page with it but no works read means the layout changed, which is an error so
+/// the log says so instead of the rows quietly staying empty.
+pub fn parse_manga_list(html: &Document) -> Result<MangaPageResult> {
+	let mut entries: Vec<Manga> = Vec::new();
+	if let Some(cards) = html.select(CARD_SELECTOR) {
 		for card in cards {
 			if let Some(manga) = parse_card(&card) {
 				if !entries.iter().any(|m: &Manga| m.key == manga.key) {
@@ -573,11 +625,19 @@ pub fn parse_manga_list(html: &Document) -> MangaPageResult {
 			}
 		}
 	}
+	if entries.is_empty() {
+		if let Some(results) = html.select_first("#loop-content") {
+			entries = parse_work_links(&results);
+			if entries.is_empty() {
+				bail!("[bakamh] listing layout changed: no works in #loop-content");
+			}
+		}
+	}
 	let has_next_page = !entries.is_empty() && html.select_first("a.nextpostslink").is_some();
-	MangaPageResult {
+	Ok(MangaPageResult {
 		entries,
 		has_next_page,
-	}
+	})
 }
 
 /// The `.summary-content` under a details heading (`作者`, `分类`, `状态` …).
@@ -1089,21 +1149,23 @@ mod test {
 			(include_str!("fixtures/search_p2.html"), 12),
 			(include_str!("fixtures/allages.html"), 18),
 			(include_str!("fixtures/tag.html"), 12),
+			(include_str!("fixtures/search_mkjp.html"), 12),
+			(include_str!("fixtures/tag_mkjp.html"), 12),
 		] {
-			let result = parse_manga_list(&doc(fixture));
+			let result = parse_manga_list(&doc(fixture)).expect("list");
 			assert_eq!(result.entries.len(), count);
 			assert!(result.has_next_page);
 			for manga in &result.entries {
 				assert!(manga.cover.is_some(), "{}", manga.title);
 			}
 		}
-		let home = parse_manga_list(&doc(include_str!("fixtures/home.html")));
+		let home = parse_manga_list(&doc(include_str!("fixtures/home.html"))).expect("home");
 		assert_eq!(home.entries[0].title, "Not Sober");
 		assert_eq!(home.entries[0].key, "not-sober");
 		assert_eq!(home.entries[0].content_rating, ContentRating::NSFW);
 
 		// Search cards name the category, so all-ages works are rated there already.
-		let search = parse_manga_list(&doc(include_str!("fixtures/search.html")));
+		let search = parse_manga_list(&doc(include_str!("fixtures/search.html"))).expect("search");
 		let first = &search.entries[0];
 		assert_eq!(first.title, "魔法少年");
 		assert_eq!(first.content_rating, ContentRating::Safe);
@@ -1111,6 +1173,48 @@ mod test {
 			.entries
 			.iter()
 			.any(|m: &Manga| m.content_rating == ContentRating::NSFW));
+	}
+
+	/// The search page as served from 2026-10-28, with `article.mkjp-sr__item` cards.
+	const SEARCH_MKJP: &str = include_str!("fixtures/search_mkjp.html");
+
+	#[aidoku_test]
+	fn reads_the_mkjp_cards() {
+		let result = parse_manga_list(&doc(SEARCH_MKJP)).expect("list");
+		let first = &result.entries[0];
+		assert_eq!(first.key, "%e9%aa%a8%e5%a4%b4%e4%b8%8e%e8%8a%b1%e7%93%a3");
+		assert_eq!(first.title, "骨头与花瓣");
+		assert!(first
+			.cover
+			.as_deref()
+			.is_some_and(|c: &str| c.starts_with("https://bakamh.com/wp-content/uploads/2026/04/")));
+		// The card's one category is `BL`, not all-ages.
+		assert_eq!(first.content_rating, ContentRating::NSFW);
+	}
+
+	#[aidoku_test]
+	fn reads_works_by_their_links_when_the_cards_are_renamed() {
+		let expected = parse_manga_list(&doc(SEARCH_MKJP)).expect("cards");
+		let renamed = SEARCH_MKJP.replace("mkjp-sr__", "renamed-");
+		let result = parse_manga_list(&doc(&renamed)).expect("links");
+		assert_eq!(result.entries.len(), expected.entries.len());
+		for (got, want) in result.entries.iter().zip(&expected.entries) {
+			assert_eq!(got.key, want.key);
+			assert_eq!(got.title, want.title);
+			assert_eq!(got.cover, want.cover);
+		}
+		assert!(result.has_next_page);
+	}
+
+	#[aidoku_test]
+	fn a_results_area_without_works_is_an_error() {
+		let changed = r#"<div id="loop-content"><div class="x"><a href="https://bakamh.com/manga-genre/bl/">BL</a></div></div>"#;
+		assert!(parse_manga_list(&doc(changed)).is_err());
+		// An empty search has no results area at all.
+		let none =
+			parse_manga_list(&doc("<div class=\"c-page\"><p>没有结果</p></div>")).expect("empty");
+		assert!(none.entries.is_empty());
+		assert!(!none.has_next_page);
 	}
 
 	#[aidoku_test]

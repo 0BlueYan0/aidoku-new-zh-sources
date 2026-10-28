@@ -3,6 +3,7 @@
 use aidoku::{
 	alloc::{vec, String, Vec},
 	imports::{
+		html::Document,
 		net::Request,
 		std::{send_partial_result, sleep},
 	},
@@ -62,7 +63,7 @@ impl Source for BakamhSource {
 						}
 						None => {
 							let html = fetch_html_retrying(&tag_url(&value, page))?;
-							return Ok(parse_manga_list(&html));
+							return parse_manga_list(&html);
 						}
 					},
 					_ => {}
@@ -91,7 +92,7 @@ impl Source for BakamhSource {
 		} else {
 			fetch_html_retrying(&url)?
 		};
-		Ok(parse_manga_list(&html))
+		parse_manga_list(&html)
 	}
 
 	fn get_manga_update(
@@ -164,7 +165,7 @@ impl ListingProvider for BakamhSource {
 		let Some(url) = listing_url(&listing.id, page) else {
 			bail!("Unknown listing: {}", listing.id);
 		};
-		Ok(parse_manga_list(&fetch_html_retrying(&url)?))
+		parse_manga_list(&fetch_html_retrying(&url)?)
 	}
 }
 
@@ -196,7 +197,7 @@ impl Home for BakamhSource {
 			};
 			// A row that fails stays empty; the others still load.
 			match fetch_page(&url, None) {
-				Ok(Some(html)) => send_home_row(title, id, parse_manga_list(&html).entries),
+				Ok(Some(html)) => send_home_page(title, id, &html),
 				Ok(None) => blocked.push((title, id, url)),
 				Err(_) => {}
 			}
@@ -211,7 +212,7 @@ impl Home for BakamhSource {
 			sleep(CHALLENGE_PAUSE);
 			for (title, id, url) in blocked {
 				if let Ok(Some(html)) = fetch_page(&url, None) {
-					send_home_row(title, id, parse_manga_list(&html).entries);
+					send_home_page(title, id, &html);
 				}
 			}
 		}
@@ -256,12 +257,17 @@ fn send_home_rows_together() {
 			Some(Ok(response)) => read_page(&url, response),
 			Some(Err(_)) | None => Err(error!("[bakamh] no response for {url}")),
 		};
-		let entries = match page {
-			Ok(Some(html)) => parse_manga_list(&html).entries,
-			// A challenge page, which `fetch_html` turns into an error.
-			Ok(None) | Err(_) => continue,
-		};
-		send_home_row(title, id, entries);
+		// A challenge page (`Ok(None)`), which `fetch_html` turns into an error, leaves the row empty.
+		if let Ok(Some(html)) = page {
+			send_home_page(title, id, &html);
+		}
+	}
+}
+
+/// A row's page into the skeleton; a page the parser cannot read leaves the row empty.
+fn send_home_page(title: &str, id: &str, html: &Document) {
+	if let Ok(result) = parse_manga_list(html) {
+		send_home_row(title, id, result.entries);
 	}
 }
 
