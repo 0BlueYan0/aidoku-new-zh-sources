@@ -39,13 +39,19 @@ else
 	)
 fi
 
-if (( ${#sources[@]} == 0 )); then
+# prebuilt/*.aix are sources packaged elsewhere (scripts/release-prebuilt.sh); pr.yaml
+# verifies them with the rest.
+shopt -s nullglob
+prebuilt=(prebuilt/*.aix)
+shopt -u nullglob
+
+if (( ${#sources[@]} == 0 && ${#prebuilt[@]} == 0 )); then
 	echo "No source changed."
 	exit 0
 fi
 
 failures=()
-packages=()
+packages=("${prebuilt[@]}")
 
 for source in "${sources[@]}"; do
 	[[ -f "$source/Cargo.toml" ]] || continue

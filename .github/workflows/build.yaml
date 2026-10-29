@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "sources/**"
+      - "prebuilt/**"
       - "public/**"
       - ".github/actions/install-aidoku-cli/**"
       - ".github/workflows/build.yaml"
@@ -53,11 +54,13 @@ jobs:
             echo "::endgroup::"
           done
 
+      # prebuilt/ holds sources whose code is not in this repository; they are packaged
+      # locally (scripts/release-prebuilt.sh) and listed together with the rest.
       - name: Verify packages
-        run: aidoku verify sources/*/package.aix
+        run: aidoku verify sources/*/package.aix prebuilt/*.aix
 
       - name: Build source list
-        run: aidoku build sources/*/package.aix --name "Aidoku ZH Sources"
+        run: aidoku build sources/*/package.aix prebuilt/*.aix --name "Aidoku ZH Sources"
 
       - name: Deploy to GitHub Pages
         uses: JamesIves/github-pages-deploy-action@v4.7.2
