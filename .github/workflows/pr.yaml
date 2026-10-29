@@ -3,6 +3,7 @@ on:
   pull_request:
     paths:
       - "sources/**"
+      - "prebuilt/**"
       - "templates/**"
       - "rustfmt.toml"
       - ".github/actions/install-aidoku-cli/**"
@@ -80,14 +81,14 @@ jobs:
       - name: Test if sources are valid
         run: |
           shopt -s nullglob
-          packages=(sources/*/package.aix)
+          packages=(sources/*/package.aix prebuilt/*.aix)
           (( ${#packages[@]} )) || { echo "No source changed."; exit 0; }
           aidoku verify "${packages[@]}"
 
       - name: Flatten packages directory
         run: |
           shopt -s nullglob
-          packages=(sources/*/package.aix)
+          packages=(sources/*/package.aix prebuilt/*.aix)
           (( ${#packages[@]} )) || exit 0
           aidoku build "${packages[@]}"
 

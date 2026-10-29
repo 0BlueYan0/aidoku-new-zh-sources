@@ -21,3 +21,7 @@ templates/*/target
 docs/*
 CLAUDE.md
 __pycache__/
+
+# zh.bakamh2 source lives in a private repo; only prebuilt/zh.bakamh2.aix is published
+sources/zh.bakamh2/
+!prebuilt/*.aix
