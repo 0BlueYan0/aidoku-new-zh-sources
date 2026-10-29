@@ -20,6 +20,8 @@ aidoku-test = { git = "https://github.com/Aidoku/aidoku-rs.git", branch = "main"
 
 [features]
 live-tests = []
+# Tests that read saved site pages from src/fixtures/, which are not in git.
+fixtures = []
 
 [profile.dev]
 panic = "abort"

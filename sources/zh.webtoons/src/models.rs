@@ -319,28 +319,6 @@ mod tests {
 	use aidoku_test::aidoku_test;
 
 	#[aidoku_test]
-	fn app_list_preserves_legacy_keys_and_manga_titles() {
-		let page: EpisodeList = decode(include_str!("fixtures/app-10568-0.json")).unwrap();
-		let old_key =
-			"https://www.webtoons.com/zh-hant/action/jjk/trial/viewer?title_no=10568&episode_no=1";
-		let legacy = vec![Chapter {
-			key: old_key.into(),
-			chapter_number: Some(1.0),
-			..Default::default()
-		}];
-		let trial: EpisodeList = decode(include_str!("fixtures/app-10568-30.json")).unwrap();
-		let chapters = chapters_from_episodes(trial.episode_list, &legacy, true).unwrap();
-		assert_eq!(chapters[0].key, old_key);
-		assert_eq!(chapters[0].title.as_deref(), Some("試閱"));
-		assert!(!chapters[0].locked);
-		let paid = chapters_from_episodes(page.episode_list, &legacy, true).unwrap();
-		assert_eq!(paid[0].key, "31");
-		assert_eq!(paid[0].title.as_deref(), Some("第30集（需官方 App 購買）"));
-		assert_eq!(paid[0].chapter_number, None);
-		assert!(!paid[0].locked);
-	}
-
-	#[aidoku_test]
 	fn app_only_keys_stay_stable_when_an_episode_later_becomes_free_on_web() {
 		let web_url =
 			"https://www.webtoons.com/zh-hant/x/y/chapter/viewer?title_no=3123&episode_no=271";
@@ -420,39 +398,6 @@ mod tests {
 	}
 
 	#[aidoku_test]
-	fn valid_purchase_rights_remove_purchase_requirement_without_changing_keys() {
-		let page: EpisodeList = decode(include_str!("fixtures/app-10568-0.json")).unwrap();
-		let mut chapters = chapters_from_episodes(page.episode_list, &[], true).unwrap();
-		let rights: RightList = decode(r#"{"message":{"result":{"rightList":[{"episodeNo":31,"productId":"linewebtoon-WEBTOON-10568-31","hasRight":true,"infinite":true,"expireTime":0}]}}}"#).unwrap();
-		apply_rights(&mut chapters, "10568", &rights.right_list, 1_000);
-		assert_eq!(chapters[0].key, "31");
-		assert_eq!(chapters[0].title.as_deref(), Some("第30集"));
-		assert!(!chapters[0].locked);
-		assert_eq!(
-			chapters[1].title.as_deref(),
-			Some("第29集（需官方 App 購買）")
-		);
-	}
-
-	#[aidoku_test]
-	fn expired_or_wrong_product_rights_never_claim_ownership() {
-		let page: EpisodeList = decode(include_str!("fixtures/app-10568-0.json")).unwrap();
-		let mut chapters = chapters_from_episodes(page.episode_list, &[], true).unwrap();
-		let rights: RightList = decode(r#"{"message":{"result":{"rightList":[{"episodeNo":31,"productId":"linewebtoon-WEBTOON-999-31","hasRight":true,"infinite":true,"expireTime":0},{"episodeNo":30,"productId":"linewebtoon-WEBTOON-10568-30","hasRight":true,"infinite":false,"expireTime":999}]}}}"#).unwrap();
-		apply_rights(&mut chapters, "10568", &rights.right_list, 1_000);
-		assert_eq!(
-			chapters[0].title.as_deref(),
-			Some("第30集（需官方 App 購買）")
-		);
-		assert_eq!(
-			chapters[1].title.as_deref(),
-			Some("第29集（需官方 App 購買）")
-		);
-		// A user can purchase in the official App after this refresh, so keep it clickable.
-		assert!(!chapters[0].locked);
-	}
-
-	#[aidoku_test]
 	fn paid_webtoon_images_require_secure_tokens_too() {
 		let info: EpisodeInfoResult = decode(r#"{"message":{"result":{"episodeInfo":{"product":true,"imageInfo":[{"sortOrder":1,"url":"/a.jpg"}]}}}}"#).unwrap();
 		assert!(info.episode_info.requires_secure_token(false));
@@ -465,15 +410,6 @@ mod tests {
 		);
 		assert!(decode::<EpisodeList>(r#"{"message":{"result":{}}}"#).is_err());
 		assert!(decode::<EpisodeList>("not json").is_err());
-	}
-
-	#[aidoku_test]
-	fn preview_and_reward_episodes_are_listed_but_not_free() {
-		let page: EpisodeList = decode(include_str!("fixtures/app-3123-0.json")).unwrap();
-		assert_eq!(page.episode_list[0].episode_no, 271);
-		let chapters = chapters_from_episodes(page.episode_list, &[], false).unwrap();
-		assert!(!chapters[0].locked);
-		assert_eq!(chapters[0].chapter_number, Some(271.0));
 	}
 
 	#[aidoku_test]
@@ -574,3 +510,7 @@ mod tests {
 			.is_err());
 	}
 }
+
+#[cfg(all(test, feature = "fixtures"))]
+#[path = "fixture_tests/models.rs"]
+mod fixture_tests;

@@ -539,10 +539,6 @@ mod test {
 		assert!(parse_catalog(&doc, "2", TW_URL).is_empty());
 	}
 
-	fn doc(html: &str) -> Document {
-		Html::parse_with_url(html, TW_URL).expect("parse")
-	}
-
 	#[aidoku_test]
 	fn builds_addresses() {
 		assert_eq!(
@@ -627,137 +623,8 @@ mod test {
 		assert_eq!(parse_placeholder_key("v418-2"), Some(("418", 2)));
 		assert_eq!(parse_placeholder_key("420"), None);
 	}
-
-	#[aidoku_test]
-	fn parses_lists() {
-		for (fixture, count, next) in [
-			(include_str!("fixtures/wenku.html"), 30, true),
-			(include_str!("fixtures/wenku_bili.html"), 30, true),
-			(include_str!("fixtures/top.html"), 50, true),
-			(include_str!("fixtures/search_bili.html"), 6, false),
-		] {
-			let result = parse_manga_list(&doc(fixture), TW_URL);
-			assert_eq!((result.entries.len(), result.has_next_page), (count, next));
-			assert!(result
-				.entries
-				.iter()
-				.all(|m: &Manga| m.cover.is_some() && m.authors.is_some()));
-		}
-		let wenku = parse_manga_list(&doc(include_str!("fixtures/wenku.html")), TW_URL);
-		assert_eq!(wenku.entries[1].key, "5407");
-		// The whole title, not the heading cut short.
-		assert_eq!(
-			wenku.entries[1].title,
-			"牢籠中的囚鳥們 ～從【仙境】開始，向命運發起抗爭～"
-		);
-		assert_eq!(
-			wenku.entries[1].cover.as_deref(),
-			Some("https://tw.linovelib.com/files/article/image/5/5407/5407s.jpg?1790926054")
-		);
-		let top = parse_manga_list(&doc(include_str!("fixtures/top.html")), TW_URL);
-		assert_eq!(top.entries[0].title, "無職轉生 ～到了異世界就拿出真本事～");
-		assert_eq!(
-			top.entries[0].authors,
-			Some(Vec::from([String::from("理不盡な孫の手")]))
-		);
-		let search = parse_manga_list(&doc(include_str!("fixtures/search_bili.html")), TW_URL);
-		assert_eq!(search.entries[0].key, "2");
-		assert_eq!(
-			search.entries[0].url.as_deref(),
-			Some("https://tw.linovelib.com/novel/2.html")
-		);
-	}
-
-	#[aidoku_test]
-	fn reads_the_details_page() {
-		let manga = parse_details(&doc(include_str!("fixtures/novel_2.html")), "2", TW_URL)
-			.expect("details");
-		assert_eq!(manga.title, "果然我的青春戀愛喜劇搞錯了");
-		assert_eq!(manga.authors, Some(Vec::from([String::from("渡航")])));
-		assert_eq!(manga.artists, Some(Vec::from([String::from("ponkan⑧")])));
-		assert_eq!(manga.status, MangaStatus::Completed);
-		assert_eq!(
-			manga.tags,
-			Some(Vec::from(
-				["校園", "青春", "戀愛", "歡樂向", "後宮", "妹妹"].map(String::from)
-			))
-		);
-		assert_eq!(
-			manga.cover.as_deref(),
-			Some("https://tw.linovelib.com/files/article/image/0/2/2s.jpg")
-		);
-		let description = manga.description.unwrap_or_default();
-		assert!(
-			description.starts_with("「我的青春怎麼會變成這樣！」\n高中生八幡生性彆扭"),
-			"{description}"
-		);
-		assert!(
-			description.ends_with("\n\n別名：我的青春戀愛物語果然有問題。, 春物"),
-			"{description}"
-		);
-	}
-
-	#[aidoku_test]
-	fn reads_the_catalogue() {
-		let chapters = parse_catalog(&doc(include_str!("fixtures/catalog_2.html")), "2", TW_URL);
-		assert_eq!(chapters.len(), 282);
-		let oldest = &chapters[281];
-		assert_eq!(oldest.key, "109088");
-		assert_eq!(oldest.title.as_deref(), Some("【1】插圖"));
-		assert_eq!(oldest.chapter_number, Some(1.0));
-		assert_eq!(
-			oldest.url.as_deref(),
-			Some("https://tw.linovelib.com/novel/2/109088.html")
-		);
-		assert_eq!(chapters[0].chapter_number, Some(282.0));
-		// The unlinked third chapter of volume 418 points at its volume page.
-		let unlinked = chapters
-			.iter()
-			.find(|c: &&Chapter| c.key == "v418-2")
-			.expect("placeholder");
-		assert_eq!(
-			unlinked.title.as_deref(),
-			Some("【3】① 於是平冢靜點燃新的戰火")
-		);
-		assert_eq!(
-			unlinked.url.as_deref(),
-			Some("https://tw.linovelib.com/novel/2/vol_418.html")
-		);
-		assert_eq!(
-			chapters
-				.iter()
-				.filter(|c: &&Chapter| c.key.starts_with('v'))
-				.count(),
-			12
-		);
-		assert!(chapters.iter().any(|c: &Chapter| c.title.as_deref()
-			== Some("【14.5】① 無論何時，比企谷小町都想要一個嫂子。")));
-	}
-
-	#[aidoku_test]
-	fn finds_a_chapter_on_its_volume_page() {
-		assert_eq!(
-			volume_chapter(&doc(include_str!("fixtures/vol_418.html")), 2).as_deref(),
-			Some("420")
-		);
-		assert_eq!(
-			volume_chapter(&doc(include_str!("fixtures/vol_418.html")), 99),
-			None
-		);
-	}
-
-	#[aidoku_test]
-	fn follows_a_chapter_across_pages() {
-		let first = include_str!("fixtures/chapter_403.html");
-		assert_eq!(next_page_url(first), Some("/novel/2/403_2.html"));
-		assert!(is_same_chapter("/novel/2/403_2.html", "2", "403"));
-		let last = next_page_url(include_str!("fixtures/chapter_403_6.html")).expect("url_next");
-		assert_eq!(last, "/novel/2/404.html");
-		assert!(!is_same_chapter(last, "2", "403"));
-		assert!(!is_same_chapter("/novel/2/4030_2.html", "2", "403"));
-		assert_eq!(
-			next_page_url(include_str!("fixtures/chapter_bili_403.html")),
-			Some("/novel/2/403_2.html")
-		);
-	}
 }
+
+#[cfg(all(test, feature = "fixtures"))]
+#[path = "fixture_tests/helper.rs"]
+mod fixture_tests;

@@ -93,23 +93,6 @@ pub fn search(query: &str, page: i32) -> Result<MangaPageResult> {
 	Ok(parse_manga_list(&html, base))
 }
 
-#[cfg(test)]
-mod test {
-	use super::*;
-	use aidoku_test::aidoku_test;
-
-	#[aidoku_test]
-	fn reads_cookies() {
-		let header =
-			"jieqiSearchCss=497526.Bc3N-Zd0; Path=/; Max-Age=3600; SameSite=Lax; Secure; HttpOnly";
-		assert_eq!(
-			cookie(header, "jieqiSearchCss").as_deref(),
-			Some("jieqiSearchCss=497526.Bc3N-Zd0")
-		);
-		let script = include_str!("fixtures/search_guard_js.txt");
-		let js = cookie(script, "jieqiSearchJs").expect("cookie");
-		assert!(js.starts_with("jieqiSearchJs=497526."), "{js}");
-		assert!(!js.contains(';') && !js.contains('"'));
-		assert_eq!(cookie("x=1", "jieqiSearchTicket"), None);
-	}
-}
+#[cfg(all(test, feature = "fixtures"))]
+#[path = "fixture_tests/search.rs"]
+mod fixture_tests;

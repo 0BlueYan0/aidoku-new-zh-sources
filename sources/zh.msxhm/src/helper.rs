@@ -461,61 +461,6 @@ mod test {
 	}
 
 	#[aidoku_test]
-	fn parses_listing_pages() {
-		for (fixture, count, next) in [
-			(include_str!("fixtures/booklist.html"), 28, true),
-			(include_str!("fixtures/booklist_last.html"), 5, false),
-			(include_str!("fixtures/update.html"), 22, true),
-			(include_str!("fixtures/tag.html"), 25, false),
-			(include_str!("fixtures/search.html"), 20, false),
-			(include_str!("fixtures/search_empty.html"), 0, false),
-		] {
-			let result = parse_manga_list(&doc(fixture), BASE_URL);
-			assert_eq!((result.entries.len(), result.has_next_page), (count, next));
-			for manga in &result.entries {
-				assert_eq!(
-					manga.cover,
-					Some(format!(
-						"https://www.jjmhw9.top/static/upload/book/{}/cover.jpg",
-						manga.key
-					)),
-					"{}",
-					manga.title
-				);
-			}
-		}
-		let search = parse_manga_list(&doc(include_str!("fixtures/search.html")), MIRROR);
-		assert_eq!(search.entries[0].key, "44");
-		assert_eq!(search.entries[0].title, "秘密Story第二季");
-		assert_eq!(
-			search.entries[0].url.as_deref(),
-			Some("https://www.mxs13.cc/book/44")
-		);
-		assert_eq!(
-			search.entries[0].cover.as_deref(),
-			Some("https://www.mxs13.cc/static/upload/book/44/cover.jpg")
-		);
-	}
-
-	#[aidoku_test]
-	fn parses_rank_boards() {
-		let html = doc(include_str!("fixtures/rank.html"));
-		// The site numbers 10 works on three boards and 14 on the last.
-		for ((_, heading), count) in RANKS.into_iter().zip([10, 10, 10, 14]) {
-			let board = parse_rank(&html, heading, BASE_URL).expect("board");
-			assert_eq!(board.entries.len(), count, "{heading}");
-			assert!(
-				board.entries.iter().all(|m: &Manga| m.cover.is_some()),
-				"{heading}"
-			);
-		}
-		let new = parse_rank(&html, "新书榜", BASE_URL).expect("board");
-		assert_eq!(new.entries[0].title, "衣冠禽獸");
-		assert_eq!(new.entries[1].title, "我的in援團");
-		assert!(parse_rank(&html, "日榜", BASE_URL).is_err());
-	}
-
-	#[aidoku_test]
 	fn a_link_that_is_not_a_chapter_rejects_the_list() {
 		let html = r#"<ul id="detail-list-select"><li><a href="/chapter/12">第1話</a></li><li><a href="/book/3">更多</a></li></ul>"#;
 		assert!(parse_chapters(&doc(html), BASE_URL).is_empty());
@@ -526,64 +471,8 @@ mod test {
 			.collect();
 		assert_eq!(keys, ["13", "12"]);
 	}
-
-	#[aidoku_test]
-	fn reads_the_details_page() {
-		let manga = parse_details(&doc(include_str!("fixtures/manga.html")), "1224", MIRROR)
-			.expect("details");
-		assert_eq!(manga.title, "衣冠禽獸");
-		assert_eq!(
-			manga.authors,
-			Some(Vec::from([String::from("李東憲"), String::from("金世蘭")]))
-		);
-		assert_eq!(manga.status, MangaStatus::Ongoing);
-		assert_eq!(manga.tags, Some(Vec::from([String::from("都市")])));
-		assert!(manga
-			.description
-			.as_deref()
-			.unwrap_or_default()
-			.starts_with("在女人面前總是笨手笨腳的鈺祥"));
-		assert_eq!(
-			manga.cover.as_deref(),
-			Some("https://www.mxs13.cc/static/upload/book/1224/cover.jpg")
-		);
-
-		let done = parse_details(
-			&doc(include_str!("fixtures/manga_done.html")),
-			"815",
-			BASE_URL,
-		)
-		.expect("details");
-		assert_eq!(done.title, "患得患失的愛戀/這難道是命中註定?");
-		assert_eq!(done.authors, Some(Vec::from([String::from("MOGABI")])));
-		assert_eq!(done.status, MangaStatus::Completed);
-		assert_eq!(done.tags.as_ref().map(Vec::len), Some(6));
-	}
-
-	#[aidoku_test]
-	fn lists_chapters_newest_first() {
-		let chapters = parse_chapters(&doc(include_str!("fixtures/manga_418.html")), BASE_URL);
-		assert_eq!(chapters.len(), 322);
-		assert_eq!(chapters[0].key, "58324");
-		assert_eq!(chapters[0].chapter_number, Some(322.0));
-		assert_eq!(chapters[321].title.as_deref(), Some("第1話-門縫傳出呻吟聲"));
-		assert_eq!(
-			chapters[0].url.as_deref(),
-			Some("https://www.jjmhw9.top/chapter/58324")
-		);
-		assert_eq!(chapter_number("第10話-妳下面這麼敏感啊?"), Some(10.0));
-		assert_eq!(chapter_number("最終話"), None);
-	}
-
-	#[aidoku_test]
-	fn reads_the_reader_page() {
-		let html = doc(include_str!("fixtures/reader.html"));
-		let pages = parse_pages(&html, MIRROR);
-		assert_eq!(pages.len(), 310);
-		assert_eq!(
-			pages[0].content,
-			PageContent::url("https://www.mxs13.cc/static/upload/book/1224/57217/4805168.jpg")
-		);
-		assert_eq!(reader_manga_key(&html).as_deref(), Some("1224"));
-	}
 }
+
+#[cfg(all(test, feature = "fixtures"))]
+#[path = "fixture_tests/helper.rs"]
+mod fixture_tests;

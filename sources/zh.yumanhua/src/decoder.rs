@@ -165,29 +165,8 @@ mod test {
 		assert_eq!(word_index("01", 62), None);
 		assert_eq!(word_index("a", 10), None);
 	}
-
-	#[aidoku_test]
-	fn decodes_the_reader_fixture() {
-		// The expected addresses are what the site's own `all2.js` produced in node from
-		// the same page (2026-10-13).
-		let html = include_str!("fixtures/reader.html");
-		let scripts: Vec<&str> = html
-			.split("<script")
-			.skip(1)
-			.filter_map(|s: &str| s.split_once('>').map(|(_, body): (&str, &str)| body))
-			.filter_map(|s: &str| s.split("</script>").next())
-			.collect();
-		let pages = decode_pages(&scripts, 2).expect("decoded");
-		assert_eq!(pages.len(), 30);
-		assert_eq!(
-			pages[0],
-			"https://p9-zhuxiaobang-sign.shimolife.com/tos-cn-i-0813/osAzEi2U81IPjBBgGgoZQHqAAWkABGVUAIivh~tplv-hra1ikqiyn-29.jpeg?lk3s=76a1794c&x-expires=1792465272&x-signature=OfF6GP3yZ4h6PGPANndycevy89k%3D"
-		);
-		assert_eq!(
-			pages[29],
-			"https://p3-zhuxiaobang-sign.shimolife.com/tos-cn-i-0813/okeYaACDnCB2XkoFEAAAxCEXOAtQfUhgFpIhBY~tplv-hra1ikqiyn-29.jpeg?lk3s=76a1794c&x-expires=1792465272&x-signature=Bq10%2B%2F8M1oE1xcazF2gdspipbks%3D"
-		);
-		// Another key garbles the list instead of decoding it.
-		assert!(decode_pages(&scripts, 3).is_none());
-	}
 }
+
+#[cfg(all(test, feature = "fixtures"))]
+#[path = "fixture_tests/decoder.rs"]
+mod fixture_tests;

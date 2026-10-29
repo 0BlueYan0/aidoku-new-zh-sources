@@ -397,160 +397,6 @@ mod test {
 	}
 
 	#[aidoku_test]
-	fn parses_the_hot_list_and_its_cursor() {
-		let (result, next) = parse_manga_list(doc(include_str!("fixtures/hot.html")));
-		assert_eq!(result.entries.len(), 23);
-		assert!(result.has_next_page);
-		assert_eq!(next.as_deref(), Some("https://dogemanga.com/?p=ymBm3Ity"));
-		// The page has a card with no content (no title); it is skipped.
-		assert!(!result.entries.iter().any(|m: &Manga| m.key == "TXgjojpX"));
-		let first = &result.entries[0];
-		assert_eq!(first.key, "gt9rgUMw");
-		assert!(first.cover.as_deref().is_some_and(
-			|c: &str| c == "https://dogemanga.com/images/manga-thumbnails/gt9rgUMw.jpg"
-		));
-		let shangri = result
-			.entries
-			.iter()
-			.find(|m: &&Manga| m.key == "zw7V_YJF")
-			.expect("card");
-		assert_eq!(shangri.title, "香格里拉·弗陇提亚~屎作猎人向神作发起挑战~");
-		assert_eq!(
-			shangri.authors,
-			Some(Vec::from([
-				String::from("不二凉介"),
-				String::from("硬梨菜")
-			]))
-		);
-		assert_eq!(shangri.status, MangaStatus::Ongoing);
-	}
-
-	#[aidoku_test]
-	fn the_second_hot_page_carries_the_next_cursor() {
-		let (result, next) = parse_manga_list(doc(include_str!("fixtures/hot_2.html")));
-		assert_eq!(result.entries.len(), 22);
-		assert_eq!(
-			next.as_deref(),
-			Some("https://dogemanga.com/?o=24&p=YVCaU30Y")
-		);
-	}
-
-	#[aidoku_test]
-	fn parses_the_latest_list() {
-		let (result, next) = parse_manga_list(doc(include_str!("fixtures/latest.html")));
-		assert_eq!(result.entries.len(), 24);
-		assert_eq!(
-			next.as_deref(),
-			Some("https://dogemanga.com/?p=thlLShZp&s=1")
-		);
-		assert!(result
-			.entries
-			.iter()
-			.any(|m: &Manga| m.status == MangaStatus::Completed));
-	}
-
-	#[aidoku_test]
-	fn search_pages_end_without_a_button() {
-		let (result, next) = parse_manga_list(doc(include_str!("fixtures/search.html")));
-		assert_eq!(result.entries.len(), 24);
-		assert_eq!(
-			next.as_deref(),
-			Some("https://dogemanga.com/?o=24&q=%E6%B5%B7%E8%B3%8A")
-		);
-		let (result, next) = parse_manga_list(doc(include_str!("fixtures/search_last.html")));
-		assert_eq!(result.entries.len(), 19);
-		assert_eq!(next, None);
-		assert!(!result.has_next_page);
-	}
-
-	#[aidoku_test]
-	fn reads_the_details_page() {
-		let manga = parse_details(&doc(include_str!("fixtures/manga.html"))).expect("details");
-		assert_eq!(manga.key, "zw7V_YJF");
-		assert_eq!(manga.title, "香格里拉·弗陇提亚~屎作猎人向神作发起挑战~");
-		assert_eq!(
-			manga.authors,
-			Some(Vec::from([
-				String::from("不二凉介"),
-				String::from("硬梨菜")
-			]))
-		);
-		assert!(manga
-			.description
-			.as_deref()
-			.is_some_and(|d: &str| d.starts_with("BUG使人")));
-		assert_eq!(manga.status, MangaStatus::Ongoing);
-		assert_eq!(
-			manga.cover.as_deref(),
-			Some("https://dogemanga.com/images/manga-thumbnails/zw7V_YJF.jpg")
-		);
-	}
-
-	#[aidoku_test]
-	fn lists_every_chapter_and_volume_newest_first() {
-		let chapters = parse_chapters(&doc(include_str!("fixtures/manga.html")));
-		assert_eq!(chapters.len(), 289);
-		assert_eq!(chapters[0].key, "722O_Csr");
-		assert_eq!(chapters[0].title.as_deref(), Some("第281话试看"));
-		assert_eq!(chapters[0].chapter_number, Some(281.0));
-		assert_eq!(
-			chapters[0].url.as_deref(),
-			Some("https://dogemanga.com/p/722O_Csr")
-		);
-		let last = chapters.last().expect("first chapter");
-		assert_eq!(last.chapter_number, Some(1.0));
-		let volumes = chapters
-			.iter()
-			.filter(|c: &&Chapter| c.volume_number.is_some())
-			.count();
-		assert_eq!(volumes, 6);
-		let side = chapters
-			.iter()
-			.find(|c: &&Chapter| c.title.as_deref() == Some("吐槽短篇"))
-			.expect("side story");
-		assert_eq!((side.chapter_number, side.volume_number), (None, None));
-	}
-
-	#[aidoku_test]
-	fn extras_titled_as_volumes_get_no_volume_number() {
-		let chapters = parse_chapters(&doc(include_str!("fixtures/manga_extras.html")));
-		assert_eq!(chapters.len(), 483);
-		let volumes = chapters
-			.iter()
-			.filter(|c: &&Chapter| c.volume_number.is_some())
-			.count();
-		assert_eq!(volumes, 28);
-		for title in ["第05卷特典", "第07卷Animate特典"] {
-			let extra = chapters
-				.iter()
-				.find(|c: &&Chapter| c.title.as_deref() == Some(title))
-				.expect(title);
-			assert_eq!(
-				(extra.chapter_number, extra.volume_number),
-				(None, None),
-				"{title}"
-			);
-		}
-		let volume = chapters
-			.iter()
-			.find(|c: &&Chapter| c.title.as_deref() == Some("第05卷"))
-			.expect("volume 5");
-		assert_eq!(
-			(volume.chapter_number, volume.volume_number),
-			(None, Some(5.0))
-		);
-		// The site's own order, oldest last: volumes 7, 8, 6, 1 from the bottom.
-		let tail: Vec<Option<f32>> = chapters[chapters.len() - 4..]
-			.iter()
-			.map(|c: &Chapter| c.volume_number)
-			.collect();
-		assert_eq!(
-			tail,
-			Vec::from([Some(1.0), Some(6.0), Some(8.0), Some(7.0)])
-		);
-	}
-
-	#[aidoku_test]
 	fn numbers_chapters_and_volumes() {
 		assert_eq!(chapter_numbers("第281话试看"), (Some(281.0), None));
 		assert_eq!(chapter_numbers("第276话 试看"), (Some(276.0), None));
@@ -558,25 +404,6 @@ mod test {
 		assert_eq!(chapter_numbers("第10.5話"), (Some(10.5), None));
 		assert_eq!(chapter_numbers("第06卷"), (None, Some(6.0)));
 		assert_eq!(chapter_numbers("吐槽短篇"), (None, None));
-	}
-
-	#[aidoku_test]
-	fn reads_every_page_from_a_mid_chapter_reader_page() {
-		let html = doc(include_str!("fixtures/reader.html"));
-		let pages = parse_pages(&html).unwrap();
-		assert_eq!(pages.len(), 19);
-		assert_eq!(
-			pages[0].content,
-			PageContent::url("https://dogemanga.com/images/pages/5gT25mfd.jpg")
-		);
-		assert_eq!(
-			pages[1].content,
-			PageContent::url("https://dogemanga.com/images/pages/zQtfEe-q.jpg")
-		);
-		assert_eq!(
-			reader_keys(&html),
-			Some((String::from("zw7V_YJF"), String::from("5gT25mfd")))
-		);
 	}
 
 	#[aidoku_test]
@@ -628,3 +455,7 @@ mod test {
 		assert_eq!(parse_status("最近更新：昨天"), MangaStatus::Unknown);
 	}
 }
+
+#[cfg(all(test, feature = "fixtures"))]
+#[path = "fixture_tests/helper.rs"]
+mod fixture_tests;

@@ -490,56 +490,6 @@ mod test {
 	}
 
 	#[aidoku_test]
-	fn reads_ids() {
-		assert_eq!(comic_id("/comic/47315.html").as_deref(), Some("47315"));
-		assert_eq!(
-			comic_id("https://m.wmh1234.com/comic/47315.html?x=1").as_deref(),
-			Some("47315")
-		);
-		assert_eq!(comic_id("/comic/12a.html"), None);
-		assert_eq!(comic_id("/category/tags/17"), None);
-		assert_eq!(
-			chapter_token("/go/NDczMTUtMzkyNjEwNi1hNWNlMWU3YTZh").as_deref(),
-			Some("NDczMTUtMzkyNjEwNi1hNWNlMWU3YTZh")
-		);
-		assert_eq!(
-			chapter_token("https://reader.hqread.cc/r/NDczMTUtMzkyNjEwNi1hNWNlMWU3YTZh#top")
-				.as_deref(),
-			Some("NDczMTUtMzkyNjEwNi1hNWNlMWU3YTZh")
-		);
-		assert_eq!(chapter_token("/go/"), None);
-		assert_eq!(
-			token_ids("NDczMTUtMzkyNjEwNi1hNWNlMWU3YTZh"),
-			Some((String::from("47315"), String::from("3926106")))
-		);
-		// 19天's first chapter: 31 characters, so the padding is missing.
-		assert_eq!(
-			token_ids("MTY4MzgtNjMzNzk3LTdlN2RlMDIyMGI"),
-			Some((String::from("16838"), String::from("633797")))
-		);
-		assert_eq!(token_ids("not base64!"), None);
-		// base64 of "47315" alone: no chapter id.
-		assert_eq!(token_ids("NDczMTU="), None);
-		assert_eq!(
-			chapter_path("/comic/47315/3954661.html"),
-			Some((String::from("47315"), String::from("3954661")))
-		);
-		assert_eq!(
-			chapter_path("https://m.wmh1234.com/comic/47315/3954661.html?x=1"),
-			Some((String::from("47315"), String::from("3954661")))
-		);
-		assert_eq!(chapter_path("/comic/47315.html"), None);
-		assert_eq!(chapter_path("/comic/47315/3954661a.html"), None);
-		assert_eq!(comic_id("/comic/47315/3954661.html"), None);
-		assert_eq!(
-			reader_redirect(include_str!("fixtures/go.html")).as_deref(),
-			Some("https://reader.hqread.cc/r/NDczMTUtMzk1NDY2MS0wODcwMWI1OGQ5")
-		);
-		assert_eq!(reader_redirect("<html><body>维护中</body></html>"), None);
-		assert_eq!(reader_redirect(r#"location.replace("/login")"#), None);
-	}
-
-	#[aidoku_test]
 	fn drops_cover_signatures() {
 		assert_eq!(
 			cover_url("https://wmh1234.wszwhg.net/fmtu/47315/b4.jpg?st=4d39&e=1791763200"),
@@ -556,41 +506,6 @@ mod test {
 	}
 
 	#[aidoku_test]
-	fn parses_listing_pages() {
-		for (fixture, count, next) in [
-			(include_str!("fixtures/category.html"), 21, true),
-			(include_str!("fixtures/category_last.html"), 6, false),
-			(include_str!("fixtures/search.html"), 12, true),
-			(include_str!("fixtures/search_last.html"), 6, false),
-			(include_str!("fixtures/search_past.html"), 0, false),
-		] {
-			let result = parse_manga_list(&doc(fixture));
-			assert_eq!((result.entries.len(), result.has_next_page), (count, next));
-			assert!(result.entries.iter().all(|m: &Manga| m
-				.cover
-				.as_deref()
-				.is_some_and(|c: &str| c.starts_with("https://") && !c.contains('?'))));
-		}
-		let search = parse_manga_list(&doc(include_str!("fixtures/search.html")));
-		assert_eq!(search.entries[0].key, "9487");
-		assert_eq!(search.entries[0].title, "恋爱的无休止境");
-		// The recommended works after the results are not part of them.
-		assert!(!search.entries.iter().any(|m: &Manga| m.title == "天丛云"));
-	}
-
-	#[aidoku_test]
-	fn recognises_the_removal_page() {
-		assert!(is_delisted_page(&doc(include_str!(
-			"fixtures/delisted.html"
-		))));
-		assert!(!is_delisted_page(&doc(include_str!("fixtures/manga.html"))));
-		// A page that is neither, such as the reader's 503, is not a removal.
-		assert!(!is_delisted_page(&doc(include_str!(
-			"fixtures/syncing.html"
-		))));
-	}
-
-	#[aidoku_test]
 	fn rates_by_tags() {
 		for tag in NSFW_TAGS.iter().chain(SUGGESTIVE_TAGS.iter()) {
 			assert!(crate::tags::tag_id(tag).is_some(), "{tag}");
@@ -602,45 +517,6 @@ mod test {
 		assert_eq!(content_rating(&["百合"]), ContentRating::Suggestive);
 		assert_eq!(viewer(&["日漫", "热血"]), Viewer::RightToLeft);
 		assert_eq!(viewer(&["韩漫"]), Viewer::Webtoon);
-	}
-
-	#[aidoku_test]
-	fn reads_the_details_page() {
-		let manga =
-			parse_details(&doc(include_str!("fixtures/manga.html")), "47315").expect("details");
-		assert_eq!(manga.title, "恋爱四选一");
-		assert_eq!(
-			manga.authors,
-			Some(Vec::from([String::from("Neip"), String::from("Team")]))
-		);
-		assert_eq!(
-			manga.tags,
-			Some(Vec::from([String::from("恋爱"), String::from("校园")]))
-		);
-		assert_eq!(manga.status, MangaStatus::Ongoing);
-		assert_eq!(manga.viewer, Viewer::Webtoon);
-		assert_eq!(
-			manga.cover.as_deref(),
-			Some("https://wmh1234.wszwhg.net/fmtu/47315/b44744c83d8e4ffdb8c244826de5c7af.jpg")
-		);
-		assert!(manga
-			.description
-			.as_deref()
-			.unwrap_or_default()
-			.starts_with("认为恋爱是奢侈"));
-
-		let jp =
-			parse_details(&doc(include_str!("fixtures/manga_jp.html")), "26111").expect("details");
-		assert_eq!(jp.title, "蓝色监狱");
-		assert_eq!(jp.authors.as_ref().map(|a: &Vec<String>| a.len()), Some(4));
-		assert_eq!(jp.viewer, Viewer::RightToLeft);
-		assert_eq!(jp.content_rating, ContentRating::Safe);
-
-		let empty = parse_details(&doc(include_str!("fixtures/manga_empty.html")), "1302")
-			.expect("details");
-		assert_eq!(empty.title, "降妖伏魔录");
-		assert_eq!(empty.status, MangaStatus::Completed);
-		assert!(parse_chapters(&doc(include_str!("fixtures/manga_empty.html"))).is_empty());
 	}
 
 	#[aidoku_test]
@@ -659,39 +535,6 @@ mod test {
 	}
 
 	#[aidoku_test]
-	fn lists_chapters_newest_first() {
-		let chapters = parse_chapters(&doc(include_str!("fixtures/manga.html")));
-		assert_eq!(chapters.len(), 47);
-		assert_eq!(chapters[0].key, "3954661");
-		assert_eq!(chapters[0].title.as_deref(), Some("第42话"));
-		assert_eq!(chapters[0].chapter_number, Some(42.0));
-		assert_eq!(
-			chapters[0].url.as_deref(),
-			Some("https://m.wmh1234.com/comic/47315/3954661.html")
-		);
-		assert_eq!(chapters[46].title.as_deref(), Some("1"));
-		assert_eq!(chapters[46].chapter_number, Some(1.0));
-		assert_eq!(chapter_number("特别篇"), None);
-		assert_eq!(chapter_number("第154话 (AI翻译)"), Some(154.0));
-		assert_eq!(chapter_number("最终话 来战吧！怪物"), None);
-	}
-
-	#[aidoku_test]
-	fn reads_the_reader_page() {
-		let pages = parse_pages(&doc(include_str!("fixtures/reader.html"))).expect("pages");
-		assert_eq!(pages.len(), 159);
-		let PageContent::Url(first, _) = &pages[0].content else {
-			panic!("not a url page");
-		};
-		assert!(first.starts_with("https://wmh1234.wszwhg.net/kantu/"));
-		// Page images keep their signature.
-		assert!(first.contains("?st="));
-		assert!(parse_pages(&doc(include_str!("fixtures/syncing.html")))
-			.expect("syncing")
-			.is_empty());
-	}
-
-	#[aidoku_test]
 	fn fails_on_a_reader_image_without_address() {
 		let html = r#"<div>
 			<img class="reader-image" data-src="https://img.example/1.webp">
@@ -701,3 +544,7 @@ mod test {
 		assert!(parse_pages(&doc(html)).is_err());
 	}
 }
+
+#[cfg(all(test, feature = "fixtures"))]
+#[path = "fixture_tests/helper.rs"]
+mod fixture_tests;

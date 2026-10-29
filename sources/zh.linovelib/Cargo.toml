@@ -13,6 +13,10 @@ aidoku = { git = "https://github.com/Aidoku/aidoku-rs.git", branch = "main" }
 aidoku = { git = "https://github.com/Aidoku/aidoku-rs.git", branch = "main", features = ["test"] }
 aidoku-test = { git = "https://github.com/Aidoku/aidoku-rs.git", branch = "main" }
 
+[features]
+# Tests that read saved site pages from src/fixtures/, which are not in git.
+fixtures = []
+
 [profile.dev]
 panic = "abort"
 

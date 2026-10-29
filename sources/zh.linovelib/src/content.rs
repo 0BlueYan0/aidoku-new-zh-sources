@@ -333,101 +333,7 @@ fn render(html: &str, markdown: bool) -> String {
 #[cfg(test)]
 mod test {
 	use super::*;
-	use aidoku::imports::html::Html;
 	use aidoku_test::aidoku_test;
-
-	fn doc(html: &str) -> Document {
-		Html::parse_with_url(html, "https://tw.linovelib.com").expect("parse")
-	}
-
-	fn page(fixture: &str, chapter_id: u64) -> String {
-		let mut segments = Vec::new();
-		append_page(&doc(fixture), chapter_id, &mut segments);
-		markdown(&segments, |src: &str| String::from(src))
-	}
-
-	fn paragraphs(markdown: &str) -> Vec<&str> {
-		markdown
-			.split("\n\n")
-			.filter(|p: &&str| !p.is_empty())
-			.collect()
-	}
-
-	#[aidoku_test]
-	fn restores_the_order_the_browser_shows() {
-		// The browser's #acontent after its script ran (Playwright, 2026-10-04): 122
-		// paragraphs, these at positions 20, 21, 50 and last.
-		let out = page(include_str!("fixtures/chapter_403.html"), 403);
-		let p = paragraphs(&out);
-		assert_eq!(p.len(), 122);
-		assert_eq!(p[0], "「你喔，連對烹飪課都有創傷嗎？」");
-		assert_eq!(p[20], "老師打從心底感到無奈，嘴巴叼起一根香煙。");
-		assert_eq!(p[21], "「話說回來，你會做菜喔？」");
-		assert_eq!(p[50], "「……嗯，的確。」");
-		assert_eq!(p[121], "我看起來溝通能力有那麼差嗎……");
-	}
-
-	#[aidoku_test]
-	fn keeps_inline_images_in_place() {
-		let out = page(include_str!("fixtures/chapter_403_2.html"), 403);
-		let p = paragraphs(&out);
-		// 118 paragraphs and the one illustration the browser shows.
-		assert_eq!(p.len(), 119);
-		assert_eq!(
-			p[20],
-			"「不過啊，會說『女人味』這種話，更代表你是個蕩婦。」"
-		);
-		assert_eq!(
-			p[50],
-			"反觀雪之下，她的頭腦靈活又伶牙俐齒，胸前則像一塊洗衣板。"
-		);
-		assert_eq!(p[118], "「就、就是說嘛，很奇怪呢～～」");
-		assert!(p.contains(&"![](<https://img3.readpai.com/0/2/109088/199061.jpg>)"));
-	}
-
-	#[aidoku_test]
-	fn simplified_site_uses_the_same_order() {
-		let out = page(include_str!("fixtures/chapter_bili_403.html"), 403);
-		let p = paragraphs(&out);
-		assert_eq!(p.len(), 122);
-		assert_eq!(p[20], "老师打从心底感到无奈，嘴巴叼起一根香烟。");
-		assert_eq!(p[121], "我看起来沟通能力有那么差吗……");
-	}
-
-	#[aidoku_test]
-	fn collects_every_illustration() {
-		let mut segments = Vec::new();
-		let html = doc(include_str!("fixtures/chapter_109088.html"));
-		append_page(&html, 109088, &mut segments);
-		// A second pass over the same page adds nothing: each illustration once.
-		append_page(&html, 109088, &mut segments);
-		let images: Vec<&String> = segments
-			.iter()
-			.filter_map(|s: &Segment| match s {
-				Segment::Image(src) => Some(src),
-				Segment::Text(_) => None,
-			})
-			.collect();
-		// The six on the page and the eighteen hidden ones.
-		assert_eq!(images.len(), 24);
-		assert!(images
-			.iter()
-			.all(|src: &&String| src.starts_with("https://img3.readpai.com/")));
-	}
-
-	#[aidoku_test]
-	fn notices_withheld_paragraphs() {
-		assert!(is_withheld(include_str!("fixtures/chapter_truncated.html")));
-		assert!(!is_withheld(include_str!("fixtures/chapter_403.html")));
-		assert!(!is_withheld(include_str!("fixtures/chapter_bili_403.html")));
-	}
-
-	#[aidoku_test]
-	fn notices_locked_chapters() {
-		assert!(is_locked(include_str!("fixtures/chapter_locked.html")));
-		assert!(!is_locked(include_str!("fixtures/chapter_403.html")));
-		assert!(!is_locked(include_str!("fixtures/chapter_bili_403.html")));
-	}
 
 	#[aidoku_test]
 	fn inline_html_to_text() {
@@ -442,3 +348,7 @@ mod test {
 		);
 	}
 }
+
+#[cfg(all(test, feature = "fixtures"))]
+#[path = "fixture_tests/content.rs"]
+mod fixture_tests;

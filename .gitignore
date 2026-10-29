@@ -8,6 +8,11 @@ public/*.json
 
 sources/*/target
 sources/*/public
+
+# Saved site pages and the tests that read them stay local; run with `cargo test --features fixtures`
+sources/*/src/fixtures/
+sources/*/src/fixture_tests/
+sources/*/tests/fixtures/
 templates/*/target
 
 .playwright-mcp/

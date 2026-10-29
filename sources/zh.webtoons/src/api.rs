@@ -300,43 +300,6 @@ mod tests {
 	}
 
 	#[aidoku_test]
-	fn pagination_uses_fixed_thirty_and_keeps_the_last_page() {
-		let mut offsets = Vec::new();
-		let episodes = collect_episode_pages(31, |batch| {
-			offsets.extend_from_slice(batch);
-			Ok(batch
-				.iter()
-				.map(|offset| {
-					decode::<EpisodeList>(if *offset == 0 {
-						include_str!("fixtures/app-10568-0.json")
-					} else {
-						include_str!("fixtures/app-10568-30.json")
-					})
-					.unwrap()
-				})
-				.collect())
-		})
-		.unwrap();
-		assert_eq!(offsets, [0, 30]);
-		assert_eq!(episodes.len(), 31);
-		assert_eq!(episodes[0].episode_no, 31);
-		assert_eq!(episodes[30].episode_no, 1);
-	}
-
-	#[aidoku_test]
-	fn incomplete_or_repeated_pages_fail_the_entire_update() {
-		assert!(collect_episode_pages(31, |batch| {
-			Ok(batch
-				.iter()
-				.map(|_| decode::<EpisodeList>(include_str!("fixtures/app-10568-0.json")).unwrap())
-				.collect())
-		})
-		.is_err());
-		assert!(collect_episode_pages(31, |_| Ok(Vec::new())).is_err());
-		assert!(collect_episode_pages(31, |_| Err(error!("offline"))).is_err());
-	}
-
-	#[aidoku_test]
 	fn secure_cookie_is_scoped_to_official_page_images_and_not_contextless_covers() {
 		let mut context = PageContext::new();
 		context.insert("Cookie".into(), "token=value".into());
@@ -376,3 +339,7 @@ mod tests {
 		);
 	}
 }
+
+#[cfg(all(test, feature = "fixtures"))]
+#[path = "fixture_tests/api.rs"]
+mod fixture_tests;

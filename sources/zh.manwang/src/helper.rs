@@ -414,129 +414,6 @@ mod test {
 	}
 
 	#[aidoku_test]
-	fn parses_listing_pages() {
-		for (fixture, page, count, next) in [
-			(include_str!("fixtures/category.html"), 1, 30, true),
-			(include_str!("fixtures/category_last.html"), 50, 30, false),
-			(include_str!("fixtures/tag_update.html"), 2, 30, true),
-			(include_str!("fixtures/tag_last.html"), 1, 12, false),
-			(include_str!("fixtures/hot.html"), 1, 30, false),
-			(include_str!("fixtures/search_empty.html"), 1, 0, false),
-		] {
-			let result = parse_manga_list(&doc(fixture), page);
-			assert_eq!((result.entries.len(), result.has_next_page), (count, next));
-			assert!(result.entries.iter().all(|m: &Manga| m
-				.cover
-				.as_deref()
-				.is_some_and(|c: &str| c.starts_with("https://"))));
-		}
-		let first = &parse_manga_list(&doc(include_str!("fixtures/tag_update.html")), 2).entries[0];
-		assert_eq!(first.key, "540213");
-		assert_eq!(first.title, "我化身魔神，成为灭世巨兽！");
-		assert_eq!(
-			first.cover.as_deref(),
-			Some("https://p6.ecombdimg.com/tos-cn-i-scl3phc04j/8a497f5072fa48a2933858fa4daeb1d1~tplv-scl3phc04j-image.jpeg")
-		);
-	}
-
-	#[aidoku_test]
-	fn recognises_the_removal_page() {
-		assert!(is_delisted_page(&doc(include_str!(
-			"fixtures/delisted.html"
-		))));
-		assert!(!is_delisted_page(&doc(include_str!(
-			"fixtures/manga_tags.html"
-		))));
-	}
-
-	#[aidoku_test]
-	fn rates_by_tags() {
-		for tag in NSFW_TAGS.iter().chain(SUGGESTIVE_TAGS.iter()) {
-			assert!(crate::tags::tag_id(tag).is_some(), "{tag}");
-		}
-		assert_eq!(content_rating::<&str>(&[]), ContentRating::Safe);
-		assert_eq!(content_rating(&["都市", "热血"]), ContentRating::Safe);
-		assert_eq!(content_rating(&["后宫", "人妻"]), ContentRating::NSFW);
-		assert_eq!(content_rating(&["百合"]), ContentRating::Suggestive);
-		let cards = parse_manga_list(&doc(include_str!("fixtures/tag_update.html")), 2);
-		assert_eq!(cards.entries[0].content_rating, ContentRating::Safe);
-	}
-
-	#[aidoku_test]
-	fn reads_the_details_page() {
-		let done = parse_details(&doc(include_str!("fixtures/manga_done.html")), "515141")
-			.expect("details");
-		assert_eq!(done.title, "此刻全球进入恐怖时代");
-		assert_eq!(done.authors, Some(Vec::from([String::from("黑白茶")])));
-		assert_eq!(done.status, MangaStatus::Completed);
-		assert!(done
-			.description
-			.as_deref()
-			.unwrap_or_default()
-			.starts_with("诡异复苏一百年"));
-		assert!(done
-			.cover
-			.as_deref()
-			.unwrap_or_default()
-			.starts_with("https://p6.ecombdimg.com/"));
-
-		// Many works have no tags.
-		assert_eq!(done.tags, None);
-
-		let pair =
-			parse_details(&doc(include_str!("fixtures/manga.html")), "516819").expect("details");
-		assert_eq!(
-			pair.authors,
-			Some(Vec::from([String::from("尹坤志"), String::from("高孫志")]))
-		);
-
-		let tagged = parse_details(&doc(include_str!("fixtures/manga_tags.html")), "503735")
-			.expect("details");
-		assert_eq!(tagged.title, "妖神记");
-		assert_eq!(tagged.authors, Some(Vec::from([String::from("踏雪动漫")])));
-		assert_eq!(tagged.status, MangaStatus::Ongoing);
-		assert_eq!(tagged.content_rating, ContentRating::Safe);
-		assert_eq!(
-			tagged.tags,
-			Some(Vec::from([
-				String::from("重生"),
-				String::from("逆袭"),
-				String::from("少年")
-			]))
-		);
-		for tag in tagged.tags.unwrap_or_default() {
-			assert!(crate::tags::tag_id(&tag).is_some(), "{tag}");
-		}
-	}
-
-	#[aidoku_test]
-	fn lists_chapters_newest_first() {
-		let chapters = parse_chapters(&doc(include_str!("fixtures/manga_tags.html")), "503735");
-		assert_eq!(chapters.len(), 971);
-		assert_eq!(chapters[0].key, "221931");
-		assert_eq!(chapters[0].title.as_deref(), Some("最新话"));
-		assert_eq!(chapters[1].chapter_number, Some(530.0));
-		assert_eq!(chapters[970].title.as_deref(), Some("致歉信~"));
-		assert_eq!(chapters[967].title.as_deref(), Some("第1回 重生"));
-		assert_eq!(
-			chapters[967].url.as_deref(),
-			Some("https://www.manwang.net/chapter/503735-185808")
-		);
-
-		let chapters = parse_chapters(&doc(include_str!("fixtures/manga_done.html")), "515141");
-		assert!(chapters.len() > 500);
-		let oldest = chapters.last().expect("oldest");
-		assert_eq!(
-			oldest.url.as_deref(),
-			Some(format!("https://www.manwang.net/chapter/515141-{}", oldest.key).as_str())
-		);
-		assert_ne!(chapters[0].key, oldest.key);
-		assert_eq!(chapter_number("第529话 巨手（下）"), Some(529.0));
-		assert_eq!(chapter_number("第1回 重生"), Some(1.0));
-		assert_eq!(chapter_number("致歉信~"), None);
-	}
-
-	#[aidoku_test]
 	fn a_bad_chapter_id_rejects_the_list() {
 		let html = r#"<ul id="j_chapter_list"><li data-chapter="12"><a title="第1话">第1话</a></li><li data-chapter="x"><a>第2话</a></li></ul>"#;
 		assert!(parse_chapters(&doc(html), "1").is_empty());
@@ -548,3 +425,7 @@ mod test {
 		assert_eq!(keys, ["13", "12"]);
 	}
 }
+
+#[cfg(all(test, feature = "fixtures"))]
+#[path = "fixture_tests/helper.rs"]
+mod fixture_tests;

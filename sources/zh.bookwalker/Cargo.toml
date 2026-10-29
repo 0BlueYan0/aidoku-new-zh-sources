@@ -21,3 +21,7 @@ panic = "abort"
 opt-level = "s"
 strip = true
 lto = true
+
+[features]
+# Tests that read saved site pages from tests/fixtures/, which are not in git.
+fixtures = []

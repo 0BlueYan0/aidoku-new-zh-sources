@@ -464,36 +464,9 @@ pub fn parse_pages(html: &Document) -> Vec<Page> {
 #[cfg(test)]
 mod test {
 	use super::*;
-	use aidoku::imports::html::Html;
 	use aidoku_test::aidoku_test;
 
-	fn doc(html: &str) -> Document {
-		Html::parse_with_url(html, BASE_URL).expect("parse")
-	}
-
 	const WORK: &str = "%e7%84%a1%e4%ba%ba%e5%b3%b6%e9%81%87%e9%9b%a3%e7%9a%84%e4%b8%89%e4%bd%8d%e8%be%a3%e5%a6%b9%e5%be%8c%e5%ae%ae";
-
-	#[aidoku_test]
-	fn slugs_match_every_term_on_the_filter_panel() {
-		let html = include_str!("fixtures/home.html");
-		let (_, panel) = html.split_once("ho5ho-v2-filter-links").expect("panel");
-		let (panel, _) = panel.split_once("</div>").expect("panel end");
-		let mut checked = 0;
-		for part in panel.split("href=\"https://www.ho5ho.com/").skip(1) {
-			let (path, rest) = part.split_once("/\">").expect("link");
-			let (_, term_slug) = path.split_once('/').expect("term");
-			let (name, _) = rest.split_once("<span>").expect("name");
-			assert_eq!(slug(name), term_slug, "{name}");
-			checked += 1;
-		}
-		assert_eq!(checked, 160);
-		for name in CATEGORIES {
-			assert!(
-				panel.contains(&format!("h漫分類/{}/\">{name}<", slug(name))),
-				"{name}"
-			);
-		}
-	}
 
 	#[aidoku_test]
 	fn builds_addresses() {
@@ -547,98 +520,6 @@ mod test {
 	}
 
 	#[aidoku_test]
-	fn parses_listing_pages() {
-		let home = parse_manga_list(&doc(include_str!("fixtures/home.html")));
-		assert_eq!(home.entries.len(), 16);
-		assert!(home.has_next_page);
-		let first = &home.entries[0];
-		assert_eq!(first.title, "和宅女朋友的純友誼在她結婚後出現了色氣的變化");
-		assert!(first.key.starts_with("%e5%92%8c%e5%ae%85"));
-		assert_eq!(
-			first.cover.as_deref(),
-			Some("https://ho5hocdn1.b-cdn.net/wp-content/uploads/2026/10/1-300x225.x32686.jpg")
-		);
-		let last = parse_manga_list(&doc(include_str!("fixtures/home_last.html")));
-		assert_eq!(last.entries.len(), 4);
-		assert!(!last.has_next_page);
-	}
-
-	#[aidoku_test]
-	fn parses_search_and_tag_pages() {
-		for (fixture, count, next) in [
-			(include_str!("fixtures/search.html"), 12, true),
-			(include_str!("fixtures/search_last.html"), 10, false),
-			(include_str!("fixtures/genre.html"), 12, true),
-			(include_str!("fixtures/tag.html"), 16, true),
-		] {
-			let result = parse_manga_list(&doc(fixture));
-			assert_eq!(result.entries.len(), count);
-			assert_eq!(result.has_next_page, next);
-		}
-		// Related works on a details page are not a listing.
-		assert!(parse_manga_list(&doc(include_str!("fixtures/manga.html")))
-			.entries
-			.is_empty());
-	}
-
-	#[aidoku_test]
-	fn reads_the_details_page() {
-		let manga =
-			parse_details(&doc(include_str!("fixtures/manga.html")), WORK).expect("details");
-		assert_eq!(manga.title, "無人島遇難的三位辣妹後宮");
-		assert_eq!(
-			manga.authors,
-			Some(Vec::from([
-				String::from("ホウホケキヨ"),
-				String::from("ホケキヨカーニバル")
-			]))
-		);
-		let tags = manga.tags.expect("tags");
-		assert_eq!(tags.len(), 20);
-		assert_eq!(tags[0], "全彩");
-		assert!(tags.contains(&String::from("無人島")));
-		assert_eq!(
-			manga.description.as_deref(),
-			Some("別名：無人島遭難ハーレム")
-		);
-		assert_eq!(
-			manga.cover.as_deref(),
-			Some("https://ho5hocdn1.b-cdn.net/wp-content/uploads/2024/07/001-216x300.x32686.jpg")
-		);
-	}
-
-	#[aidoku_test]
-	fn lists_chapters_newest_first() {
-		let chapters = parse_chapters(&doc(include_str!("fixtures/manga.html")), WORK);
-		let keys: Vec<&str> = chapters.iter().map(|c: &Chapter| c.key.as_str()).collect();
-		assert_eq!(keys, Vec::from(["server-1_2", "server-1_1", "server-1"]));
-		assert_eq!(chapters[0].title.as_deref(), Some("第三話"));
-		assert_eq!(chapters[0].chapter_number, Some(3.0));
-		assert_eq!(chapters[2].chapter_number, Some(1.0));
-		assert_eq!(
-			chapters[2].url,
-			Some(format!(
-				"https://www.ho5ho.com/%e4%b8%ad%e5%ad%97h%e6%bc%ab/{WORK}/server-1/"
-			))
-		);
-		// July 6, 2024
-		assert_eq!(chapters[2].date_uploaded, Some(1720224000));
-
-		let single = doc(include_str!("fixtures/manga_single.html"));
-		let (key, _) = work_keys(
-			&single
-				.select_first("link[rel=canonical]")
-				.and_then(|el: Element| el.attr("href"))
-				.expect("canonical"),
-		)
-		.expect("key");
-		let chapters = parse_chapters(&single, &key);
-		assert_eq!(chapters.len(), 1);
-		assert_eq!(chapters[0].title.as_deref(), Some("全集"));
-		assert_eq!(chapters[0].chapter_number, None);
-	}
-
-	#[aidoku_test]
 	fn cleans_chapter_titles() {
 		assert_eq!(chapter_title("Server 1 - 第一話"), "第一話");
 		assert_eq!(chapter_title("Colored Hentai Story 1 - 全集"), "全集");
@@ -655,28 +536,8 @@ mod test {
 		assert_eq!(chapter_number("全集"), None);
 		assert_eq!(chapter_number("上篇"), None);
 	}
-
-	#[aidoku_test]
-	fn reads_every_page_from_the_manifest() {
-		let pages = parse_pages(&doc(include_str!("fixtures/reader.html")));
-		assert_eq!(pages.len(), 114);
-		assert_eq!(
-			pages[0].content,
-			PageContent::url("https://hhmg2.b-cdn.net//fd739648568558ba250b28e8f38da210/001.jpg")
-		);
-		assert_eq!(
-			pages[113].content,
-			PageContent::url("https://hhmg2.b-cdn.net//fd739648568558ba250b28e8f38da210/114.jpg")
-		);
-	}
-
-	#[aidoku_test]
-	fn falls_back_to_the_preloaded_list() {
-		let html = include_str!("fixtures/reader.html").replacen(
-			"id=\"ho5ho-reader-image-manifest\"",
-			"id=\"gone\"",
-			1,
-		);
-		assert_eq!(parse_pages(&doc(&html)).len(), 114);
-	}
 }
+
+#[cfg(all(test, feature = "fixtures"))]
+#[path = "fixture_tests/helper.rs"]
+mod fixture_tests;

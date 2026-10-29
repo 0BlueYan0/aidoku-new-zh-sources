@@ -260,29 +260,7 @@ register_source!(
 #[cfg(test)]
 mod test {
 	use super::*;
-	use aidoku::imports::html::Html;
 	use aidoku_test::aidoku_test;
-
-	#[aidoku_test]
-	fn home_rows_follow_the_page() {
-		let root: Element = Html::parse_with_url(include_str!("fixtures/home.html"), BASE_URL)
-			.expect("parse")
-			.into();
-		assert_eq!(parse_cards(&root, ".pb-unit-md a.slicarda").len(), 30);
-		let lists: Vec<Element> = root.select(".cardlist").expect("cardlists").collect();
-		assert_eq!(lists.len(), HOME_ROWS.len());
-		let titles: Vec<String> = root
-			.select(".hometitle h2")
-			.expect("titles")
-			.map(|el: Element| el.text().unwrap_or_default())
-			.collect();
-		for ((title, _), found) in HOME_ROWS.iter().zip(titles.iter()) {
-			assert_eq!(title, found);
-		}
-		for list in lists {
-			assert_eq!(parse_cards(&list, ".pb-2 a").len(), 12);
-		}
-	}
 
 	#[aidoku_test]
 	fn listing_names_match_source_json() {
@@ -330,3 +308,7 @@ mod test {
 		);
 	}
 }
+
+#[cfg(all(test, feature = "fixtures"))]
+#[path = "fixture_tests/lib.rs"]
+mod fixture_tests;

@@ -513,87 +513,6 @@ mod test {
 	}
 
 	#[aidoku_test]
-	fn parses_a_list_page_with_a_next_page() {
-		let result = parse_manga_list(doc(include_str!("fixtures/list.html")));
-		assert_eq!(result.entries.len(), 18);
-		assert!(result.has_next_page);
-		let first = &result.entries[0];
-		assert_eq!(first.key, "pengyoudejiejie");
-		assert_eq!(first.title, "朋友的姐姐");
-		assert!(first
-			.cover
-			.as_deref()
-			.is_some_and(|c: &str| c.starts_with("https://host-cover.")));
-	}
-
-	#[aidoku_test]
-	fn the_last_list_page_has_no_next_page() {
-		let result = parse_manga_list(doc(include_str!("fixtures/list_last.html")));
-		assert_eq!(result.entries.len(), 16);
-		assert!(!result.has_next_page);
-	}
-
-	#[aidoku_test]
-	fn reads_details_with_mangachapters() {
-		let (manga, mid) = parse_details(
-			&doc(include_str!("fixtures/detail_pengyoudejiejie.html")),
-			"pengyoudejiejie",
-		)
-		.expect("details");
-		assert_eq!(mid.as_deref(), Some("16"));
-		assert_eq!(manga.title, "朋友的姐姐");
-		assert_eq!(manga.status, MangaStatus::Completed);
-		assert_eq!(manga.viewer, Viewer::Webtoon);
-		assert_eq!(
-			manga.authors,
-			Some(Vec::from([
-				String::from("Sean Kim"),
-				String::from("鍾普林")
-			]))
-		);
-		assert_eq!(
-			manga.tags,
-			Some(Vec::from([
-				String::from("韓漫"),
-				String::from("慾望"),
-				String::from("推薦")
-			]))
-		);
-		assert!(manga
-			.description
-			.as_deref()
-			.is_some_and(|d: &str| d.starts_with("喜歡偷看")));
-		assert_eq!(author_slug("鍾普林").as_deref(), Some("zhongpulin"));
-	}
-
-	#[aidoku_test]
-	fn reads_another_works_details() {
-		let (manga, mid) = parse_details(
-			&doc(include_str!("fixtures/detail_toutouai.html")),
-			"toutouai",
-		)
-		.expect("details");
-		assert_eq!(mid.as_deref(), Some("144"));
-		assert_eq!(manga.title, "偷偷愛");
-		assert_eq!(
-			manga.authors,
-			Some(Vec::from([String::from("90's magazine")]))
-		);
-		assert_eq!(
-			manga.tags,
-			Some(Vec::from([
-				String::from("韓漫"),
-				String::from("熱門漫畫"),
-				String::from("同居"),
-				String::from("劇情"),
-				String::from("純情警察"),
-				String::from("大尺度"),
-				String::from("戲劇"),
-			]))
-		);
-	}
-
-	#[aidoku_test]
 	fn falls_back_to_mangachapters_for_the_id() {
 		let html = doc(
 			r#"<main><h1 class="text-xl">X</h1><div id="mangachapters" data-mid="7"></div></main>"#,
@@ -604,15 +523,6 @@ mod test {
 		);
 		let html = doc(r#"<main><h1 class="text-xl">X</h1></main>"#);
 		assert_eq!(parse_details(&html, "x").expect("details").1, None);
-	}
-
-	#[aidoku_test]
-	fn a_page_without_the_title_is_not_details() {
-		assert!(parse_details(&doc(include_str!("fixtures/list.html")), "x").is_none());
-		let html = doc(
-			r#"<main><h1 class="text-xl"> </h1><div id="mangachapters" data-mid="7"></div></main>"#,
-		);
-		assert!(parse_details(&html, "x").is_none());
 	}
 
 	#[aidoku_test]
@@ -636,44 +546,6 @@ mod test {
 	}
 
 	#[aidoku_test]
-	fn lists_chapters_newest_first() {
-		let chapters = parse_chapters(&doc(include_str!("fixtures/chapters.html")), "16");
-		assert_eq!(chapters.len(), 42);
-		assert_eq!(chapters[0].key, "16/33470");
-		assert_eq!(chapters[0].title.as_deref(), Some("最終話"));
-		assert_eq!(chapters[0].chapter_number, None);
-		let first = chapters.last().expect("first chapter");
-		assert_eq!(first.key, "16/33413");
-		assert_eq!(first.chapter_number, Some(1.0));
-		assert_eq!(
-			first.url.as_deref(),
-			Some("https://18mh.org/manga/pengyoudejiejie/16-16059-0")
-		);
-	}
-
-	#[aidoku_test]
-	fn reads_every_page_image() {
-		let pages = parse_pages(&doc(include_str!("fixtures/content.html")));
-		assert_eq!(pages.len(), 40);
-		assert_eq!(
-			pages[0].content,
-			PageContent::url("https://s3-nl-01.mangabuddy.in/mxs/pengyoudejiejie/0/0_405137.webp")
-		);
-		assert_eq!(
-			pages[1].content,
-			PageContent::url("https://s3-nl-01.mangabuddy.in/mxs/pengyoudejiejie/0/1_405141.webp")
-		);
-	}
-
-	#[aidoku_test]
-	fn finds_the_chapter_on_a_reader_page() {
-		assert_eq!(
-			reader_chapter_key(&doc(include_str!("fixtures/reader.html"))).as_deref(),
-			Some("16/33413")
-		);
-	}
-
-	#[aidoku_test]
 	fn numbers_chapters_from_titles() {
 		assert_eq!(chapter_number("第118話"), Some(118.0));
 		assert_eq!(chapter_number("第1.5話"), Some(1.5));
@@ -692,3 +564,7 @@ mod test {
 		assert!(settings.contains("\"key\": \"relayToken\""));
 	}
 }
+
+#[cfg(all(test, feature = "fixtures"))]
+#[path = "fixture_tests/helper.rs"]
+mod fixture_tests;

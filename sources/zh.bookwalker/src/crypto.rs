@@ -327,32 +327,6 @@ pub fn decrypt_config(data_b64: &str) -> Option<DecryptedConfig> {
 	Some((buf, a, z, t))
 }
 
-#[cfg(test)]
-mod tests {
-	use super::*;
-	use aidoku::alloc::string::String;
-	use aidoku_test::aidoku_test;
-
-	const DATA_B64: &str = include_str!("../tests/fixtures/bw_config_data.b64");
-	const EXPECTED_A: &str = "e823a8b2894379f7f4854a9cb2de7d192f41be0a43b1f23697f0a0913b15322b";
-	const EXPECTED_Z: &str = "fd2de0473289ce7beb3f78b22553ddce7b21e0f2b58e5b4efb637041debf33e9";
-	const EXPECTED_T: &str = "322a51b6b99e53cfeadf7f5355ffb24a815dc00b5d0361f5b82a5c7e9317cef6";
-
-	fn hex(bytes: &[u8]) -> String {
-		let mut s = String::new();
-		for b in bytes {
-			s.push_str(&aidoku::alloc::format!("{b:02x}"));
-		}
-		s
-	}
-
-	#[aidoku_test]
-	fn decrypts_config_keys_and_json() {
-		let (json, a, z, t) = decrypt_config(DATA_B64).expect("decrypt");
-		assert_eq!(hex(&a), EXPECTED_A);
-		assert_eq!(hex(&z), EXPECTED_Z);
-		assert_eq!(hex(&t), EXPECTED_T);
-		let text = core::str::from_utf8(&json).expect("utf-8 json");
-		assert!(text.contains("\"item/xhtml/p-001.xhtml\""));
-	}
-}
+#[cfg(all(test, feature = "fixtures"))]
+#[path = "fixture_tests/crypto.rs"]
+mod fixture_tests;

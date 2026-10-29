@@ -141,21 +141,6 @@ mod test {
 	use aidoku_test::aidoku_test;
 
 	#[aidoku_test]
-	fn decrypts_the_reader_page() {
-		let list = image_list(include_str!("fixtures/reader.html")).expect("image list");
-		assert_eq!(list.source_id.as_deref(), Some("15"));
-		assert_eq!(list.images.len(), 15);
-		assert_eq!(
-			list.images[0],
-			"https://dmw.546457.xyz/6d/7e/6d7e1fa50aea92b2511b67a688bfbc58.webp"
-		);
-		assert_eq!(
-			list.images[14],
-			"https://dmw.546457.xyz/e3/85/e3850e88d8240a93e3d12d402bdd2839.webp"
-		);
-	}
-
-	#[aidoku_test]
 	fn reads_the_json() {
 		let list = parse_image_list(
 			r#"{"host":"x","source_id":12,"images":["\/a\/b.jpg", "cA"],"lazy":false}"#,
@@ -175,3 +160,7 @@ mod test {
 		assert!(params_of("<script>var x = 1;</script>").is_none());
 	}
 }
+
+#[cfg(all(test, feature = "fixtures"))]
+#[path = "fixture_tests/crypto.rs"]
+mod fixture_tests;

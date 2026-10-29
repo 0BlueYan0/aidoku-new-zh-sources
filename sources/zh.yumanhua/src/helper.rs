@@ -771,127 +771,6 @@ mod test {
 	}
 
 	#[aidoku_test]
-	fn parses_json_lists() {
-		let sort = include_str!("fixtures/sort.json");
-		assert_eq!(json_string(sort, "code").as_deref(), Some("200"));
-		let list = parse_json_list(json_field(sort, "data").unwrap());
-		assert_eq!(list.len(), 20);
-		assert_eq!(list[0].key, "CmLCgCl");
-		assert_eq!(list[0].title, "无根之树");
-		assert_eq!(
-			list[0].authors.as_deref(),
-			Some(&[String::from("mark")][..])
-		);
-		assert!(list[0]
-			.cover
-			.as_deref()
-			.unwrap()
-			.starts_with("https://p6.ecombdimg.com/"));
-		let data = json_field(sort, "data").unwrap();
-		assert!(page_result(data, 1).has_next_page);
-		assert!(!page_result(data, MAX_PAGES).has_next_page);
-		// A full page with a repeated id still has a next page.
-		let items = json_items(data);
-		let doubled = data.replacen(items[1], items[0], 1);
-		assert_eq!(page_result(&doubled, 1).entries.len(), 19);
-		assert!(page_result(&doubled, 1).has_next_page);
-
-		let search = include_str!("fixtures/search.json");
-		let list = parse_json_list(json_field(search, "data").unwrap());
-		assert!(!list.is_empty());
-		assert!(list.iter().all(|m: &Manga| m.title.contains("斗破")));
-		assert!(list.len() < PAGE_SIZE);
-
-		for empty in [
-			include_str!("fixtures/sort_end.json"),
-			include_str!("fixtures/search_empty.json"),
-		] {
-			let code = json_string(empty, "code");
-			assert!(
-				matches!(code.as_deref(), Some("-1") | Some("201")),
-				"{code:?}"
-			);
-		}
-	}
-
-	#[aidoku_test]
-	fn parses_home() {
-		let sections = parse_home(&doc(include_str!("fixtures/home.html")));
-		let titles: Vec<&str> = sections
-			.iter()
-			.map(|(t, _): &(String, Vec<Manga>)| t.as_str())
-			.collect();
-		let shown: Vec<&str> = HOME_TITLES.iter().map(|(_, s): &(&str, &str)| *s).collect();
-		assert_eq!(titles, shown);
-		for (title, entries) in &sections {
-			assert_eq!(entries.len(), 6, "{title}");
-			assert!(entries.iter().all(|m: &Manga| m.cover.is_some()), "{title}");
-		}
-		assert_eq!(sections[0].1[0].key, "trsKtGi");
-		assert_eq!(sections[0].1[0].title, "火影忍者");
-	}
-
-	#[aidoku_test]
-	fn parses_rank_page() {
-		let list = parse_rank_html(&doc(include_str!("fixtures/rank.html")));
-		assert_eq!(list.len(), 50);
-		assert_eq!(list[0].key, "TREEcUf");
-		assert_eq!(list[0].title, "我获得了神级装备");
-		assert!(list.iter().all(|m: &Manga| m.cover.is_some()));
-		assert!(list
-			.iter()
-			.all(|m: &Manga| m.content_rating == ContentRating::Safe));
-	}
-
-	#[aidoku_test]
-	fn parses_details_and_chapters() {
-		let html = doc(include_str!("fixtures/details.html"));
-		let manga = parse_details(&html, "trsKtGi").expect("details");
-		assert_eq!(manga.title, "火影忍者");
-		assert_eq!(
-			manga.authors.as_deref(),
-			Some(&[String::from("岸本齐史")][..])
-		);
-		assert_eq!(
-			manga.tags.as_deref(),
-			Some(
-				&[
-					String::from("冒险"),
-					String::from("热血"),
-					String::from("少年")
-				][..]
-			)
-		);
-		assert_eq!(manga.content_rating, ContentRating::Safe);
-		assert!(manga
-			.description
-			.as_deref()
-			.unwrap()
-			.starts_with("从小身上封印着"));
-		assert!(manga.cover.is_some());
-
-		assert!(has_more_chapters(&html));
-		let mut chapters = parse_page_chapters(&html, "trsKtGi").expect("chapters");
-		assert_eq!(chapters.len(), 20);
-		assert_eq!(chapters[0].key, "IVpdIdWF");
-		assert_eq!(
-			chapters[0].title.as_deref(),
-			Some("702 701-2 漩涡中的旋风②")
-		);
-		let more = include_str!("fixtures/morechapter.json");
-		let added =
-			append_more_chapters(&mut chapters, json_field(more, "data").unwrap(), "trsKtGi");
-		assert_eq!(added.ok(), Some(526));
-		assert_eq!(chapters.len(), 546);
-		assert_eq!(chapters[20].key, "vhTTvGi");
-		assert_eq!(chapters[20].title.as_deref(), Some("第695话 鸣人与佐助②"));
-		assert_eq!(
-			chapters[20].url.as_deref(),
-			Some("http://yumanhua.com/trsKtGi/vhTTvGi.html")
-		);
-	}
-
-	#[aidoku_test]
 	fn a_bad_chapter_link_rejects_the_list() {
 		let html = r#"<div class="chaplist-box"><ul><li><a href="/trsKtGi/IVpdIdWF.html">2</a></li><li><a href="/trsKtGi/">1</a></li></ul></div>"#;
 		assert!(parse_page_chapters(&doc(html), "trsKtGi").is_none());
@@ -917,12 +796,8 @@ mod test {
 			Some(1)
 		);
 	}
-
-	#[aidoku_test]
-	fn reads_reader_parts() {
-		let (scripts, key_index) = reader_parts(&doc(include_str!("fixtures/reader.html")));
-		assert_eq!(key_index, Some(2));
-		let pages = crate::decoder::decode_pages(&scripts, 2).expect("decoded");
-		assert_eq!(pages.len(), 30);
-	}
 }
+
+#[cfg(all(test, feature = "fixtures"))]
+#[path = "fixture_tests/helper.rs"]
+mod fixture_tests;
