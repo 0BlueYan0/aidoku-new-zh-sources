@@ -20,6 +20,9 @@ Aidoku 新版中文圖源<br>
 > [!NOTE]
 > Komiic 漫畫、紳士漫畫、巴卡漫畫在 2026-10-17 改了圖源 id，避免和 Aidoku 官方清單的同名圖源互相覆蓋。之前裝過的話，請先移除舊的再重新安裝，書庫與閱讀進度要重新加入，有登入的要重新登入。
 
+> [!WARNING]
+> **巴卡漫畫：站方會偵測並封鎖使用第三方工具的帳號，登入閱讀或下載可能導致封號，請自行評估。**
+
 - [BOOK☆WALKER 台灣](https://www.bookwalker.com.tw/)（只列已購買的書，需網頁登入）
 - [CCC追漫台](https://www.creative-comic.tw/)（登入可以顯示金幣、點數餘額）
 - [Line Webtoons 繁體中文](https://www.webtoons.com/zh-hant/)
@@ -36,6 +39,6 @@ Aidoku 新版中文圖源<br>
 - [vomic漫](https://www.vomicmh.com/)（閱讀需帳密登入，可切換原圖畫質）
 - [嗶哩輕小說](https://tw.linovelib.com/)
 - [漫網](https://www.manwang.net/)
-- [巴卡漫畫 (new-zh)](https://bakamh.com/)（可用帳號密碼登入閱讀需登入的章節，換網址會自動重新登入，支援五個鏡像網域，也可自訂網址，站方有 Cloudflare 驗證，載入不出內容時可在設定頁手動通過驗證，可搭配自架的 Cloudflare 轉發伺服器）
+- [巴卡漫畫 (new-zh)](https://bakamh.com/)（可用帳號密碼登入閱讀需登入的章節，換網址會自動重新登入，支援五個鏡像網域，也可自訂網址，站方有 Cloudflare 驗證，載入不出內容時可在設定頁手動通過驗證，可搭配自架的 Cloudflare 轉發伺服器，**⚠ 站方會偵測並封鎖使用第三方工具的帳號，登入閱讀或下載可能導致封號，請自行評估**）
 - [漫畫1234](https://m.wmh1234.com/)
 - [漫畫客](http://yumanhua.com/)
