@@ -1252,5 +1252,6 @@ document.writeln("var imglist = [{ url: fast_img_host+\"/data/1/001.jpg\", capti
 }
 
 #[cfg(all(test, feature = "fixtures"))]
+#[rustfmt::skip]
 #[path = "fixture_tests/helper.rs"]
 mod fixture_tests;

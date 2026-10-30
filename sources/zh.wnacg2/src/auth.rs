@@ -196,5 +196,6 @@ mod tests {
 }
 
 #[cfg(all(test, feature = "fixtures"))]
+#[rustfmt::skip]
 #[path = "fixture_tests/auth.rs"]
 mod fixture_tests;
