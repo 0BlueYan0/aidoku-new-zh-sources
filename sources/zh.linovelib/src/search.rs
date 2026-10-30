@@ -94,5 +94,6 @@ pub fn search(query: &str, page: i32) -> Result<MangaPageResult> {
 }
 
 #[cfg(all(test, feature = "fixtures"))]
+#[rustfmt::skip]
 #[path = "fixture_tests/search.rs"]
 mod fixture_tests;
