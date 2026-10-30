@@ -61,6 +61,25 @@ for source in "${sources[@]}"; do
 		failures+=("$source: cargo fmt --check (run cargo fmt in $source)")
 	fi
 
+	# Saved site pages and their tests are not in git, so the workflow formats without
+	# them. A `#[path]` module rustfmt cannot find fails there and passes here unless the
+	# folders are moved aside for a second run (2026-10-30, PR #39).
+	hidden=()
+	for dir in "$source/src/fixture_tests" "$source/src/fixtures" "$source/tests/fixtures"; do
+		if [[ -d "$dir" ]] && mv "$dir" "$dir.check-pr-hidden"; then
+			hidden+=("$dir")
+		fi
+	done
+	trap 'for dir in "${hidden[@]}"; do mv "$dir.check-pr-hidden" "$dir"; done' INT TERM EXIT
+	if (( ${#hidden[@]} )) && ! (cd "$source" && cargo fmt --check >/dev/null 2>&1); then
+		failures+=("$source: cargo fmt --check without the local fixtures (add #[rustfmt::skip] above the fixture_tests mod)")
+	fi
+	for dir in "${hidden[@]}"; do
+		mv "$dir.check-pr-hidden" "$dir"
+	done
+	hidden=()
+	trap - INT TERM EXIT
+
 	if ! (cd "$source" && cargo clippy --quiet --target wasm32-unknown-unknown -- -D warnings); then
 		failures+=("$source: cargo clippy -D warnings")
 	fi

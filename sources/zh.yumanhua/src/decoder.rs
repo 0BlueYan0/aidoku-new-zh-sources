@@ -168,5 +168,6 @@ mod test {
 }
 
 #[cfg(all(test, feature = "fixtures"))]
+#[rustfmt::skip]
 #[path = "fixture_tests/decoder.rs"]
 mod fixture_tests;

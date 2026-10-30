@@ -328,5 +328,6 @@ pub fn decrypt_config(data_b64: &str) -> Option<DecryptedConfig> {
 }
 
 #[cfg(all(test, feature = "fixtures"))]
+#[rustfmt::skip]
 #[path = "fixture_tests/crypto.rs"]
 mod fixture_tests;
