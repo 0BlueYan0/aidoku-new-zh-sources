@@ -2,13 +2,15 @@
 
 use aidoku::{
 	alloc::{String, Vec},
-	imports::{html::Document, net::Request, std::send_partial_result},
+	imports::{net::Request, std::send_partial_result},
 	prelude::*,
-	Chapter, DeepLinkHandler, DeepLinkResult, FilterValue, Home, HomeComponent, HomeComponentValue,
-	HomeLayout, HomePartialResult, ImageRequestProvider, Link, Listing, ListingProvider, Manga,
-	MangaPageResult, Page, PageContent, PageContext, Result, Source,
+	Chapter, DeepLinkHandler, DeepLinkResult, DynamicSettings, FilterValue, GroupSetting, HashMap,
+	Home, HomeComponent, HomeComponentValue, HomeLayout, HomePartialResult, ImageRequestProvider,
+	Link, Listing, ListingProvider, Manga, MangaPageResult, NotificationHandler, Page, PageContent,
+	PageContext, Result, Setting, Source, WebLoginHandler,
 };
 
+mod auth;
 mod helper;
 
 use helper::*;
@@ -30,6 +32,10 @@ const HOME_SKELETON: [&str; 7] = [
 	"韓漫",
 	"Cosplay&寫真集",
 ];
+
+/// The row only signed-in readers get (2026-10-30: the site hides the category without
+/// the login cookie).
+const HOME_KOREAN_TITLE: &str = "韓漫";
 
 /// The ranking row's title and the listing it opens. The title repeats the listing's
 /// `source.json` name so the row and the screen it opens read the same.
@@ -66,6 +72,7 @@ impl Source for WnacgSource {
 	) -> Result<MangaPageResult> {
 		let mut cate = String::new();
 		let mut tag = String::new();
+		let mut author = None;
 		let mut sort = String::from(DEFAULT_SORT);
 		let mut scope = String::from(DEFAULT_SCOPE);
 
@@ -77,16 +84,29 @@ impl Source for WnacgSource {
 					"cate" => cate = value,
 					"sort" => sort = value,
 					"scope" => scope = value,
+					// Tapping a tag on a manga (`supportsTagSearch`).
+					"genre" => tag = value,
 					_ => {}
 				},
 				FilterValue::Text { id, value } if id == "tag" => tag = value,
+				// Tapping an author or artist (`supportsAuthorSearch`). Authors only ever
+				// come from the bracketed title prefix, which the site's search matches.
+				// Artists hold the circle from the same prefix (`[circle (artist)]`).
+				FilterValue::Text { id, value } if id == "author" || id == "artist" => {
+					author = Some(value)
+				}
 				_ => {}
 			}
 		}
 
 		// Keyword search, tag browsing and category browsing are three separate
 		// endpoints with no way to combine them, so the most specific input wins.
-		if let Some(keyword) = query.filter(|value: &String| !value.trim().is_empty()) {
+		// Filtered on both sides of `or`: an empty query must not hide the author.
+		if let Some(keyword) = query
+			.filter(|value: &String| !value.trim().is_empty())
+			.or(author)
+			.filter(|value: &String| !value.trim().is_empty())
+		{
 			let html = fetch_html(&search_url(&keyword, &scope, &sort, page))?;
 			return Ok(parse_list_page(&html, page, true));
 		}
@@ -117,9 +137,10 @@ impl Source for WnacgSource {
 
 		// Swallow failures: one unreachable album must not abort a whole library
 		// refresh, and the library keeps the details and chapter it already had.
-		let Ok(date_uploaded) = fetch_html(&detail_url(&manga.key))
-			.and_then(|html: Document| apply_detail(&html, &mut manga))
-		else {
+		let Ok(html) = fetch_html(&detail_url(&manga.key)) else {
+			return Ok(manga);
+		};
+		let Ok(date_uploaded) = apply_detail(&html, &mut manga) else {
 			return Ok(manga);
 		};
 
@@ -127,7 +148,15 @@ impl Source for WnacgSource {
 			send_partial_result(&manga);
 		}
 
-		if needs_chapters {
+		if needs_chapters && is_series(&html) {
+			// A second request in this entry point, sent after the first has returned.
+			// On failure the library keeps the chapters it had.
+			if let Ok(chapters) = fetch_text(&chapters_url(&manga.key))
+				.and_then(|json| parse_series_chapters(&json, &manga.key))
+			{
+				manga.chapters = Some(chapters);
+			}
+		} else if needs_chapters {
 			// An album is one gallery of images with no chapter structure of its own,
 			// so it always reports a single chapter.
 			manga.chapters = Some(aidoku::alloc::vec![Chapter {
@@ -191,7 +220,13 @@ impl Home for WnacgSource {
 		// Send an empty skeleton first so the home screen lays out immediately, then
 		// stream each row in as it arrives.
 		let mut components: Vec<HomeComponent> = Vec::new();
+		// Signed out, the landing page has no 韓漫 block, so its row would stay a bare
+		// title. Logging in reloads the home screen with the row back.
+		let logged_in = auth::is_logged_in();
 		for title in HOME_SKELETON {
+			if title == HOME_KOREAN_TITLE && !logged_in {
+				continue;
+			}
 			components.push(HomeComponent {
 				title: Some(String::from(title)),
 				subtitle: None,
@@ -288,7 +323,15 @@ impl DeepLinkHandler for WnacgSource {
 			return Ok(Some(DeepLinkResult::Manga { key: aid }));
 		}
 
-		// Every reader entry point maps onto the album's single chapter.
+		// A series chapter: `/photos-slide-aid-<chapter>-sid-<series>.html`.
+		if let Some(sid) = sid_from_href(&url) {
+			return Ok(Some(DeepLinkResult::Chapter {
+				manga_key: sid,
+				key: aid,
+			}));
+		}
+
+		// Every other reader entry point maps onto the album's single chapter.
 		if url.contains("/photos-slide-aid-")
 			|| url.contains("/photos-gallery-aid-")
 			|| url.contains("/photos-slist-aid-")
@@ -304,12 +347,57 @@ impl DeepLinkHandler for WnacgSource {
 	}
 }
 
+impl WebLoginHandler for WnacgSource {
+	fn handle_web_login(&self, key: String, cookies: HashMap<String, String>) -> Result<bool> {
+		if key != "login" {
+			bail!("Invalid login key: {key}");
+		}
+		Ok(auth::capture_web_login(&cookies))
+	}
+}
+
+impl NotificationHandler for WnacgSource {
+	fn handle_notification(&self, notification: String) {
+		// Fires on both login and logout; `auth` tells them apart.
+		if notification == "login" {
+			auth::handle_login_notification();
+		}
+	}
+}
+
+impl DynamicSettings for WnacgSource {
+	/// Reads defaults only and sends no request. Never answers with an empty list: an
+	/// empty list leaves every button on the settings page dead (CLAUDE.md).
+	fn get_dynamic_settings(&self) -> Result<Vec<Setting>> {
+		let footer = if auth::is_logged_in() {
+			match auth::account() {
+				Some(name) => format!("已登入：{name}"),
+				None => String::from("已登入"),
+			}
+		} else {
+			String::from("尚未登入，登入後可以看韓漫。")
+		};
+
+		Ok(aidoku::alloc::vec![GroupSetting {
+			key: "accountInfo".into(),
+			title: "帳號資訊".into(),
+			items: Vec::new(),
+			footer: Some(footer.into()),
+			..Default::default()
+		}
+		.into()])
+	}
+}
+
 register_source!(
 	WnacgSource,
 	ListingProvider,
 	Home,
 	ImageRequestProvider,
-	DeepLinkHandler
+	DeepLinkHandler,
+	WebLoginHandler,
+	NotificationHandler,
+	DynamicSettings
 );
 
 #[cfg(test)]
@@ -322,5 +410,13 @@ mod test {
 	fn home_rank_row_reuses_the_listing_name() {
 		assert_eq!(Some(HOME_RANK_TITLE), listing_name(HOME_RANK_LISTING));
 		assert!(HOME_SKELETON.contains(&HOME_RANK_TITLE));
+	}
+
+	/// The signed-out skeleton drops this row by title, so the title has to match the
+	/// one the `cate_19` listing (and the streamed row) carries.
+	#[aidoku_test]
+	fn korean_row_title_matches_the_listing() {
+		assert_eq!(Some(HOME_KOREAN_TITLE), listing_name("cate_19"));
+		assert!(HOME_SKELETON.contains(&HOME_KOREAN_TITLE));
 	}
 }

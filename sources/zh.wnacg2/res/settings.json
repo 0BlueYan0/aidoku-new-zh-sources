@@ -14,5 +14,27 @@
 				]
 			}
 		]
+	},
+	{
+		"type": "group",
+		"title": "帳號",
+		"footer": "登入後可以看韓漫。按「登入」後要先完成拼圖驗證，登入成功後登入頁會自動關閉，下方「帳號資訊」出現名稱就是成功了。\n登入狀態會保存在此裝置，不保存密碼。按「登出」即完全清除。\n韓漫又打不開時，請登出再登入一次。",
+		"items": [
+			{
+				"type": "login",
+				"key": "login",
+				"title": "登入",
+				"method": "web",
+				"url": "https://www.wnacg.com/users-login.html",
+				"logoutTitle": "登出",
+				"clearCookiesOnLogOut": true,
+				"notification": "login",
+				"refreshes": [
+					"settings",
+					"listings",
+					"content"
+				]
+			}
+		]
 	}
 ]

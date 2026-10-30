@@ -1,5 +1,5 @@
 use aidoku::{
-	alloc::{String, Vec},
+	alloc::{string::ToString, String, Vec},
 	helpers::uri::encode_uri_component,
 	imports::{
 		defaults::defaults_get,
@@ -8,7 +8,7 @@ use aidoku::{
 		std::parse_date,
 	},
 	prelude::*,
-	ContentRating, Manga, MangaPageResult, MangaStatus, Result, UpdateStrategy, Viewer,
+	Chapter, ContentRating, Manga, MangaPageResult, MangaStatus, Result, UpdateStrategy, Viewer,
 };
 
 /// Fallback base URL. Prefer [`base_url`], which also honours the user's override and
@@ -28,7 +28,10 @@ const DATE_FORMAT: &str = "yyyy-MM-dd HH:mm:ss";
 const MAX_TAGS: usize = 255;
 
 /// Bracketed prefixes that describe the release rather than the circle or the artist.
-const RELEASE_MARKERS: [&str; 14] = [
+/// Single-album Korean uploads open with `[韩漫][活火山 & Ben.p]`.
+const RELEASE_MARKERS: [&str; 16] = [
+	"韩漫",
+	"韓漫",
 	"無修正",
 	"無修正版",
 	"無修",
@@ -77,12 +80,24 @@ pub fn normalize_base_url(value: &str) -> Option<String> {
 	}
 }
 
-/// Public so the home can build its rows here and send them together.
+/// Public so the home can build its rows here and send them together. Carries the login
+/// cookie when there is one: the 韓漫 category, its albums and their readers answer 404
+/// without it (2026-10-30).
 pub fn request(url: &str) -> Result<Request> {
-	Ok(Request::get(url)?
+	request_with_cookie(url, crate::auth::cookie_header().as_deref())
+}
+
+/// `request` with an explicit cookie, so the login check can try a cookie before it is
+/// stored.
+pub fn request_with_cookie(url: &str, cookie: Option<&str>) -> Result<Request> {
+	let request = Request::get(url)?
 		.header("User-Agent", USER_AGENT)
 		.header("Referer", &base_url())
-		.header("Accept-Language", "zh-TW,zh;q=0.9"))
+		.header("Accept-Language", "zh-TW,zh;q=0.9");
+	Ok(match cookie {
+		Some(cookie) => request.header("Cookie", cookie),
+		None => request,
+	})
 }
 
 pub fn fetch_html(url: &str) -> Result<Document> {
@@ -156,6 +171,18 @@ pub fn detail_url(aid: &str) -> String {
 	format!("{}/photos-index-aid-{aid}.html", base_url())
 }
 
+/// Every chapter of a series in one JSON response. It is what the site's own reader
+/// fills its chapter menu from (`reader-bar.js`, 2026-10-30), and answers 404 without
+/// the login cookie.
+pub fn chapters_url(sid: &str) -> String {
+	format!("{}/?ctl=photos&act=chapters&sid={sid}", base_url())
+}
+
+/// A chapter opened from its series, the way the site links it.
+pub fn series_chapter_url(chapter: &str, sid: &str) -> String {
+	format!("{}/photos-slide-aid-{chapter}-sid-{sid}.html", base_url())
+}
+
 pub fn gallery_url(aid: &str) -> String {
 	format!("{}/photos-gallery-aid-{aid}.html", base_url())
 }
@@ -191,8 +218,18 @@ pub fn normalize_url(raw: &str) -> String {
 
 /// `/photos-index-aid-385618.html` → `385618`.
 pub fn aid_from_href(href: &str) -> Option<String> {
-	let index = href.find("-aid-")?;
-	let digits: String = href[index + 5..]
+	digits_after(href, "-aid-")
+}
+
+/// `/photos-slide-aid-117508-sid-387771.html` → `387771`, the series a chapter was
+/// opened from.
+pub fn sid_from_href(href: &str) -> Option<String> {
+	digits_after(href, "-sid-")
+}
+
+fn digits_after(href: &str, marker: &str) -> Option<String> {
+	let index = href.find(marker)?;
+	let digits: String = href[index + marker.len()..]
 		.chars()
 		.take_while(char::is_ascii_digit)
 		.collect();
@@ -215,10 +252,10 @@ pub fn cate_id(text: &str) -> Option<u32> {
 }
 
 /// Korean uploads are vertical scrolls; doujinshi, tankoubon and art books are
-/// right-to-left books.
+/// right-to-left books. 38 is 韓漫／合集, the multi-chapter series added in 2026-10.
 pub fn viewer_for_cate(cate: Option<u32>) -> Viewer {
 	match cate {
-		Some(19..=21) => Viewer::Webtoon,
+		Some(19..=21 | 38) => Viewer::Webtoon,
 		_ => Viewer::RightToLeft,
 	}
 }
@@ -546,6 +583,8 @@ pub fn apply_detail(html: &Document, manga: &mut Manga) -> Result<Option<i64>> {
 	let mut category = String::new();
 	let mut page_count = String::new();
 	let mut serial = String::new();
+	// Only series pages carry `狀態：完結` or `狀態：連載中`.
+	let mut state = String::new();
 	if let Some(labels) = html.select("div.uwconn label") {
 		for label in labels {
 			let Some(text) = label.text() else { continue };
@@ -556,6 +595,8 @@ pub fn apply_detail(html: &Document, manga: &mut Manga) -> Result<Option<i64>> {
 				page_count = String::from(rest.trim());
 			} else if let Some(rest) = text.strip_prefix("編號：") {
 				serial = String::from(rest.trim());
+			} else if let Some(rest) = text.strip_prefix("狀態：") {
+				state = String::from(rest.trim());
 			}
 		}
 	}
@@ -586,9 +627,13 @@ pub fn apply_detail(html: &Document, manga: &mut Manga) -> Result<Option<i64>> {
 
 	let tags = collect_tags(html, &category);
 	manga.tags = (!tags.is_empty()).then_some(tags);
-	manga.status = MangaStatus::Completed;
+	// A single album is finished the moment it is uploaded; only a running series
+	// gains chapters.
+	(manga.status, manga.update_strategy) = match state.as_str() {
+		"連載中" => (MangaStatus::Ongoing, UpdateStrategy::Always),
+		_ => (MangaStatus::Completed, UpdateStrategy::Never),
+	};
 	manga.content_rating = ContentRating::NSFW;
-	manga.update_strategy = UpdateStrategy::Never;
 	// The `分類：` label is the only place the detail page names the category (its
 	// breadcrumb holds site notices, not category links). Home and ranking items carry
 	// no category class, so this is the only correction their viewer ever gets.
@@ -630,9 +675,10 @@ fn metadata_description(
 fn collect_tags(html: &Document, category: &str) -> Vec<String> {
 	let mut tags: Vec<String> = Vec::new();
 	// `分類：同人誌／漢化` names both the parent and the child category.
+	// A series reads `韓漫／合集／合集`, hence the duplicate check.
 	for part in category.split(['／', '/']) {
 		let part = part.trim();
-		if !part.is_empty() {
+		if !part.is_empty() && !tags.iter().any(|tag| tag == part) {
 			tags.push(String::from(part));
 		}
 	}
@@ -640,13 +686,183 @@ fn collect_tags(html: &Document, category: &str) -> Vec<String> {
 		for tag in list {
 			if let Some(text) = tag.text() {
 				let text = text.trim();
-				if !text.is_empty() && tags.len() < MAX_TAGS {
+				if !text.is_empty() && tags.len() < MAX_TAGS && !tags.iter().any(|t| t == text) {
 					tags.push(String::from(text));
 				}
 			}
 		}
 	}
 	tags
+}
+
+// ---------------------------------------------------------------------------
+// Series
+// ---------------------------------------------------------------------------
+
+/// A series detail page lists its chapters under `#sr_pub` instead of showing a
+/// gallery; its own `photos-gallery` answers with the bookmark card only.
+pub fn is_series(html: &Document) -> bool {
+	html.select_first("#sr_pub").is_some()
+}
+
+/// Read `chapters_url`'s answer:
+/// `{"code":0,"list":[{"id":110116,"idx":1,"name":"傀儡 1-70話"},…],"total":99}`.
+///
+/// Each `id` is an ordinary album, so its `photos-gallery` serves the pages. Anything
+/// short of the full list is an error, so a library refresh never stores a series with
+/// chapters missing.
+pub fn parse_series_chapters(json: &str, sid: &str) -> Result<Vec<Chapter>> {
+	if json_number(json, "code") != Some(0) {
+		bail!("[wnacg] chapter list refused for {sid}");
+	}
+	let Some(total) = json_number(json, "total") else {
+		bail!("[wnacg] chapter list without total for {sid}");
+	};
+	let mut chapters: Vec<Chapter> = Vec::new();
+	for object in json_objects_in(json, "list") {
+		let (Some(id), Some(idx)) = (json_number(object, "id"), json_number(object, "idx")) else {
+			bail!("[wnacg] chapter without id for {sid}");
+		};
+		let key = id.to_string();
+		chapters.push(Chapter {
+			url: Some(series_chapter_url(&key, sid)),
+			key,
+			title: json_string(object, "name").filter(|name| !name.trim().is_empty()),
+			chapter_number: Some(idx as f32),
+			..Default::default()
+		});
+	}
+	if chapters.is_empty() || chapters.len() as i64 != total {
+		bail!(
+			"[wnacg] chapter list for {sid} has {} of {total}",
+			chapters.len()
+		);
+	}
+	// Newest first, the order the app shows.
+	chapters.sort_by(|a, b| {
+		b.chapter_number
+			.partial_cmp(&a.chapter_number)
+			.unwrap_or(core::cmp::Ordering::Equal)
+	});
+	Ok(chapters)
+}
+
+/// `"key":123` → 123. Only the first occurrence counts, so callers pass a single object
+/// or rely on the key appearing before any nested object.
+fn json_number(json: &str, key: &str) -> Option<i64> {
+	let marker = format!("\"{key}\":");
+	let rest = json[json.find(&marker)? + marker.len()..].trim_start();
+	let end = rest
+		.char_indices()
+		.find(|&(i, ch)| !(ch.is_ascii_digit() || (i == 0 && ch == '-')))
+		.map_or(rest.len(), |(i, _)| i);
+	rest[..end].parse().ok()
+}
+
+/// `"key":"…"` → the unescaped string.
+fn json_string(json: &str, key: &str) -> Option<String> {
+	let marker = format!("\"{key}\":\"");
+	let rest = &json[json.find(&marker)? + marker.len()..];
+	let mut escaped = false;
+	for (i, ch) in rest.char_indices() {
+		if escaped {
+			escaped = false;
+		} else if ch == '\\' {
+			escaped = true;
+		} else if ch == '"' {
+			return Some(json_unescape(&rest[..i]));
+		}
+	}
+	None
+}
+
+/// The top-level objects of the array under `key`, skipping braces inside strings.
+fn json_objects_in<'a>(json: &'a str, key: &str) -> Vec<&'a str> {
+	let mut objects = Vec::new();
+	let marker = format!("\"{key}\":[");
+	let Some(at) = json.find(&marker) else {
+		return objects;
+	};
+	let body = &json[at + marker.len()..];
+	let (mut depth, mut start) = (0usize, 0usize);
+	let (mut in_string, mut escaped) = (false, false);
+	for (i, ch) in body.char_indices() {
+		if in_string {
+			if escaped {
+				escaped = false;
+			} else if ch == '\\' {
+				escaped = true;
+			} else if ch == '"' {
+				in_string = false;
+			}
+			continue;
+		}
+		match ch {
+			'"' => in_string = true,
+			'{' => {
+				if depth == 0 {
+					start = i;
+				}
+				depth += 1;
+			}
+			'}' if depth > 0 => {
+				depth -= 1;
+				if depth == 0 {
+					objects.push(&body[start..=i]);
+				}
+			}
+			']' if depth == 0 => break,
+			_ => {}
+		}
+	}
+	objects
+}
+
+fn json_unescape(raw: &str) -> String {
+	let mut out = String::with_capacity(raw.len());
+	let mut chars = raw.chars();
+	while let Some(ch) = chars.next() {
+		if ch != '\\' {
+			out.push(ch);
+			continue;
+		}
+		match chars.next() {
+			Some('n') => out.push('\n'),
+			Some('t') => out.push('\t'),
+			Some('r') => out.push('\r'),
+			Some('u') => {
+				let high = read_hex4(&mut chars);
+				let code = match high {
+					Some(h) if (0xD800..0xDC00).contains(&h) => {
+						// A surrogate pair arrives as two `\uXXXX` escapes.
+						// Peek first, so a lone high surrogate does not swallow the next character.
+						let mut ahead = chars.clone();
+						let low = (ahead.next() == Some('\\') && ahead.next() == Some('u'))
+							.then(|| read_hex4(&mut ahead))
+							.flatten()
+							.filter(|l| (0xDC00..0xE000).contains(l));
+						if low.is_some() {
+							chars = ahead;
+						}
+						// A broken pair is dropped rather than decoded as some other character.
+						low.map(|l| 0x10000 + ((h - 0xD800) << 10) + (l - 0xDC00))
+					}
+					other => other,
+				};
+				if let Some(c) = code.and_then(char::from_u32) {
+					out.push(c);
+				}
+			}
+			Some(other) => out.push(other),
+			None => {}
+		}
+	}
+	out
+}
+
+fn read_hex4(chars: &mut core::str::Chars) -> Option<u32> {
+	let digits: String = chars.by_ref().take(4).collect();
+	u32::from_str_radix(&digits, 16).ok()
 }
 
 // ---------------------------------------------------------------------------
@@ -892,6 +1108,36 @@ document.writeln("var imglist = [{ url: fast_img_host+\"/data/1/001.jpg\", capti
 		assert_eq!(cate_id("pic_box cate-19"), Some(19));
 		assert_eq!(cate_id("/albums-index-cate-5.html"), Some(5));
 		assert_eq!(cate_id("pic_box"), None);
+		let chapter = "/photos-slide-aid-117508-sid-387771.html";
+		assert_eq!(aid_from_href(chapter).as_deref(), Some("117508"));
+		assert_eq!(sid_from_href(chapter).as_deref(), Some("387771"));
+		assert_eq!(sid_from_href("/photos-slide-aid-117508.html"), None);
+	}
+
+	#[aidoku_test]
+	fn unescapes_chapter_names() {
+		// Built with `u` escapes spelled out, the way the site would send non-ASCII.
+		let u = |hex: &str| format!("{}u{hex}", '\x5c');
+		let json = format!(
+			r#"{{"code":0,"list":[{{"id":1,"idx":1,"name":"{}{} \"A\"\/B {{a}}] \"total\":5"}},{{"id":2,"idx":2,"name":"{}{}"}}],"total":2}}"#,
+			u("5080"),
+			u("5121"),
+			u("d83d"),
+			u("de00"),
+		);
+		let chapters = parse_series_chapters(&json, "9").expect("chapters");
+		assert_eq!(
+			chapters[1].title.as_deref(),
+			Some("傀儡 \"A\"/B {a}] \"total\":5")
+		);
+		assert_eq!(chapters[0].title.as_deref(), Some("😀"));
+		// A lone high surrogate is dropped and the character after it is kept.
+		let lone = format!(
+			r#"{{"code":0,"list":[{{"id":1,"idx":1,"name":"{}X"}}],"total":1}}"#,
+			u("d83d")
+		);
+		let chapters = parse_series_chapters(&lone, "9").expect("chapters");
+		assert_eq!(chapters[0].title.as_deref(), Some("X"));
 	}
 
 	#[aidoku_test]
@@ -1004,3 +1250,8 @@ document.writeln("var imglist = [{ url: fast_img_host+\"/data/1/001.jpg\", capti
 		assert_eq!(home_listing_id("/albums-index-cate-99.html"), None);
 	}
 }
+
+#[cfg(all(test, feature = "fixtures"))]
+#[rustfmt::skip]
+#[path = "fixture_tests/helper.rs"]
+mod fixture_tests;

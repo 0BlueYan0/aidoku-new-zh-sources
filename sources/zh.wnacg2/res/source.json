@@ -2,7 +2,7 @@
 	"info": {
 		"id": "zh.wnacg2",
 		"name": "紳士漫畫 (new-zh)",
-		"version": 2,
+		"version": 3,
 		"urls": [
 			"https://www.wnacg.com",
 			"https://www.wnacg.ru"
@@ -14,7 +14,10 @@
 		"minAppVersion": "0.7.1"
 	},
 	"config": {
-		"allowsBaseUrlSelect": true
+		"allowsBaseUrlSelect": true,
+		"supportsArtistSearch": true,
+		"supportsAuthorSearch": true,
+		"supportsTagSearch": true
 	},
 	"listings": [
 		{
