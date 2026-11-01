@@ -546,6 +546,77 @@ fn paginator_page_number(href: &str) -> Option<i32> {
 }
 
 // ---------------------------------------------------------------------------
+// Series and their chapter albums
+// ---------------------------------------------------------------------------
+
+/// Keys of the series (韓漫／合集) among the items on a page.
+///
+/// Since 2026-10 every chapter of a series is also uploaded as an album of its own, and
+/// search, tag and category pages list both: searching `Not Sober` returns the series
+/// plus five chapter albums (2026-11-01). A chapter album's detail page does not link
+/// back to its series, so the series' chapter list is the only way to pair them.
+///
+/// List pages mark a series with `cate-38`. Home page blocks drop the `cate-N` class, so
+/// the counter under the title (`5話` for a series, `40張圖片` for an album) is checked
+/// too.
+pub fn series_keys(html: &Document) -> Vec<String> {
+	let mut keys: Vec<String> = Vec::new();
+	let Some(items) = html.select("li.gallary_item") else {
+		return keys;
+	};
+	for item in items {
+		let Some(key) = item
+			.select_first("div.pic_box a")
+			.and_then(|link: Element| link.attr("href"))
+			.and_then(|href: String| aid_from_href(&href))
+		else {
+			continue;
+		};
+		let tagged = item
+			.select_first("div.pic_box")
+			.and_then(|el: Element| el.attr("class"))
+			.and_then(|class: String| cate_id(&class))
+			== Some(38);
+		let counted = item
+			.select_first(".info_col")
+			.and_then(|el: Element| el.text())
+			.is_some_and(|text: String| counts_chapters(&text));
+		if (tagged || counted) && !keys.contains(&key) {
+			keys.push(key);
+		}
+	}
+	keys
+}
+
+/// List pages print `5話， 更新於2026-11-01`, the home page `2026-10-10, 14話`; an
+/// album reads `40張圖片` in either place.
+fn counts_chapters(info: &str) -> bool {
+	info.split([',', '，', ' ', '\n', '\t']).any(|word: &str| {
+		let rest = word.trim_start_matches(|ch: char| ch.is_ascii_digit());
+		rest.len() < word.len() && rest == "話"
+	})
+}
+
+/// The album ids in a `chapters_url` answer. Unlike [`parse_series_chapters`] a partial
+/// list is fine here: it only decides which list entries to hide, and an id missed
+/// leaves its album visible.
+pub fn series_chapter_ids(json: &str) -> Vec<String> {
+	if json_number(json, "code") != Some(0) {
+		return Vec::new();
+	}
+	json_objects_in(json, "list")
+		.into_iter()
+		.filter_map(|object| json_number(object, "id"))
+		.map(|id| id.to_string())
+		.collect()
+}
+
+/// Drop the entries that are chapters of a series, keeping the series itself.
+pub fn drop_series_chapters(entries: &mut Vec<Manga>, chapter_ids: &[String]) {
+	entries.retain(|manga| !chapter_ids.contains(&manga.key));
+}
+
+// ---------------------------------------------------------------------------
 // Detail page
 // ---------------------------------------------------------------------------
 
@@ -1197,6 +1268,27 @@ document.writeln("var imglist = [{ url: fast_img_host+\"/data/1/001.jpg\", capti
 			"https://x.test/a.jpg"
 		);
 		assert_eq!(normalize_url("  "), "");
+	}
+
+	#[aidoku_test]
+	fn tells_a_series_counter_from_an_album_counter() {
+		assert!(counts_chapters("\n5話，\n更新於2026-11-01"));
+		assert!(counts_chapters("23話"));
+		assert!(counts_chapters("\n2026-10-10, 14話\t"));
+		assert!(!counts_chapters("2026-10-31, 33張圖片"));
+		assert!(!counts_chapters("Not Sober 23-24話"));
+		assert!(!counts_chapters("40張圖片，\n創建於2026-10-31 22:45:37"));
+		assert!(!counts_chapters("話"));
+		assert!(!counts_chapters(""));
+	}
+
+	#[aidoku_test]
+	fn a_refused_chapter_list_hides_nothing() {
+		assert!(series_chapter_ids(r#"{"code":404}"#).is_empty());
+		assert_eq!(
+			series_chapter_ids(r#"{"code":0,"list":[{"id":7,"idx":1,"name":"a"}],"total":2}"#),
+			[String::from("7")]
+		);
 	}
 
 	#[aidoku_test]

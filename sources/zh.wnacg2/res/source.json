@@ -2,10 +2,12 @@
 	"info": {
 		"id": "zh.wnacg2",
 		"name": "紳士漫畫 (new-zh)",
-		"version": 3,
+		"version": 4,
 		"urls": [
 			"https://www.wnacg.com",
-			"https://www.wnacg.ru"
+			"https://www.wnacg.ru",
+			"https://www.wnacg.buzz",
+			"https://www.wnacg.site"
 		],
 		"contentRating": 2,
 		"languages": [
