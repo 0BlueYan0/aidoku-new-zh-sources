@@ -2,7 +2,7 @@
 
 use aidoku::{
 	alloc::{String, Vec},
-	imports::{net::Request, std::send_partial_result},
+	imports::{html::Document, net::Request, std::send_partial_result},
 	prelude::*,
 	Chapter, DeepLinkHandler, DeepLinkResult, DynamicSettings, FilterValue, GroupSetting, HashMap,
 	Home, HomeComponent, HomeComponentValue, HomeLayout, HomePartialResult, ImageRequestProvider,
@@ -108,12 +108,12 @@ impl Source for WnacgSource {
 			.filter(|value: &String| !value.trim().is_empty())
 		{
 			let html = fetch_html(&search_url(&keyword, &scope, &sort, page))?;
-			return Ok(parse_list_page(&html, page, true));
+			return Ok(list_page_without_series_chapters(&html, page, true));
 		}
 
 		if !tag.trim().is_empty() {
 			let html = fetch_html(&tag_list_url(&tag, page))?;
-			return Ok(parse_list_page(&html, page, false));
+			return Ok(list_page_without_series_chapters(&html, page, false));
 		}
 
 		let url = if cate.is_empty() {
@@ -122,7 +122,7 @@ impl Source for WnacgSource {
 			cate_list_url(&cate, page)
 		};
 		let html = fetch_html(&url)?;
-		Ok(parse_list_page(&html, page, false))
+		Ok(list_page_without_series_chapters(&html, page, false))
 	}
 
 	fn get_manga_update(
@@ -211,8 +211,50 @@ impl ListingProvider for WnacgSource {
 		};
 
 		let html = fetch_html(&url)?;
-		Ok(parse_list_page(&html, page, false))
+		Ok(list_page_without_series_chapters(&html, page, false))
 	}
+}
+
+/// [`parse_list_page`] with the chapter albums of any series on the page left out, so a
+/// series shows once instead of once plus each of its chapters (2026-11-01).
+fn list_page_without_series_chapters(
+	html: &Document,
+	page: i32,
+	is_search: bool,
+) -> MangaPageResult {
+	let mut result = parse_list_page(html, page, is_search);
+	let chapter_ids = fetch_series_chapter_ids(&series_keys(html));
+	drop_series_chapters(&mut result.entries, &chapter_ids);
+	result
+}
+
+/// Album ids of every chapter of the given series: one `chapters_url` request per
+/// series, sent after the page listing them has returned, in batches of [`HOME_BATCH`].
+///
+/// Best effort: a series whose list fails or is refused just keeps its chapters visible.
+/// Signed out the site shows no series and the endpoint answers 404, so nothing is sent.
+fn fetch_series_chapter_ids(sids: &[String]) -> Vec<String> {
+	let mut ids: Vec<String> = Vec::new();
+	if sids.is_empty() || !auth::is_logged_in() {
+		return ids;
+	}
+	let requests: Vec<Request> = sids
+		.iter()
+		.filter_map(|sid| request(&chapters_url(sid)).ok())
+		.collect();
+	let mut requests = requests.into_iter().peekable();
+	while requests.peek().is_some() {
+		let batch: Vec<Request> = requests.by_ref().take(HOME_BATCH).collect();
+		for response in Request::send_all(batch).into_iter().flatten() {
+			if !(200..300).contains(&response.status_code()) {
+				continue;
+			}
+			if let Ok(json) = response.get_string() {
+				ids.extend(series_chapter_ids(&json));
+			}
+		}
+	}
+	ids
 }
 
 impl Home for WnacgSource {
@@ -257,25 +299,50 @@ impl Home for WnacgSource {
 
 		// Drawn one at a time so a short response list leaves the trailing rows empty instead
 		// of shifting results onto the wrong rows.
+		// Rows holding a series wait for its chapter list so its chapter albums can be left
+		// out (see `list_page_without_series_chapters`); every other row goes out now.
 		let mut responses = responses.into_iter();
+		let mut held: Vec<HomeSection> = Vec::new();
+		let mut held_series: Vec<String> = Vec::new();
 		for (is_rank, url) in rows {
-			let html = responses.next().map(|response| read_html(response?, &url));
-			if is_rank {
+			// A failing row should not take the whole home screen down.
+			let Some(Ok(html)) = responses.next().map(|response| read_html(response?, &url)) else {
+				continue;
+			};
+			let sections = if is_rank {
 				// Parsed as the `rank_week` listing's first page is.
-				if let Some(Ok(html)) = html {
-					send_scroller(
-						String::from(HOME_RANK_TITLE),
-						Some(String::from(HOME_RANK_LISTING)),
-						parse_list_page(&html, 1, false).entries,
-					);
-				}
+				aidoku::alloc::vec![HomeSection {
+					title: String::from(HOME_RANK_TITLE),
+					listing_id: Some(String::from(HOME_RANK_LISTING)),
+					entries: parse_list_page(&html, 1, false).entries,
+				}]
 			} else {
-				// A failing row should not take the whole home screen down.
-				if let Some(Ok(html)) = html {
-					for section in parse_home_sections(&html) {
-						send_scroller(section.title, section.listing_id, section.entries);
-					}
+				parse_home_sections(&html)
+			};
+			let series = series_keys(&html);
+			for section in sections {
+				let in_section: Vec<String> = series
+					.iter()
+					.filter(|sid| section.entries.iter().any(|manga| &manga.key == *sid))
+					.cloned()
+					.collect();
+				if in_section.is_empty() {
+					send_scroller(section.title, section.listing_id, section.entries);
+				} else {
+					held_series.extend(in_section);
+					held.push(section);
 				}
+			}
+		}
+
+		if !held.is_empty() {
+			// The ranking board can list a series the landing page also shows.
+			held_series.sort();
+			held_series.dedup();
+			let chapter_ids = fetch_series_chapter_ids(&held_series);
+			for mut section in held {
+				drop_series_chapters(&mut section.entries, &chapter_ids);
+				send_scroller(section.title, section.listing_id, section.entries);
 			}
 		}
 
