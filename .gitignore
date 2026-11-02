@@ -24,7 +24,21 @@ templates/*/target
 /target
 
 docs/*
+
+# Local AI assistant instructions and settings
+AGENTS.md
+AGENTS.override.md
 CLAUDE.md
+CLAUDE.local.md
+GEMINI.md
+.claude/
+.codex/
+.agents/
+.cursor/
+.cursorrules
+.github/copilot-instructions.md
+.github/instructions/
+
 __pycache__/
 
 # zh.bakamh2 source lives in a private repo; only prebuilt/zh.bakamh2.aix is published

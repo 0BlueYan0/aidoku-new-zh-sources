@@ -7,6 +7,10 @@ Aidoku 新版中文圖源<br>
 
 進入[這裡](https://0blueyan0.github.io/aidoku-new-zh-sources)並點擊 Add Repository
 
+## 更新紀錄
+
+各來源新增的功能、修正的問題與版本變更，請見 [更新紀錄](CHANGELOG.md)。
+
 ## Cloudflare 驗證轉發伺服器
 
 巴卡漫畫、18漫畫整站都有 Cloudflare 驗證，App 常常要驗證好幾次才打得開。有一台一直開著、裝了 Docker 的電腦或 NAS 的話，可以架設 [aidoku-cf-relay](https://github.com/0BlueYan0/aidoku-cf-relay) 轉發伺服器：
