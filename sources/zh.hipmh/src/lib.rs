@@ -2,7 +2,7 @@
 
 use aidoku::{
 	alloc::{String, Vec},
-	imports::std::send_partial_result,
+	imports::std::{current_date, send_partial_result},
 	prelude::*,
 	Chapter, DeepLinkHandler, DeepLinkResult, FilterValue, Home, HomeComponent, HomeComponentValue,
 	HomeLayout, HomePartialResult, Link, LinkValue, Listing, ListingProvider, Manga,
@@ -12,6 +12,11 @@ use aidoku::{
 mod decoder;
 mod genres;
 mod helper;
+
+#[cfg(all(test, feature = "fixtures"))]
+#[rustfmt::skip]
+#[path = "fixture_tests/chapters.rs"]
+mod fixture_tests;
 
 use helper::*;
 
@@ -200,28 +205,8 @@ impl Source for HipmhSource {
 		}
 
 		if needs_chapters {
-			// Pages of at most 50 are fetched one after another. Only a complete list is
-			// kept: a partial one would read as chapters having been removed.
-			let mut chapters: Vec<Chapter> = Vec::new();
-			let mut page = 1;
-			let complete = loop {
-				let data = match fetch_data(&chapters_url(&manga.key, page)) {
-					Ok(data) => data,
-					Err(_) => break false,
-				};
-				let Some(parsed) = parse_chapter_page(&data) else {
-					break false;
-				};
-				let last = parsed.is_empty();
-				chapters.extend(parsed);
-				let total_pages = json_i64(&data, "total_pages").unwrap_or(0);
-				if last || i64::from(page) >= total_pages {
-					break true;
-				}
-				page += 1;
-			};
 			// One unreachable title must not abort a whole library refresh.
-			if let Some(chapters) = chapters_to_store(complete, chapters) {
+			if let Some(chapters) = fetch_chapters(&manga.key, current_date(), fetch_data) {
 				manga.chapters = Some(chapters);
 			}
 		}

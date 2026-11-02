@@ -1,5 +1,5 @@
 use aidoku::{
-	alloc::{String, Vec},
+	alloc::{collections::BTreeSet, String, Vec},
 	helpers::uri::encode_uri_component,
 	imports::{defaults::defaults_get, net::Request, std::parse_date},
 	prelude::*,
@@ -299,10 +299,53 @@ pub fn search_url(query: &str, page: i32, page_size: i32) -> String {
 	)
 }
 
-pub fn chapters_url(key: &str, page: i32) -> String {
+pub fn chapters_url(key: &str, page: i32, timestamp: i64) -> String {
 	format!(
-		"{API_URL}/v1/manga/chapters?mid={key}&page={page}&per_page={CHAPTERS_PER_PAGE}&order=desc"
+		"{API_URL}/v1/manga/chapters?mid={key}&page={page}&per_page={CHAPTERS_PER_PAGE}&order=desc&_={timestamp}"
 	)
+}
+
+/// A timestamp changes the CDN cache key, but does not pin a server-side snapshot.
+/// Reject inconsistent pages rather than replacing a library's chapters with gaps.
+pub fn fetch_chapters(
+	key: &str,
+	timestamp: i64,
+	mut fetch: impl FnMut(&str) -> Result<String>,
+) -> Option<Vec<Chapter>> {
+	let mut chapters = Vec::new();
+	let mut expected = None;
+	let mut page = 1;
+	loop {
+		let data = fetch(&chapters_url(key, page, timestamp)).ok()?;
+		let total: usize = json_field(&data, "total")?.parse().ok()?;
+		let total_pages: i32 = json_field(&data, "total_pages")?.parse().ok()?;
+		let response_page: i32 = json_field(&data, "page")?.parse().ok()?;
+		let per_page: i32 = json_field(&data, "per_page")?.parse().ok()?;
+		if total == 0
+			|| total_pages < 1
+			|| total.div_ceil(CHAPTERS_PER_PAGE as usize) != usize::try_from(total_pages).ok()?
+			|| response_page != page
+			|| per_page != CHAPTERS_PER_PAGE
+			|| expected.is_some_and(|metadata| metadata != (total, total_pages))
+		{
+			return None;
+		}
+		expected = Some((total, total_pages));
+		let parsed = parse_chapter_page(&data)?;
+		if parsed.len()
+			!= total
+				.checked_sub(chapters.len())?
+				.min(CHAPTERS_PER_PAGE as usize)
+		{
+			return None;
+		}
+		chapters.extend(parsed);
+		if page == total_pages {
+			break;
+		}
+		page += 1;
+	}
+	chapters_to_store(true, chapters)
 }
 
 /// Image host for the picked route. `line == 9` in a chapter response switches the
@@ -511,23 +554,81 @@ pub fn parse_chapter(obj: &str) -> Option<Chapter> {
 /// One page of `/v1/manga/chapters`, or `None` when it has no `items` or an entry cannot
 /// be read: either would silently drop chapters from the list.
 pub fn parse_chapter_page(data: &str) -> Option<Vec<Chapter>> {
-	json_field(data, "items")
-		.map(json_items)?
-		.into_iter()
-		.map(parse_chapter)
-		.collect()
+	let items = json_field(data, "items")?;
+	if !items.starts_with('[') || !items.ends_with(']') {
+		return None;
+	}
+	json_items(items).into_iter().map(parse_chapter).collect()
 }
 
 /// The walked list, if the library should take it. A partial list would read as chapters
 /// having been removed, and an unknown mid answers an empty list (checked 2026-10-20).
 pub fn chapters_to_store(complete: bool, chapters: Vec<Chapter>) -> Option<Vec<Chapter>> {
-	(complete && !chapters.is_empty()).then_some(chapters)
+	if !complete || chapters.is_empty() {
+		return None;
+	}
+	let unique = {
+		let keys: BTreeSet<&str> = chapters
+			.iter()
+			.map(|chapter| chapter.key.as_str())
+			.collect();
+		keys.len() == chapters.len()
+	};
+	unique.then_some(chapters)
 }
 
 #[cfg(test)]
 mod test {
 	use super::*;
 	use aidoku_test::aidoku_test;
+
+	#[aidoku_test]
+	fn chapter_requests_avoid_the_fixed_cache_key() {
+		let url = chapters_url("bTo3MDU1", 1, 1793613600);
+		assert!(url.ends_with("&_=1793613600"), "{url}");
+	}
+
+	#[aidoku_test]
+	fn duplicate_chapter_keys_reject_the_list() {
+		let chapter = r#"{"hid":"bTo4MDgzLWM6OTIwMw-ODA4MzoxLjAw","title":"第1话"}"#;
+		let chapters =
+			parse_chapter_page(&format!(r#"{{"items":[{chapter},{chapter}]}}"#)).expect("chapters");
+		assert!(chapters_to_store(true, chapters).is_none());
+	}
+
+	#[aidoku_test]
+	fn invalid_pagination_never_returns_a_partial_list() {
+		let chapter = r#"{"hid":"bTo4MDgzLWM6OTIwMw-ODA4MzoxLjAw","title":"第1话"}"#;
+		let valid =
+			format!(r#"{{"page":1,"per_page":50,"total":1,"total_pages":1,"items":[{chapter}]}}"#);
+		let chapters = fetch_chapters("bTo4MDgz", 123, |_| Ok(valid.clone())).expect("valid page");
+		assert_eq!(chapters.len(), 1);
+		assert_eq!(chapters[0].key, "Yzo5MjAz-ODA4MzoxLjAw");
+		for invalid in [
+			valid.replace(r#""total":1,"#, ""),
+			valid.replace(r#""total":1"#, r#""total":-1"#),
+			valid.replace(r#""total":1"#, r#""total":1.5"#),
+			valid.replace(r#""total":1"#, r#""total":2"#),
+			valid.replace(r#""total_pages":1"#, r#""total_pages":0"#),
+			valid.replace(r#""total_pages":1"#, r#""total_pages":2"#),
+			valid.replace(r#""page":1"#, r#""page":2"#),
+			valid.replace(r#""per_page":50"#, r#""per_page":20"#),
+			valid.replace(&format!("[{chapter}]"), "[]"),
+			valid.replace(&format!("[{chapter}]"), "null"),
+			valid.replace(&format!("[{chapter}]"), "{}"),
+		] {
+			let mut requests = 0;
+			assert!(
+				fetch_chapters("bTo4MDgz", 123, |_| {
+					requests += 1;
+					Ok(invalid.clone())
+				})
+				.is_none(),
+				"{invalid}"
+			);
+			assert_eq!(requests, 1);
+		}
+	}
 
 	#[aidoku_test]
 	fn fields_are_read_from_the_top_level_only() {
