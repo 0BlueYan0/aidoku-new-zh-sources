@@ -6,7 +6,7 @@
 
 ## 來源索引
 
-目前收錄 19 個來源。點選來源名稱可查看歷次更新，各來源表格的第一列就是目前版本。
+目前收錄 20 個來源。點選來源名稱可查看歷次更新，各來源表格的第一列就是目前版本。
 
 | 來源 | 來源 ID |
 |---|---|
@@ -29,6 +29,7 @@
 | [巴卡漫畫 (new-zh)](#zhbakamh2) | `zh.bakamh2` |
 | [漫畫1234](#zhwmh1234) | `zh.wmh1234` |
 | [漫畫客](#zhyumanhua) | `zh.yumanhua` |
+| [W漫畫](#zhwmanhua) | `zh.wmanhua` |
 
 ## 各來源更新
 
@@ -288,6 +289,16 @@
 | 2026-10-16 | v2 | 修正 App 自動搜尋時來源長時間卡住的問題。 | [PR #30][pr30] |
 | 2026-10-13 | v1 | 新增來源。 | [PR #27][pr27] |
 
+<a id="zhwmanhua"></a>
+
+### W漫畫
+
+`zh.wmanhua`
+
+| 日期 | 版本 | 更新內容 | 相關紀錄 |
+|---|---|---|---|
+| 2026-11-03 | v1 | 新增來源。 | [PR #52][pr52] |
+
 ## 共通更新
 
 ### 2026-10-20：改善載入失敗與內容不完整時的處理
@@ -344,6 +355,7 @@
 [pr44]: https://github.com/0BlueYan0/aidoku-new-zh-sources/pull/44
 [pr46]: https://github.com/0BlueYan0/aidoku-new-zh-sources/pull/46
 [pr5]: https://github.com/0BlueYan0/aidoku-new-zh-sources/pull/5
+[pr52]: https://github.com/0BlueYan0/aidoku-new-zh-sources/pull/52
 [pr6]: https://github.com/0BlueYan0/aidoku-new-zh-sources/pull/6
 [pr7]: https://github.com/0BlueYan0/aidoku-new-zh-sources/pull/7
 [pr8]: https://github.com/0BlueYan0/aidoku-new-zh-sources/pull/8
