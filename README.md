@@ -7,6 +7,13 @@ Aidoku 新版中文圖源<br>
 
 進入[這裡](https://0blueyan0.github.io/aidoku-new-zh-sources)並點擊 Add Repository
 
+如果加入不了，可以點擊下面任一個試試，但新版本可能會因為 CDN cache 比較晚出現。
+
+- [jsDelivr](https://aidoku.app/add-source-list/?url=https://cdn.jsdelivr.net/gh/0BlueYan0/aidoku-new-zh-sources@gh-pages/index.min.json)
+- [jsdmirror](https://aidoku.app/add-source-list/?url=https://cdn.jsdmirror.com/gh/0BlueYan0/aidoku-new-zh-sources@gh-pages/index.min.json)
+- [ghfast](https://aidoku.app/add-source-list/?url=https://ghfast.top/https://raw.githubusercontent.com/0BlueYan0/aidoku-new-zh-sources/gh-pages/index.min.json)
+- [gh-proxy](https://aidoku.app/add-source-list/?url=https://gh-proxy.com/https://raw.githubusercontent.com/0BlueYan0/aidoku-new-zh-sources/gh-pages/index.min.json)
+
 ## 更新紀錄
 
 各來源新增的功能、修正的問題與版本變更，請見 [更新紀錄](CHANGELOG.md)。
