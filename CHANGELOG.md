@@ -115,7 +115,7 @@
 
 | 日期 | 版本 | 更新內容 | 相關紀錄 |
 |---|---|---|---|
-| 未合併 | v5 | 新增「AI 翻譯」設定（預設關閉，須登入）：日語的同人誌、單行本、雜誌可在閱讀時顯示網站已翻好的繁體或簡體譯文。 | 待補 |
+| 未合併 | v5 | 新增「AI 翻譯」設定（預設關閉，須登入）：日語的同人誌、單行本、雜誌可在閱讀時顯示網站已翻好的繁體或簡體譯文。 | [PR #46][pr46] |
 | 2026-11-01 | v4 | 新增兩個鏡像網域；列表不再重複列出合集內的單話。 | [PR #42][pr42] |
 | 2026-10-30 | v3 | 支援網頁登入後閱讀韓漫，韓漫合集依章節呈現。 | [PR #39][pr39] |
 | 2026-10-20 | v2 | 改善載入失敗時的處理；顯示名稱加上 `(new-zh)`。 | [PR #33][pr33] |
@@ -342,6 +342,7 @@
 [pr41]: https://github.com/0BlueYan0/aidoku-new-zh-sources/pull/41
 [pr42]: https://github.com/0BlueYan0/aidoku-new-zh-sources/pull/42
 [pr44]: https://github.com/0BlueYan0/aidoku-new-zh-sources/pull/44
+[pr46]: https://github.com/0BlueYan0/aidoku-new-zh-sources/pull/46
 [pr5]: https://github.com/0BlueYan0/aidoku-new-zh-sources/pull/5
 [pr6]: https://github.com/0BlueYan0/aidoku-new-zh-sources/pull/6
 [pr7]: https://github.com/0BlueYan0/aidoku-new-zh-sources/pull/7
