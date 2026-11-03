@@ -2,16 +2,17 @@
 
 use aidoku::{
 	alloc::{String, Vec},
-	imports::{html::Document, net::Request, std::send_partial_result},
+	imports::{canvas::ImageRef, html::Document, net::Request, std::send_partial_result},
 	prelude::*,
 	Chapter, DeepLinkHandler, DeepLinkResult, DynamicSettings, FilterValue, GroupSetting, HashMap,
 	Home, HomeComponent, HomeComponentValue, HomeLayout, HomePartialResult, ImageRequestProvider,
-	Link, Listing, ListingProvider, Manga, MangaPageResult, NotificationHandler, Page, PageContent,
-	PageContext, Result, Setting, Source, WebLoginHandler,
+	ImageResponse, Link, Listing, ListingProvider, Manga, MangaPageResult, NotificationHandler,
+	Page, PageContent, PageContext, PageImageProcessor, Result, Setting, Source, WebLoginHandler,
 };
 
 mod auth;
 mod helper;
+mod translate;
 
 use helper::*;
 
@@ -181,11 +182,35 @@ impl Source for WnacgSource {
 			bail!("找不到圖片，可能是網址已變更或伺服器暫時無法連線");
 		}
 
+		// A second request, sent after the first has returned: the site's translation of
+		// this album, when the reader turned it on. It answers 404 for albums nobody has
+		// translated yet and for every non-Japanese album, and then the pages stay as they
+		// are; the translation is extra, so it never makes the chapter fail.
+		let mut translated = match translate::enabled_language() {
+			Some(simplified) if auth::is_logged_in() => {
+				fetch_text(&translate::result_url(&chapter.key))
+					.map(|json| translate::parse_result(&json, simplified))
+					.unwrap_or_default()
+			}
+			_ => Vec::new(),
+		};
+
 		Ok(images
 			.into_iter()
-			.map(|image: String| Page {
-				content: PageContent::url(image),
-				..Default::default()
+			.map(|image: String| {
+				let boxes = translate::page_key(&image).and_then(|key| {
+					let at = translated.iter().position(|(path, _)| *path == key)?;
+					Some(translated.swap_remove(at).1)
+				});
+				Page {
+					content: match boxes {
+						Some(boxes) => {
+							PageContent::url_context(image, translate::context_for(&boxes))
+						}
+						None => PageContent::url(image),
+					},
+					..Default::default()
+				}
 			})
 			.collect())
 	}
@@ -432,6 +457,18 @@ impl NotificationHandler for WnacgSource {
 	}
 }
 
+impl PageImageProcessor for WnacgSource {
+	/// Pages without a translation in their context come back untouched; so does a page
+	/// whose drawing fails, since the original is still readable.
+	fn process_page_image(
+		&self,
+		response: ImageResponse,
+		context: Option<PageContext>,
+	) -> Result<ImageRef> {
+		Ok(translate::paint(&response.image, context.as_ref()).unwrap_or(response.image))
+	}
+}
+
 impl DynamicSettings for WnacgSource {
 	/// Reads defaults only and sends no request. Never answers with an empty list: an
 	/// empty list leaves every button on the settings page dead (CLAUDE.md).
@@ -461,6 +498,7 @@ register_source!(
 	ListingProvider,
 	Home,
 	ImageRequestProvider,
+	PageImageProcessor,
 	DeepLinkHandler,
 	WebLoginHandler,
 	NotificationHandler,

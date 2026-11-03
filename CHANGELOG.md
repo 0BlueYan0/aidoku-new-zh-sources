@@ -15,7 +15,7 @@
 | [Webtoons 繁體中文](#zhwebtoons) | `zh.webtoons` | v19 |
 | [Komiic 漫畫 (new-zh)](#zhkomiic2) | `zh.komiic2` | v2 |
 | [TIBIU 漫畫在線](#zhtibiu) | `zh.tibiu` | v6 |
-| [紳士漫畫 (new-zh)](#zhwnacg2) | `zh.wnacg2` | v4 |
+| [紳士漫畫 (new-zh)](#zhwnacg2) | `zh.wnacg2` | v5 |
 | [喜漫漫畫](#zhfavcomic) | `zh.favcomic` | v5 |
 | [嬉皮漫畫](#zhhipmh) | `zh.hipmh` | v3 |
 | [輕書架](#zhlightnovel) | `zh.lightnovel` | v2 |
@@ -115,6 +115,7 @@
 
 | 日期 | 版本 | 更新內容 | 相關紀錄 |
 |---|---|---|---|
+| 未合併 | v5 | 新增「AI 翻譯」設定（預設關閉，須登入）：日語的同人誌、單行本、雜誌可在閱讀時顯示網站已翻好的繁體或簡體譯文。 | 待補 |
 | 2026-11-01 | v4 | 新增兩個鏡像網域；列表不再重複列出合集內的單話。 | [PR #42][pr42] |
 | 2026-10-30 | v3 | 支援網頁登入後閱讀韓漫，韓漫合集依章節呈現。 | [PR #39][pr39] |
 | 2026-10-20 | v2 | 改善載入失敗時的處理；顯示名稱加上 `(new-zh)`。 | [PR #33][pr33] |
