@@ -831,7 +831,7 @@ fn json_number(json: &str, key: &str) -> Option<i64> {
 }
 
 /// `"key":"…"` → the unescaped string.
-fn json_string(json: &str, key: &str) -> Option<String> {
+pub fn json_string(json: &str, key: &str) -> Option<String> {
 	let marker = format!("\"{key}\":\"");
 	let rest = &json[json.find(&marker)? + marker.len()..];
 	let mut escaped = false;
@@ -848,7 +848,7 @@ fn json_string(json: &str, key: &str) -> Option<String> {
 }
 
 /// The top-level objects of the array under `key`, skipping braces inside strings.
-fn json_objects_in<'a>(json: &'a str, key: &str) -> Vec<&'a str> {
+pub fn json_objects_in<'a>(json: &'a str, key: &str) -> Vec<&'a str> {
 	let mut objects = Vec::new();
 	let marker = format!("\"{key}\":[");
 	let Some(at) = json.find(&marker) else {
@@ -889,7 +889,7 @@ fn json_objects_in<'a>(json: &'a str, key: &str) -> Vec<&'a str> {
 	objects
 }
 
-fn json_unescape(raw: &str) -> String {
+pub fn json_unescape(raw: &str) -> String {
 	let mut out = String::with_capacity(raw.len());
 	let mut chars = raw.chars();
 	while let Some(ch) = chars.next() {
