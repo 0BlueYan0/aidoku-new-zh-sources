@@ -53,3 +53,4 @@ Aidoku 新版中文圖源<br>
 - [巴卡漫畫 (new-zh)](https://bakamh.com/)（可用帳號密碼登入閱讀需登入的章節，換網址會自動重新登入，支援五個鏡像網域，也可自訂網址，站方有 Cloudflare 驗證，載入不出內容時可在設定頁手動通過驗證，可搭配自架的 Cloudflare 轉發伺服器，**⚠ 站方會偵測並封鎖使用第三方工具的帳號，登入閱讀或下載可能導致封號，請自行評估**）
 - [漫畫1234](https://m.wmh1234.com/)
 - [漫畫客](http://yumanhua.com/)
+- [W漫畫](https://www.wmanhua.com/)

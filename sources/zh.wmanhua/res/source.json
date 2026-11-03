@@ -1,0 +1,24 @@
+{
+	"info": {
+		"id": "zh.wmanhua",
+		"name": "W漫畫",
+		"version": 1,
+		"url": "https://www.wmanhua.com",
+		"contentRating": 1,
+		"languages": [
+			"zh"
+		],
+		"minAppVersion": "0.8.3"
+	},
+	"config": {
+		"hidesFiltersWhileSearching": true,
+		"supportsAuthorSearch": true,
+		"supportsTagSearch": true
+	},
+	"listings": [
+		{
+			"id": "update",
+			"name": "最近更新"
+		}
+	]
+}
