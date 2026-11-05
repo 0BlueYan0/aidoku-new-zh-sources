@@ -308,7 +308,7 @@
 
 | 日期 | 版本 | 更新內容 | 相關紀錄 |
 |---|---|---|---|
-| 2026-11-05 | v1 | 新增來源。 |  |
+| 2026-11-05 | v1 | 新增來源。 | [PR #54][pr54] |
 
 ## 共通更新
 
@@ -367,6 +367,7 @@
 [pr46]: https://github.com/0BlueYan0/aidoku-new-zh-sources/pull/46
 [pr5]: https://github.com/0BlueYan0/aidoku-new-zh-sources/pull/5
 [pr52]: https://github.com/0BlueYan0/aidoku-new-zh-sources/pull/52
+[pr54]: https://github.com/0BlueYan0/aidoku-new-zh-sources/pull/54
 [pr6]: https://github.com/0BlueYan0/aidoku-new-zh-sources/pull/6
 [pr7]: https://github.com/0BlueYan0/aidoku-new-zh-sources/pull/7
 [pr8]: https://github.com/0BlueYan0/aidoku-new-zh-sources/pull/8
