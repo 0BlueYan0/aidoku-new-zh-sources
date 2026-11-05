@@ -1,0 +1,58 @@
+{
+	"info": {
+		"id": "zh.manwa",
+		"name": "漫蛙漫畫",
+		"version": 1,
+		"urls": [
+			"https://manwacn.cc",
+			"https://manwabb.cc",
+			"https://manwayy.cc",
+			"https://manwadz.cc",
+			"https://manwarr.cc",
+			"https://manwazz.cc",
+			"https://mwmwbu.cc",
+			"https://mwmwff.cc"
+		],
+		"contentRating": 1,
+		"languages": [
+			"zh"
+		],
+		"minAppVersion": "0.9.0"
+	},
+	"config": {
+		"allowsBaseUrlSelect": true,
+		"hidesFiltersWhileSearching": true,
+		"supportsAuthorSearch": true,
+		"supportsTagSearch": true
+	},
+	"listings": [
+		{
+			"id": "update",
+			"name": "最近更新"
+		},
+		{
+			"id": "new",
+			"name": "新作"
+		},
+		{
+			"id": "hot",
+			"name": "熱門"
+		},
+		{
+			"id": "vip",
+			"name": "VIP 專區"
+		},
+		{
+			"id": "rank_hot",
+			"name": "人氣榜"
+		},
+		{
+			"id": "rank_end",
+			"name": "完結榜"
+		},
+		{
+			"id": "rank_new",
+			"name": "新番榜"
+		}
+	]
+}

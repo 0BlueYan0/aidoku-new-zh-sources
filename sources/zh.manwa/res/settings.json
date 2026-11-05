@@ -1,0 +1,34 @@
+[
+	{
+		"type": "group",
+		"footer": "站方換域名時可自行填入完整網址，留空則使用上方選擇的網址。",
+		"items": [
+			{
+				"type": "text",
+				"key": "customBaseUrl",
+				"title": "自訂網址",
+				"placeholder": "https://manwacn.cc",
+				"refreshes": [
+					"content",
+					"listings"
+				]
+			}
+		]
+	},
+	{
+		"type": "group",
+		"title": "帳號",
+		"footer": "登入後，VIP 會員可以閱讀「VIP 搶先看」章節。帳號密碼會保存在此裝置，登入過期時自動續期；登出即清除。\nVIP 只能在網站上開通，App 內無法購買。同一個帳號在網站與 App 同時登入時，另一邊會被登出。\n登入失敗時，錯誤視窗只會顯示通用訊息；實際原因請看下方「帳號資訊」，關掉這一頁再重新打開才會更新。",
+		"items": [
+			{
+				"type": "login",
+				"key": "login",
+				"title": "登入",
+				"method": "basic",
+				"logoutTitle": "登出",
+				"notification": "login",
+				"refreshes": ["settings", "listings", "content"]
+			}
+		]
+	}
+]
