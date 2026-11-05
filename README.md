@@ -54,3 +54,4 @@ Aidoku 新版中文圖源<br>
 - [漫畫1234](https://m.wmh1234.com/)
 - [漫畫客](http://yumanhua.com/)
 - [W漫畫](https://www.wmanhua.com/)
+- [漫蛙漫畫](https://manwacn.cc/)（可用帳號密碼登入，設定頁顯示會員與 VIP 狀態，支援八個鏡像網域，也可自訂網址）

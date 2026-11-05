@@ -1,0 +1,31 @@
+[package]
+name = "manwa-zh"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+aidoku = { git = "https://github.com/Aidoku/aidoku-rs.git", branch = "main", features = ["json"] }
+aes = { version = "0.8", default-features = false }
+cbc = { version = "0.1", default-features = false, features = ["block-padding"] }
+serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
+serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }
+
+[dev-dependencies]
+aidoku = { git = "https://github.com/Aidoku/aidoku-rs.git", branch = "main", features = ["test", "json"] }
+aidoku-test = { git = "https://github.com/Aidoku/aidoku-rs.git", branch = "main" }
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+strip = true
+lto = true
+
+[features]
+# Tests that read saved site pages from src/fixtures/, which are not in git.
+fixtures = []
