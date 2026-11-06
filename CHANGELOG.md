@@ -255,7 +255,7 @@
 
 | 日期 | 版本 | 更新內容 | 相關紀錄 |
 |---|---|---|---|
-| 2026-11-06 | v6 | 修正閱讀頁解不出圖片。 |  |
+| 2026-11-06 | v6 | 修正閱讀頁解不出圖片。 | [PR #55][pr55] |
 | 2026-10-30 | v5 | 修正下載或連續閱讀後章節變成表情圖。 | [PR #41][pr41] |
 | 2026-10-29 | v4 | 修正閱讀頁圖片被換成站方阻擋圖。 | [PR #37][pr37] |
 | 2026-10-28 | v3 | 修正站方改版後首頁與搜尋無法顯示作品。 | [PR #36][pr36] |
@@ -369,6 +369,7 @@
 [pr5]: https://github.com/0BlueYan0/aidoku-new-zh-sources/pull/5
 [pr52]: https://github.com/0BlueYan0/aidoku-new-zh-sources/pull/52
 [pr54]: https://github.com/0BlueYan0/aidoku-new-zh-sources/pull/54
+[pr55]: https://github.com/0BlueYan0/aidoku-new-zh-sources/pull/55
 [pr6]: https://github.com/0BlueYan0/aidoku-new-zh-sources/pull/6
 [pr7]: https://github.com/0BlueYan0/aidoku-new-zh-sources/pull/7
 [pr8]: https://github.com/0BlueYan0/aidoku-new-zh-sources/pull/8
