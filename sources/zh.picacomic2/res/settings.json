@@ -1,0 +1,113 @@
+[
+	{
+		"type": "group",
+		"title": "圖片",
+		"items": [
+			{
+				"type": "select",
+				"key": "imageQuality",
+				"title": "畫質",
+				"values": [
+					"original",
+					"medium",
+					"low"
+				],
+				"titles": [
+					"原圖",
+					"中等",
+					"低畫質"
+				],
+				"default": "original"
+			}
+		]
+	},
+	{
+		"type": "group",
+		"title": "線路",
+		"footer": "代理線路由第三方架設，帳號密碼與登入狀態會經過它的伺服器。在意的話請改用官方線路（大陸無法直連）。",
+		"items": [
+			{
+				"type": "select",
+				"key": "api_line",
+				"title": "線路",
+				"values": [
+					"go2778.com",
+					"acbbb.com",
+					"official"
+				],
+				"titles": [
+					"代理線路 - go2778.com",
+					"代理線路 - acbbb.com",
+					"官方線路"
+				],
+				"default": "go2778.com",
+				"refreshes": [
+					"content",
+					"listings"
+				]
+			},
+			{
+				"type": "select",
+				"key": "appChannel",
+				"title": "分流",
+				"values": [
+					"1",
+					"2",
+					"3"
+				],
+				"titles": [
+					"分流1",
+					"分流2",
+					"分流3"
+				],
+				"default": "3"
+			}
+		]
+	},
+	{
+		"type": "group",
+		"title": "屏蔽關鍵字",
+		"footer": "標籤或分類與這些關鍵字完全相同的作品不會顯示。\n「大家都在看」「官方都在看」「大濕推薦」「那年今天」只看得到分類，要擋這幾個列表裡的作品，請加分類名稱，例如「偽娘哲學」。",
+		"items": [
+			{
+				"type": "editable-list",
+				"key": "blockGenres",
+				"title": "新增屏蔽關鍵字",
+				"lineLimit": 1,
+				"inline": true,
+				"placeholder": "輸入要屏蔽的關鍵字",
+				"default": [],
+				"refreshes": [
+					"content",
+					"listings"
+				]
+			}
+		]
+	},
+	{
+		"type": "group",
+		"title": "帳號",
+		"footer": "登入後可以看到全部內容與收藏，並在下方看到帳號資訊。帳號密碼會保存在此裝置，登入過期時自動續期；登出即清除。\n開啟自動打卡後，每天第一次讀取內容時會替你在網站打卡。\n登入失敗時，錯誤視窗只會顯示通用訊息；實際原因請看下方「帳號資訊」，關掉這一頁再重新打開才會更新。",
+		"items": [
+			{
+				"type": "login",
+				"key": "login",
+				"title": "登入",
+				"method": "basic",
+				"logoutTitle": "登出",
+				"notification": "login",
+				"refreshes": [
+					"settings",
+					"listings",
+					"content"
+				]
+			},
+			{
+				"type": "switch",
+				"key": "autoPunchIn",
+				"title": "自動打卡",
+				"default": false
+			}
+		]
+	}
+]
