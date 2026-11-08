@@ -1,0 +1,14 @@
+zh.picacomic2 is adapted from the zh.picacomic source in Aidoku-Community/sources
+(sources/zh.picacomic).
+
+Copyright 2025 Aidoku community source contributors
+
+The upstream repository is dual licensed under the Apache License, Version 2.0 and the
+MIT License. This source uses it under the Apache License, Version 2.0.
+
+Original repository: https://github.com/Aidoku-Community/sources
+License text: https://www.apache.org/licenses/LICENSE-2.0
+
+Changes: proxy line selection, session handling that never sends a request while a
+request is being built, account information in the settings page, deep links, and
+Traditional Chinese text.

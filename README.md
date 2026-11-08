@@ -55,3 +55,4 @@ Aidoku 新版中文圖源<br>
 - [漫畫客](http://yumanhua.com/)
 - [W漫畫](https://www.wmanhua.com/)
 - [漫蛙漫畫](https://manwacn.cc/)（可用帳號密碼登入，設定頁顯示會員與 VIP 狀態，支援八個鏡像網域，也可自訂網址）
+- [嗶咔漫畫 (new-zh)](https://picawang.com/)（可用帳號密碼登入，設定頁顯示帳號資訊，可切換代理線路，可依標籤與分類屏蔽作品）

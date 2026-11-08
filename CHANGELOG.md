@@ -6,7 +6,7 @@
 
 ## 來源索引
 
-目前收錄 21 個來源。點選來源名稱可查看歷次更新，各來源表格的第一列就是目前版本。
+目前收錄 22 個來源。點選來源名稱可查看歷次更新，各來源表格的第一列就是目前版本。
 
 | 來源 | 來源 ID |
 |---|---|
@@ -31,6 +31,7 @@
 | [漫畫客](#zhyumanhua) | `zh.yumanhua` |
 | [W漫畫](#zhwmanhua) | `zh.wmanhua` |
 | [漫蛙漫畫](#zhmanwa) | `zh.manwa` |
+| [嗶咔漫畫 (new-zh)](#zhpicacomic2) | `zh.picacomic2` |
 
 ## 各來源更新
 
@@ -311,6 +312,16 @@
 |---|---|---|---|
 | 2026-11-05 | v1 | 新增來源。 | [PR #54][pr54] |
 
+<a id="zhpicacomic2"></a>
+
+### 嗶咔漫畫 (new-zh)
+
+`zh.picacomic2`
+
+| 日期 | 版本 | 更新內容 | 相關紀錄 |
+|---|---|---|---|
+| 2026-11-08 | v1 | 新增來源。可切換代理線路，帳密登入並在設定頁顯示帳號資訊，可開啟每日自動打卡，可依標籤與分類屏蔽作品。與官方嗶咔來源 `zh.picacomic` 不同 ID，可以同時安裝。 | [PR #57][pr57] |
+
 ## 共通更新
 
 ### 2026-10-20：改善載入失敗與內容不完整時的處理
@@ -370,6 +381,7 @@
 [pr52]: https://github.com/0BlueYan0/aidoku-new-zh-sources/pull/52
 [pr54]: https://github.com/0BlueYan0/aidoku-new-zh-sources/pull/54
 [pr55]: https://github.com/0BlueYan0/aidoku-new-zh-sources/pull/55
+[pr57]: https://github.com/0BlueYan0/aidoku-new-zh-sources/pull/57
 [pr6]: https://github.com/0BlueYan0/aidoku-new-zh-sources/pull/6
 [pr7]: https://github.com/0BlueYan0/aidoku-new-zh-sources/pull/7
 [pr8]: https://github.com/0BlueYan0/aidoku-new-zh-sources/pull/8

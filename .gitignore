@@ -31,6 +31,7 @@ AGENTS.override.md
 CLAUDE.md
 CLAUDE.local.md
 GEMINI.md
+evals/rules/
 .claude/
 .codex/
 .agents/

@@ -1,0 +1,61 @@
+{
+	"info": {
+		"id": "zh.picacomic2",
+		"name": "嗶咔漫畫 (new-zh)",
+		"version": 1,
+		"urls": [
+			"https://picawang.com",
+			"https://manhuabika.com"
+		],
+		"contentRating": 2,
+		"languages": ["zh"],
+		"minAppVersion": "0.7.1"
+	},
+	"listings": [
+		{
+			"id": "update",
+			"name": "更新"
+		},
+		{
+			"id": "dayup",
+			"name": "日榜"
+		},
+		{
+			"id": "weekup",
+			"name": "週榜"
+		},
+		{
+			"id": "monthup",
+			"name": "月榜"
+		},
+		{
+			"id": "djkz",
+			"name": "大家都在看"
+		},
+		{
+			"id": "gfdjkz",
+			"name": "官方都在看"
+		},
+		{
+			"id": "dswj",
+			"name": "大濕推薦"
+		},
+		{
+			"id": "nndtn",
+			"name": "那年今天"
+		},
+		{
+			"id": "random",
+			"name": "隨機本子"
+		},
+		{
+			"id": "favourite",
+			"name": "收藏"
+		}
+	],
+	"config": {
+		"hidesFiltersWhileSearching": true,
+		"supportsAuthorSearch": true,
+		"supportsTagSearch": true
+	}
+}
