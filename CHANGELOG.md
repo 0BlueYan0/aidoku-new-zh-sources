@@ -320,7 +320,7 @@
 
 | 日期 | 版本 | 更新內容 | 相關紀錄 |
 |---|---|---|---|
-| 2026-11-08 | v1 | 新增來源。可切換代理線路，帳密登入並在設定頁顯示帳號資訊，可開啟每日自動打卡，可依標籤與分類屏蔽作品。與官方嗶咔來源 `zh.picacomic` 不同 ID，可以同時安裝。 |  |
+| 2026-11-08 | v1 | 新增來源。可切換代理線路，帳密登入並在設定頁顯示帳號資訊，可開啟每日自動打卡，可依標籤與分類屏蔽作品。與官方嗶咔來源 `zh.picacomic` 不同 ID，可以同時安裝。 | [PR #57][pr57] |
 
 ## 共通更新
 
@@ -381,6 +381,7 @@
 [pr52]: https://github.com/0BlueYan0/aidoku-new-zh-sources/pull/52
 [pr54]: https://github.com/0BlueYan0/aidoku-new-zh-sources/pull/54
 [pr55]: https://github.com/0BlueYan0/aidoku-new-zh-sources/pull/55
+[pr57]: https://github.com/0BlueYan0/aidoku-new-zh-sources/pull/57
 [pr6]: https://github.com/0BlueYan0/aidoku-new-zh-sources/pull/6
 [pr7]: https://github.com/0BlueYan0/aidoku-new-zh-sources/pull/7
 [pr8]: https://github.com/0BlueYan0/aidoku-new-zh-sources/pull/8
