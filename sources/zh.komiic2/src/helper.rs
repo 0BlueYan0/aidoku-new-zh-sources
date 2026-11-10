@@ -430,11 +430,16 @@ pub fn parse_chapter(obj: &str) -> Option<Chapter> {
 	};
 
 	let url = Some(format!("https://komiic.com/chapter/{id}"));
+	let is_book = chapter_type == "book";
+	let number = serial.parse::<f32>().ok();
 
 	Some(Chapter {
 		key: String::from(id),
 		title,
-		chapter_number: serial.parse::<f32>().ok(),
+		// A volume (`卷 N`) carries its number as a volume, not as a chapter, so the
+		// tracker and the reader's duplicate check do not read it as chapter N.
+		chapter_number: if is_book { None } else { number },
+		volume_number: if is_book { number } else { None },
 		url,
 		..Default::default()
 	})
@@ -447,12 +452,26 @@ pub fn parse_chapter(obj: &str) -> Option<Chapter> {
 pub fn parse_chapter_list(body: &str) -> Option<Vec<Chapter>> {
 	let array = json_data_field(body, "chaptersByComicId")?;
 	// The API lists oldest first.
-	json_top_level_objects(array)
+	let mut chapters = json_top_level_objects(array)
 		.into_iter()
 		.rev()
 		.map(parse_chapter)
 		.collect::<Option<Vec<Chapter>>>()
-		.filter(|chapters: &Vec<Chapter>| !chapters.is_empty())
+		.filter(|chapters: &Vec<Chapter>| !chapters.is_empty())?;
+	// When no serial in the list is a number, the position in the list (oldest is 1) is the
+	// chapter number, so the tracker still has one to sync. A list that mixes numbered and
+	// unnumbered entries keeps `None` for the unnumbered ones, as the official zh.jmcomic does.
+	// The list is newest first, so the position is `len - index`.
+	if chapters
+		.iter()
+		.all(|c: &Chapter| c.chapter_number.is_none() && c.volume_number.is_none())
+	{
+		let len = chapters.len();
+		for (index, chapter) in chapters.iter_mut().enumerate() {
+			chapter.chapter_number = Some((len - index) as f32);
+		}
+	}
+	Some(chapters)
 }
 
 /// Build a JSON array of kid strings for the getImageTickets query.
@@ -522,4 +541,43 @@ mod test {
 			None
 		);
 	}
+
+	#[aidoku_test]
+	fn a_volume_has_a_volume_number_only() {
+		let body = r#"{"data":{"chaptersByComicId":[{"id":"1","serial":"02","type":"book"},{"id":"2","serial":"x","type":"book"}]}}"#;
+		let chapters = parse_chapter_list(body).expect("chapters");
+		assert_eq!(chapters[1].title.as_deref(), Some("卷 2"));
+		assert_eq!(chapters[1].chapter_number, None);
+		assert_eq!(chapters[1].volume_number, Some(2.0));
+		// The list has a volume number, so a serial that is not a number stays None.
+		assert_eq!(chapters[0].chapter_number, None);
+		assert_eq!(chapters[0].volume_number, None);
+	}
+
+	#[aidoku_test]
+	fn serials_that_are_not_numbers_stay_none_in_a_mixed_list() {
+		let body = r#"{"data":{"chaptersByComicId":[{"id":"1","serial":"1","type":"chapter"},{"id":"2","serial":"extra","type":"chapter"},{"id":"3","serial":"3","type":"chapter"}]}}"#;
+		let chapters = parse_chapter_list(body).expect("chapters");
+		let numbers: Vec<Option<f32>> = chapters
+			.iter()
+			.map(|c: &Chapter| c.chapter_number)
+			.collect();
+		assert_eq!(numbers, [Some(3.0), None, Some(1.0)]);
+	}
+
+	#[aidoku_test]
+	fn a_list_without_numeric_serials_is_numbered_by_position() {
+		let body = r#"{"data":{"chaptersByComicId":[{"id":"1","serial":"a","type":"chapter"},{"id":"2","serial":"b","type":"chapter"}]}}"#;
+		let chapters = parse_chapter_list(body).expect("chapters");
+		let numbers: Vec<Option<f32>> = chapters
+			.iter()
+			.map(|c: &Chapter| c.chapter_number)
+			.collect();
+		assert_eq!(numbers, [Some(2.0), Some(1.0)]);
+	}
 }
+
+#[cfg(all(test, feature = "fixtures"))]
+#[rustfmt::skip]
+#[path = "fixture_tests/helper.rs"]
+mod fixture_tests;

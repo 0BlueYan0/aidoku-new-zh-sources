@@ -380,15 +380,146 @@ pub fn parse_details(html: &Document, key: &str) -> Option<Manga> {
 	})
 }
 
-/// `第40话 暴风雨前夕` → 40; early chapters are bare numbers (`9`). `特别篇` gets none.
-pub fn chapter_number(title: &str) -> Option<f32> {
-	let title = title.trim();
-	if let Some(rest) = title.strip_prefix('第') {
-		let end = rest.find(['话', '話', '回', '章'])?;
-		return rest[..end].trim().parse::<f32>().ok();
+/// Read a Chinese numeral up to 99 (`三`, `十二`, `二十`, `五十六`).
+fn chinese_number(text: &str) -> Option<f32> {
+	let digit = |c: char| "零一二三四五六七八九".chars().position(|d: char| d == c);
+	let chars: Vec<char> = text.chars().collect();
+	match chars.as_slice() {
+		['十'] => Some(10.0),
+		[c] => digit(*c).map(|d| d as f32),
+		['十', ones] => digit(*ones).map(|d| 10.0 + d as f32),
+		[tens, '十'] => digit(*tens).map(|d| d as f32 * 10.0),
+		[tens, '十', ones] => Some((digit(*tens)? * 10 + digit(*ones)?) as f32),
+		_ => None,
 	}
-	let number = title.split_whitespace().next()?;
-	number.parse::<f32>().ok()
+}
+
+/// Read a number at the start of `text` (`12`, `013`, `364.2`, `五十六`) and return it with
+/// the text after it. `1-2` and `3.` stop at the dash and the dot.
+fn leading_number(text: &str) -> Option<(f32, &str)> {
+	let digits_end = text
+		.find(|c: char| !c.is_ascii_digit())
+		.unwrap_or(text.len());
+	if digits_end > 0 {
+		let mut end = digits_end;
+		let after = &text[end..];
+		if let Some(fraction) = after.strip_prefix('.') {
+			let more = fraction
+				.find(|c: char| !c.is_ascii_digit())
+				.unwrap_or(fraction.len());
+			if more > 0 {
+				end += 1 + more;
+			}
+		}
+		return Some((text[..end].parse::<f32>().ok()?, &text[end..]));
+	}
+	let end = text
+		.find(|c: char| !"零一二三四五六七八九十".contains(c))
+		.unwrap_or(text.len());
+	Some((chinese_number(&text[..end])?, &text[end..]))
+}
+
+const CHAPTER_UNITS: [char; 4] = ['话', '話', '回', '章'];
+const VOLUME_UNITS: [char; 5] = ['季', '部', '卷', '冊', '册'];
+
+/// `3卷` and `三卷` are volume 3. `01卷後記` and `06卷番外` are appendices of a volume and
+/// get none: they would share the volume's number with `第3卷` itself (the official
+/// zh.zaimanhua `is_extra`).
+fn volume_title(title: &str) -> Option<(Option<f32>, Option<f32>)> {
+	let end = title
+		.find(|c: char| !(c.is_ascii_digit() || c == '.' || "零一二三四五六七八九十".contains(c)))
+		.unwrap_or(title.len());
+	let (number, after) = title.split_at(end);
+	let rest = after.trim_start().strip_prefix('卷')?;
+	let value = number
+		.parse::<f32>()
+		.ok()
+		.or_else(|| chinese_number(number))?;
+	Some(if rest.trim().is_empty() {
+		(None, Some(value))
+	} else {
+		(None, None)
+	})
+}
+
+/// Put the optional leading `第` back on a volume title such as `3卷 第5話`, but only when
+/// the unit is followed by the end, a space or `第`. `01卷後記`, `一部分` and `三部曲` have
+/// text right behind the unit and stay as they are.
+fn with_optional_di(title: &str) -> Option<String> {
+	let end = title
+		.find(|c: char| !(c.is_ascii_digit() || c == '.' || "零一二三四五六七八九十".contains(c)))
+		.unwrap_or(title.len());
+	let (number, after) = title.split_at(end);
+	if number.is_empty() {
+		return None;
+	}
+	let rest = after.strip_prefix(['季', '部', '卷', '冊', '册'])?;
+	let boundary =
+		rest.is_empty() || rest.starts_with(char::is_whitespace) || rest.starts_with('第');
+	boundary.then(|| format!("第{title}"))
+}
+
+/// Pull `(chapter_number, volume_number)` out of a title.
+///
+/// `第40话 暴风雨前夕` and `147话` are chapter 40 and 147. Early chapters of some works are a
+/// bare number (`9`, `292 恶运`). A leading season, part or book is the volume, as the
+/// official zh.copymanga reads it: `第二季85 主子，我累了` is chapter 85 of volume 2, and
+/// `第二季 第3话` is chapter 3 of volume 2. Extras (`特别篇`, `第51番外`), notices
+/// (`第3月20日公告`) and ranges (`288-2 死亡游戏`) get neither number: a number picked out
+/// of their text would collide with the real chapter that has the same number.
+pub fn numbers(title: &str) -> (Option<f32>, Option<f32>) {
+	let title = title.trim();
+	// `3卷 第5話` reads like `第3卷 第5話`, as in the official zh.boylove
+	// `chapter_list/mod.rs:111` and zh.zaimanhua where the leading `第` is optional.
+	if let Some(prefixed) = with_optional_di(title) {
+		return numbers(&prefixed);
+	}
+	let Some(rest) = title.strip_prefix('第') else {
+		if let Some(found) = volume_title(title) {
+			return found;
+		}
+		// A bare number, optionally followed by `话`, then a space or the end.
+		let Some((number, after)) = leading_number(title) else {
+			return (None, None);
+		};
+		let after = after.strip_prefix(CHAPTER_UNITS).unwrap_or(after);
+		return if after.is_empty() || after.starts_with(char::is_whitespace) {
+			(Some(number), None)
+		} else {
+			(None, None)
+		};
+	};
+	let Some((number, after)) = leading_number(rest.trim_start()) else {
+		return (None, None);
+	};
+	let after = after.trim_start();
+	let Some(unit) = after.chars().next() else {
+		return (None, None);
+	};
+	if CHAPTER_UNITS.contains(&unit) {
+		return (Some(number), None);
+	}
+	if !VOLUME_UNITS.contains(&unit) {
+		return (None, None);
+	}
+	// The chapter follows the season as `第3话`, or as a bare number (`第二季85 标题`).
+	let after = after[unit.len_utf8()..].trim_start();
+	let chapter = if after.starts_with('第') {
+		match leading_number(after['第'.len_utf8()..].trim_start()) {
+			Some((n, tail)) if tail.trim_start().starts_with(CHAPTER_UNITS) => Some(n),
+			_ => None,
+		}
+	} else {
+		match leading_number(after) {
+			Some((n, tail)) if tail.is_empty() || tail.starts_with(char::is_whitespace) => Some(n),
+			_ => None,
+		}
+	};
+	// A volume followed by text that is not a chapter is an appendix of that volume.
+	if unit == '卷' && !after.is_empty() && chapter.is_none() {
+		return (None, None);
+	}
+	(chapter, Some(number))
 }
 
 /// The details page lists every chapter, newest first, as the app wants. Titles repeat
@@ -412,13 +543,27 @@ pub fn parse_chapters(html: &Document) -> Vec<Chapter> {
 			continue;
 		}
 		let title = text_of(&link);
+		let (chapter_number, volume_number) = numbers(&title);
 		chapters.push(Chapter {
 			url: Some(chapter_url(&work, &key)),
-			chapter_number: chapter_number(&title),
+			chapter_number,
+			volume_number,
 			title: (!title.is_empty()).then_some(title),
 			key,
 			..Default::default()
 		});
+	}
+	// Only when no chapter has a number at all: the list is newest first, so the position
+	// counted from the oldest is `len - index`. With any number in the list the unnumbered
+	// ones stay `None`, since a position would collide with a real chapter number.
+	if chapters
+		.iter()
+		.all(|c| c.chapter_number.is_none() && c.volume_number.is_none())
+	{
+		let len = chapters.len();
+		for (index, chapter) in chapters.iter_mut().enumerate() {
+			chapter.chapter_number = Some((len - index) as f32);
+		}
 	}
 	chapters
 }
@@ -450,6 +595,32 @@ mod test {
 	use super::*;
 	use aidoku::imports::html::Html;
 	use aidoku_test::aidoku_test;
+
+	#[aidoku_test]
+	fn volumes_and_their_appendices() {
+		assert_eq!(numbers("第3卷"), (None, Some(3.0)));
+		assert_eq!(numbers("3卷"), (None, Some(3.0)));
+		assert_eq!(numbers("三卷"), (None, Some(3.0)));
+		assert_eq!(numbers("第3卷 後記"), (None, None));
+		assert_eq!(numbers("第3卷 新的旅程"), (None, None));
+		assert_eq!(numbers("01卷後記"), (None, None));
+		assert_eq!(numbers("06卷番外"), (None, None));
+		assert_eq!(numbers("第3卷 第5話"), (Some(5.0), Some(3.0)));
+		// The leading `第` of a volume may be left out.
+		assert_eq!(numbers("3卷 第5話"), (Some(5.0), Some(3.0)));
+		assert_eq!(numbers("3卷第5話"), (Some(5.0), Some(3.0)));
+		assert_eq!(numbers("三卷 第五話"), (Some(5.0), Some(3.0)));
+		assert_eq!(numbers("2季 第5話"), (Some(5.0), Some(2.0)));
+		assert_eq!(numbers("3卷 後記"), (None, None));
+		assert_eq!(numbers("3卷卷首"), (None, None));
+		assert_eq!(numbers("一部分"), (None, None));
+		assert_eq!(numbers("三部曲 第2話"), (None, None));
+		assert_eq!(numbers("卷三"), (None, None));
+		assert_eq!(numbers("卷 3"), (None, None));
+		assert_eq!(numbers("第2季 第5話"), (Some(5.0), Some(2.0)));
+		assert_eq!(numbers("第一季 後記"), (None, Some(1.0)));
+		assert_eq!(numbers("第十二話"), (Some(12.0), None));
+	}
 
 	fn doc(html: &str) -> Document {
 		Html::parse_with_url(html, BASE_URL).expect("parse")

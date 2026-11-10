@@ -235,9 +235,12 @@ impl DeepLinkHandler for LinovelibSource {
 }
 
 impl ImageRequestProvider for LinovelibSource {
-	/// A cover saved under the other site loads from the one in use. Images need no headers.
+	/// A cover saved under the other site loads from the one in use. The cover host
+	/// (img2.readpai.com) answers 403 without a Referer and 200 with the site's own address
+	/// (checked 2026-11-08), so every image request carries the site in use as Referer.
 	fn get_image_request(&self, url: String, _context: Option<PageContext>) -> Result<Request> {
-		Ok(Request::get(onto_site(&url, base_url()))?)
+		let base = base_url();
+		Ok(Request::get(onto_site(&url, base))?.header("Referer", &format!("{base}/")))
 	}
 }
 

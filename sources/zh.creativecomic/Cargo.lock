@@ -143,6 +143,7 @@ dependencies = [
  "base64",
  "cbc",
  "serde",
+ "serde_json",
  "sha2",
 ]
 

@@ -66,6 +66,95 @@ pub struct ProductRight {
 	expire_time: i64,
 }
 
+/// The episode label's own number, for MANGA titles whose `episode_no` runs one ahead of
+/// the label because the trial episode takes number 1. `第30集` gives 30, a Chinese numeral
+/// is converted, and anything without a single plain number (`試閱`, `第1-3集`) gives none.
+pub fn label_number(title: &str) -> Option<f32> {
+	let digit = |c: char| "零一二三四五六七八九".chars().position(|d: char| d == c);
+	let chinese = |text: &str| {
+		let chars: Vec<char> = text.chars().collect();
+		match chars.as_slice() {
+			['十'] => Some(10.0),
+			[c] => digit(*c).map(|d| d as f32),
+			['十', ones] => digit(*ones).map(|d| 10.0 + d as f32),
+			[tens, '十'] => digit(*tens).map(|d| d as f32 * 10.0),
+			[tens, '十', ones] => Some((digit(*tens)? * 10 + digit(*ones)?) as f32),
+			_ => None,
+		}
+	};
+	// Try each "第" from the left and take the first whose text up to the next unit is a
+	// number: "第1季第3集" skips the season (its span is "1季第3"), and the "第" inside a
+	// subtitle such as "第5話 第一次約會" is never reached.
+	title.trim().match_indices('第').find_map(|(index, _)| {
+		let rest = &title.trim()[index + '第'.len_utf8()..];
+		let end = rest.find(['集', '話', '话', '回'])?;
+		let number = rest[..end].trim();
+		number.parse::<f32>().ok().or_else(|| chinese(number))
+	})
+}
+
+/// Put the optional leading `第` back on a volume title such as `3卷 第5話`, but only when
+/// the unit is followed by the end, a space or `第`. `01卷後記`, `一部分` and `三部曲` have
+/// text right behind the unit and stay as they are.
+fn with_optional_di(title: &str) -> Option<String> {
+	let end = title
+		.find(|c: char| !(c.is_ascii_digit() || c == '.' || "零一二三四五六七八九十".contains(c)))
+		.unwrap_or(title.len());
+	let (number, after) = title.split_at(end);
+	if number.is_empty() {
+		return None;
+	}
+	let rest = after.strip_prefix(['季', '部', '卷', '冊', '册'])?;
+	let boundary =
+		rest.is_empty() || rest.starts_with(char::is_whitespace) || rest.starts_with('第');
+	boundary.then(|| format!("第{title}"))
+}
+
+/// `(chapter_number, volume_number)` of a MANGA label. `第1季第3集` is (3, 1) and `第二季` is
+/// (None, 2): a leading season, part or volume is the volume, as the official zh.copymanga
+/// does. A 卷 followed by text that is not a chapter (`第3卷 後記`) is an extra of that volume
+/// and gets neither number, as the official zh.zaimanhua does.
+pub fn label_numbers(title: &str) -> (Option<f32>, Option<f32>) {
+	let digit = |c: char| "零一二三四五六七八九".chars().position(|d: char| d == c);
+	let chinese = |text: &str| {
+		let chars: Vec<char> = text.chars().collect();
+		match chars.as_slice() {
+			['十'] => Some(10.0),
+			[c] => digit(*c).map(|d| d as f32),
+			['十', ones] => digit(*ones).map(|d| 10.0 + d as f32),
+			[tens, '十'] => digit(*tens).map(|d| d as f32 * 10.0),
+			[tens, '十', ones] => Some((digit(*tens)? * 10 + digit(*ones)?) as f32),
+			_ => None,
+		}
+	};
+	let title = title.trim();
+	// `3卷 第5話` reads like `第3卷 第5話`, as in the official zh.boylove
+	// `chapter_list/mod.rs:111` and zh.zaimanhua where the leading `第` is optional.
+	if let Some(prefixed) = with_optional_di(title) {
+		return label_numbers(&prefixed);
+	}
+	if let Some(rest) = title.strip_prefix('第') {
+		if let Some(end) = rest.find(['卷', '季', '部', '冊', '册']) {
+			let number = rest[..end].trim();
+			if let Some(volume) = number.parse::<f32>().ok().or_else(|| chinese(number)) {
+				let unit = rest[end..].chars().next().unwrap_or('卷');
+				let after = rest[end + unit.len_utf8()..].trim();
+				let chapter = label_number(after);
+				if unit == '卷' && !after.is_empty() && chapter.is_none() {
+					return (None, None);
+				}
+				return (chapter, Some(volume));
+			}
+		}
+	}
+	// `3卷` and `三卷` are a volume, like `第3卷`; `3卷後記` is an appendix and gives none.
+	let bare_volume = title
+		.strip_suffix('卷')
+		.map(str::trim)
+		.and_then(|number| number.parse::<f32>().ok().or_else(|| chinese(number)));
+	(label_number(title), bare_volume)
+}
+
 pub fn apply_rights(chapters: &mut [Chapter], title: &str, rights: &[ProductRight], now_ms: i64) {
 	for chapter in chapters {
 		let Some(episode) = episode_no(&chapter.key) else {
@@ -80,6 +169,8 @@ pub fn apply_rights(chapters: &mut [Chapter], title: &str, rights: &[ProductRigh
 		}) {
 			continue;
 		}
+		// This account owns the chapter, so it no longer needs buying or unlocking.
+		chapter.locked = false;
 		if let Some(name) = chapter.title.as_ref() {
 			let base = [
 				"（需官方 App 購買）",
@@ -133,6 +224,14 @@ pub fn chapters_from_episodes(
 			urls.entry(no).or_insert_with(|| url.clone());
 		}
 	}
+	// Only when no label in the whole list carries a number is the episode number (the place
+	// in the list from the oldest) used for MANGA titles. In a mixed list the entries
+	// without a number (the trial, ranges) stay `None`, so they never share a number with
+	// a real chapter; the official zh.jmcomic does the same.
+	let labels_numbered = episodes.iter().any(|episode| {
+		let (chapter, volume) = label_numbers(&episode.episode_title);
+		chapter.is_some() || volume.is_some()
+	});
 	episodes
 		.into_iter()
 		.map(|episode| {
@@ -149,6 +248,19 @@ pub fn chapters_from_episodes(
 			} else {
 				None
 			};
+			let locked = requirement.is_some();
+			// A MANGA title's `episode_no` is not the number in its label, so the label
+			// is read instead. A label with no single number (the trial, a range) stays
+			// `None` unless the whole list has none, see `labels_numbered`.
+			let (chapter_number, volume_number) = if manga {
+				let (chapter, volume) = label_numbers(&episode.episode_title);
+				let chapter = chapter.or_else(|| {
+					(volume.is_none() && !labels_numbered).then_some(episode.episode_no as f32)
+				});
+				(chapter, volume)
+			} else {
+				(Some(episode.episode_no as f32), None)
+			};
 			let title = match requirement {
 				Some(reason) => format!("{}（{reason}）", episode.episode_title),
 				None => episode.episode_title,
@@ -161,13 +273,17 @@ pub fn chapters_from_episodes(
 					.unwrap_or_else(|| format!("{}", episode.episode_no)),
 				url: urls.get(&episode.episode_no).cloned(),
 				title: Some(title),
-				chapter_number: (!manga).then_some(episode.episode_no as f32),
+				chapter_number,
+				volume_number,
 				date_uploaded: episode.exposure_ymdt.map(|ms| ms / 1000),
 				thumbnail: episode
 					.episode_thumbnail
 					.map(|path| absolute_url(IMAGE_HOST, &path)),
-				// Purchases can change after a refresh. Always recheck at reader entry.
-				locked: false,
+				// Needs buying or unlocking in the official App. `apply_rights` clears this
+				// for episodes the signed-in account owns, and a refresh after buying or
+				// unlocking recomputes it. The web list carries no rights data and only
+				// supplies keys for this list, so it never sets `locked`.
+				locked,
 				..Default::default()
 			})
 		})
@@ -395,6 +511,71 @@ mod tests {
 			assert_eq!(chapters[0].key, "271");
 			assert_eq!(chapters[0].url.as_deref(), previous_url);
 		}
+	}
+
+	#[aidoku_test]
+	fn label_numbers_cover_digits_chinese_numerals_and_unnumbered_labels() {
+		assert_eq!(label_number("第30集"), Some(30.0));
+		assert_eq!(label_number("第12話"), Some(12.0));
+		assert_eq!(label_number("第十二話"), Some(12.0));
+		assert_eq!(label_number("第三集"), Some(3.0));
+		assert_eq!(label_number("第1季第3集"), Some(3.0));
+		assert_eq!(label_number("第5話 第一次約會"), Some(5.0));
+		assert_eq!(label_number("第5集 第二話預告"), Some(5.0));
+		assert_eq!(label_number("第一次約會"), None);
+		assert_eq!(label_number("第1-3集"), None);
+		assert_eq!(label_number("試閱"), None);
+		assert_eq!(label_number("番外篇"), None);
+	}
+
+	#[aidoku_test]
+	fn seasons_fill_the_volume_number_and_appendices_get_none() {
+		assert_eq!(label_numbers("第1季第3集"), (Some(3.0), Some(1.0)));
+		assert_eq!(label_numbers("第二季 第十二話"), (Some(12.0), Some(2.0)));
+		assert_eq!(label_numbers("第二季"), (None, Some(2.0)));
+		assert_eq!(label_numbers("第3卷"), (None, Some(3.0)));
+		assert_eq!(label_numbers("第3卷 後記"), (None, None));
+		assert_eq!(label_numbers("3卷"), (None, Some(3.0)));
+		assert_eq!(label_numbers("三卷"), (None, Some(3.0)));
+		assert_eq!(label_numbers("01卷後記"), (None, None));
+		assert_eq!(label_numbers("06卷番外"), (None, None));
+		assert_eq!(label_numbers("第2季 第5話"), (Some(5.0), Some(2.0)));
+		assert_eq!(label_numbers("第30集"), (Some(30.0), None));
+		assert_eq!(label_numbers("試閱"), (None, None));
+		// The leading `第` of a volume may be left out.
+		assert_eq!(label_numbers("3卷 第5話"), (Some(5.0), Some(3.0)));
+		assert_eq!(label_numbers("3卷第5話"), (Some(5.0), Some(3.0)));
+		assert_eq!(label_numbers("三卷 第五話"), (Some(5.0), Some(3.0)));
+		assert_eq!(label_numbers("2季 第5話"), (Some(5.0), Some(2.0)));
+		assert_eq!(label_numbers("3卷 後記"), (None, None));
+		assert_eq!(label_numbers("3卷卷首"), (None, None));
+		assert_eq!(label_numbers("一部分"), (None, None));
+		// Not a volume (`曲` follows the unit), so the old reading stays: the bare `2` is a chapter.
+		assert_eq!(label_numbers("三部曲 第2話"), (Some(2.0), None));
+		assert_eq!(label_numbers("卷三"), (None, None));
+		assert_eq!(label_numbers("卷 3"), (None, None));
+	}
+
+	#[aidoku_test]
+	fn unnumbered_manga_labels_stay_none_in_a_mixed_list() {
+		let list: EpisodeList = decode(
+			r#"{"message":{"result":{"episodeList":[{"episodeNo":4,"episodeTitle":"第1-3集"},{"episodeNo":3,"episodeTitle":"番外篇"},{"episodeNo":2,"episodeTitle":"第1集"},{"episodeNo":1,"episodeTitle":"試閱"}]}}}"#,
+		)
+		.unwrap();
+		let chapters = chapters_from_episodes(list.episode_list, &[], true).unwrap();
+		let numbers: Vec<Option<f32>> = chapters.iter().map(|c| c.chapter_number).collect();
+		assert_eq!(numbers, [None, None, Some(1.0), None]);
+	}
+
+	#[aidoku_test]
+	fn a_manga_list_with_no_numbered_label_takes_the_episode_numbers() {
+		let list: EpisodeList = decode(
+			r#"{"message":{"result":{"episodeList":[{"episodeNo":3,"episodeTitle":"番外篇"},{"episodeNo":2,"episodeTitle":"特別篇"},{"episodeNo":1,"episodeTitle":"試閱"}]}}}"#,
+		)
+		.unwrap();
+		let chapters = chapters_from_episodes(list.episode_list, &[], true).unwrap();
+		let numbers: Vec<Option<f32>> = chapters.iter().map(|c| c.chapter_number).collect();
+		assert_eq!(numbers, [Some(3.0), Some(2.0), Some(1.0)]);
 	}
 
 	#[aidoku_test]

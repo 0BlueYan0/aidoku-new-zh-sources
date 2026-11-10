@@ -52,16 +52,90 @@ fn fetch_list(path: &str, page: i32) -> Result<MangaPageResult> {
 
 /// The API lists chapters oldest first; Aidoku expects newest first.
 fn build_chapters(list: ChapterList) -> Vec<Chapter> {
+	// Book 276 「集合！RENDEZVOUS」 shares one numbered `vol_name` (`【001 打了三百年】`)
+	// across five chapters whose `name` restarts at 第一話. Such a label is a story arc:
+	// its number is the volume and the chapter number comes from `name`, the way the
+	// official zh.bilimanga takes the volume from the volume heading and the chapter
+	// from the chapter title.
+	let arcs: Vec<bool> = list
+		.chapters
+		.iter()
+		.map(|entry| is_arc(entry, &list.chapters))
+		.collect();
+	let labelled: Vec<(Option<f32>, Option<f32>, bool)> = list
+		.chapters
+		.iter()
+		.zip(&arcs)
+		.map(|(entry, arc)| {
+			if *arc {
+				arc_numbers(entry)
+			} else {
+				labelled_numbers(entry.vol_name.as_deref())
+			}
+		})
+		.collect();
+	// A bare number (`16647`, the book's own name on its 上線預告 entry) is only a chapter
+	// number when no label in the list says `第 N 話`; otherwise it would sit far past the
+	// real chapters and the tracker would jump to it.
+	let any_unit = labelled.iter().any(|(_, _, has_unit)| *has_unit);
+	// Labels whose bare number was dropped above: they name the book, not the chapter.
+	let book_named: Vec<bool> = labelled
+		.iter()
+		.map(|(chapter, _, has_unit)| chapter.is_some() && !has_unit && any_unit)
+		.collect();
+	let parsed: Vec<(Option<f32>, Option<f32>)> = labelled
+		.into_iter()
+		.map(|(chapter, volume, has_unit)| (chapter.filter(|_| has_unit || !any_unit), volume))
+		.collect();
+	// Only when no label in the whole list has a chapter or volume number are the entries numbered by
+	// their place in the oldest-first list (oldest is 1), as the official zh.jmcomic does for
+	// a list without labels. In a mixed list the unnumbered entries stay `None`, so an
+	// announcement never shares a number with a real chapter.
+	let by_place = parsed
+		.iter()
+		.all(|(chapter, volume)| chapter.is_none() && volume.is_none());
 	list.chapters
 		.iter()
+		.enumerate()
 		.rev()
-		.map(|entry| {
+		.map(|(index, entry)| {
 			let key = format!("{}", entry.id);
+			let (chapter_number, volume_number) = parsed[index];
+			let chapter_number = match (chapter_number, volume_number) {
+				(None, None) if by_place => Some((index + 1) as f32),
+				_ => chapter_number,
+			};
+			// Every arc restarts at 第一話, so the arc name is the only way to tell them apart.
+			// Every arc restarts at 第一話, and an entry with no number (`特別篇`, `後記`) only
+			// says what it is in its label, so the label goes in front unless the name already
+			// says it (`後記`, `第二季預告`).
+			let unnumbered = chapter_number.is_none() && volume_number.is_none();
+			let label = entry
+				.vol_name
+				.as_deref()
+				.map(str::trim)
+				.filter(|label| !label.is_empty());
+			let prefix = match label {
+				Some(arc) if arcs[index] => Some(arc),
+				Some(label) if unnumbered && !book_named[index] => Some(label),
+				_ => None,
+			};
+			let title = match (prefix, chapter_title(entry)) {
+				(Some(prefix), Some(title))
+					if !entry.name.as_deref().unwrap_or("").contains(prefix) =>
+				{
+					Some(format!("{prefix} {title}"))
+				}
+				(Some(prefix), None) => Some(String::from(prefix)),
+				(_, title) => title,
+			};
 			Chapter {
 				url: Some(chapter_url(&key)),
 				key,
-				title: chapter_title(entry),
-				chapter_number: chapter_number(entry.vol_name.as_deref()),
+				title,
+				chapter_number,
+				volume_number,
+				locked: chapter_locked(entry),
 				date_uploaded: parse_timestamp(entry.online_at.as_deref()),
 				..Default::default()
 			}
@@ -453,6 +527,75 @@ register_source!(
 mod test {
 	use super::*;
 	use aidoku_test::aidoku_test;
+
+	fn list_of(labels: &[&str]) -> ChapterList {
+		ChapterList {
+			chapters: labels
+				.iter()
+				.enumerate()
+				.map(|(index, label)| ChapterEntry {
+					id: index as i64 + 1,
+					vol_name: Some(String::from(*label)),
+					..Default::default()
+				})
+				.collect(),
+		}
+	}
+
+	/// A list where no label has a number is numbered by place, oldest first.
+	#[aidoku_test]
+	fn a_list_without_any_number_is_numbered_by_place() {
+		let chapters = build_chapters(list_of(&["序", "番外", "後記"]));
+		let numbers: Vec<Option<f32>> = chapters.iter().map(|c| c.chapter_number).collect();
+		assert_eq!(numbers, [Some(3.0), Some(2.0), Some(1.0)]);
+	}
+
+	/// In a mixed list the unnumbered entries stay `None`.
+	#[aidoku_test]
+	fn unnumbered_entries_stay_none_in_a_mixed_list() {
+		let chapters = build_chapters(list_of(&["序", "第 1 話", "公告", "第 2 話"]));
+		let numbers: Vec<Option<f32>> = chapters.iter().map(|c| c.chapter_number).collect();
+		assert_eq!(numbers, [Some(2.0), None, Some(1.0), None]);
+	}
+
+	/// Book 341 「16647」 labels its 上線預告 with the book's name. Next to `第 N 話` labels
+	/// that bare number is not a chapter; a list of bare numbers alone still is.
+	#[aidoku_test]
+	fn a_bare_number_is_not_a_chapter_next_to_labelled_ones() {
+		let chapters = build_chapters(list_of(&["16647", "第 1 話", "第 2 話", "後記"]));
+		let numbers: Vec<Option<f32>> = chapters.iter().map(|c| c.chapter_number).collect();
+		assert_eq!(numbers, [None, Some(2.0), Some(1.0), None]);
+
+		let chapters = build_chapters(list_of(&["1", "2", "3"]));
+		let numbers: Vec<Option<f32>> = chapters.iter().map(|c| c.chapter_number).collect();
+		assert_eq!(numbers, [Some(3.0), Some(2.0), Some(1.0)]);
+
+		let chapters = build_chapters(list_of(&["16647", "Ep 1", "Ep 2"]));
+		let numbers: Vec<Option<f32>> = chapters.iter().map(|c| c.chapter_number).collect();
+		assert_eq!(numbers, [Some(2.0), Some(1.0), None]);
+	}
+
+	/// A volume's appendix has neither number; the volume itself keeps its volume number.
+	#[aidoku_test]
+	fn volume_appendix_has_no_numbers_but_the_volume_does() {
+		assert_eq!(numbers(Some("第3卷")), (None, Some(3.0)));
+		assert_eq!(numbers(Some("第3卷 後記")), (None, None));
+		assert_eq!(numbers(Some("01卷後記")), (None, None));
+		assert_eq!(numbers(Some("3卷卷首")), (None, None));
+		assert_eq!(numbers(Some("06卷番外")), (None, None));
+		assert_eq!(numbers(Some("第3卷 新的旅程")), (None, None));
+	}
+
+	/// Volumes count as numbers: an extra next to them stays `None` instead of taking a place.
+	#[aidoku_test]
+	fn a_list_of_volumes_and_an_extra_is_not_numbered_by_place() {
+		let chapters = build_chapters(list_of(&["第1卷", "第2卷", "番外"]));
+		let pairs: Vec<(Option<f32>, Option<f32>)> = chapters
+			.iter()
+			.map(|c| (c.chapter_number, c.volume_number))
+			.collect();
+		assert_eq!(pairs, [(None, None), (None, Some(2.0)), (None, Some(1.0))]);
+	}
 
 	/// Every listing id in `res/source.json` must resolve to a query, or that row of
 	/// the browse screen comes back empty.

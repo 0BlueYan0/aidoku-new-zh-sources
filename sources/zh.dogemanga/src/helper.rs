@@ -208,23 +208,111 @@ pub fn parse_details(html: &Document) -> Option<Manga> {
 	parse_card(&html.select_first(".site-card[data-manga-id]")?)
 }
 
-/// `第281话试看` → (Some(281), None), `第06卷` → (None, Some(6)). Side stories carry no
-/// number.
-pub fn chapter_numbers(title: &str) -> (Option<f32>, Option<f32>) {
-	let Some(rest) = title.trim().strip_prefix('第') else {
-		return (None, None);
-	};
-	let end = rest
-		.find(|c: char| !(c.is_ascii_digit() || c == '.'))
-		.unwrap_or(rest.len());
-	let Ok(number) = rest[..end].parse::<f32>() else {
-		return (None, None);
-	};
-	match rest[end..].chars().next() {
-		Some('话' | '話' | '回') => (Some(number), None),
-		Some('卷') => (None, Some(number)),
-		_ => (None, None),
+/// Read a Chinese numeral up to 99 (`三`, `十二`, `二十`, `五十六`).
+fn chinese_number(text: &str) -> Option<f32> {
+	let digit = |c: char| "零一二三四五六七八九".chars().position(|d: char| d == c);
+	let chars: Vec<char> = text.chars().collect();
+	match chars.as_slice() {
+		['十'] => Some(10.0),
+		[c] => digit(*c).map(|d| d as f32),
+		['十', ones] => digit(*ones).map(|d| 10.0 + d as f32),
+		[tens, '十'] => digit(*tens).map(|d| d as f32 * 10.0),
+		[tens, '十', ones] => Some((digit(*tens)? * 10 + digit(*ones)?) as f32),
+		_ => None,
 	}
+}
+
+/// Read a number at the start of `text` (`281`, `10.5`, `十二`) and return it with the text
+/// after it. `1-5` and `163~164` stop at the dash or tilde, so a range has no unit behind
+/// the first number.
+fn leading_number(text: &str) -> Option<(f32, &str)> {
+	let text = text.trim_start();
+	let end = text
+		.find(|c: char| !(c.is_ascii_digit() || c == '.'))
+		.unwrap_or(text.len());
+	if end > 0 {
+		let number = text[..end].trim_end_matches('.');
+		return Some((number.parse::<f32>().ok()?, &text[end..]));
+	}
+	let end = text
+		.find(|c: char| !"零一二三四五六七八九十".contains(c))
+		.unwrap_or(text.len());
+	Some((chinese_number(&text[..end])?, &text[end..]))
+}
+
+const CHAPTER_UNITS: [char; 4] = ['话', '話', '回', '章'];
+const VOLUME_UNITS: [char; 5] = ['卷', '季', '部', '冊', '册'];
+
+/// Whether `after` starts with a volume unit that is followed by the end of the title, a
+/// space or `第`. `部分` and `部曲` have text right behind the unit, so they are no volume.
+fn volume_unit_ends_word(after: &str) -> bool {
+	let Some(unit) = after.chars().next() else {
+		return false;
+	};
+	if !VOLUME_UNITS.contains(&unit) {
+		return false;
+	}
+	let rest = &after[unit.len_utf8()..];
+	rest.is_empty() || rest.starts_with(char::is_whitespace) || rest.starts_with('第')
+}
+
+/// `(chapter_number, volume_number)` of a title. `第281话试看`, `311話` and `第1012回` are
+/// chapters, `第06卷`, `28卷` and `单行本第36卷` are volumes. A bare number is a chapter
+/// (`001`). A leading season, part or book is the volume, as the official zh.copymanga
+/// reads it: `第二季 第3话` is chapter 3 of volume 2. A season after the chapter only says
+/// where the season ends. Side stories (`重制版284`, `老版本247：搭档`) and ranges
+/// (`第1-5卷`, `第245-246话`) carry no number: a number picked out of their text would
+/// collide with the real chapter or volume that has the same number.
+pub fn chapter_numbers(title: &str) -> (Option<f32>, Option<f32>) {
+	let title = title.trim();
+	let title = title.strip_prefix("单行本").unwrap_or(title);
+	let (number, after) = match title.strip_prefix('第') {
+		Some(rest) => match leading_number(rest) {
+			Some(found) => found,
+			None => return (None, None),
+		},
+		None => match leading_number(title) {
+			// A Chinese numeral without 第 is part of a word (`十年之後`), except before a
+			// volume unit that ends the title or is followed by a space or 第
+			// (`三卷`, `三卷 第五話`), as in the official zh.boylove
+			// (`chapter_list/mod.rs:111`, 第 is optional before the volume).
+			Some((number, after)) if title.starts_with(|c: char| c.is_ascii_digit()) => {
+				(number, after)
+			}
+			Some((number, after)) if volume_unit_ends_word(after) => (number, after),
+			_ => return (None, None),
+		},
+	};
+	let after = after.trim_start();
+	let Some(unit) = after.chars().next() else {
+		// A bare number such as `001`.
+		return if title.starts_with('第') {
+			(None, None)
+		} else {
+			(Some(number), None)
+		};
+	};
+	if CHAPTER_UNITS.contains(&unit) {
+		return (Some(number), None);
+	}
+	if !VOLUME_UNITS.contains(&unit) {
+		return (None, None);
+	}
+	// The chapter, when there is one, follows the season as `第3话`.
+	let rest = &after[unit.len_utf8()..];
+	let chapter =
+		rest.find('第')
+			.and_then(|at| match leading_number(&rest[at + '第'.len_utf8()..]) {
+				Some((n, tail)) if tail.trim_start().starts_with(CHAPTER_UNITS) => Some(n),
+				_ => None,
+			});
+	// A volume followed by text that is not a chapter (`第3卷 後記`, `01卷後記`) is an
+	// appendix of that volume, as in the official zh.zaimanhua (`is_extra`). It would
+	// share the volume's number with `第3卷` itself, so it gets none.
+	if unit == '卷' && !rest.trim().is_empty() && chapter.is_none() {
+		return (None, None);
+	}
+	(chapter, Some(number))
 }
 
 /// The page ids listed under one of the details page's tabs.
@@ -289,9 +377,16 @@ pub fn parse_chapters(html: &Document) -> Vec<Chapter> {
 		let (chapter_number, volume_number) = if volumes.contains(&key) {
 			(None, volume)
 		} else if extras.contains(&key) {
-			(None, None)
-		} else {
+			// Some works file split chapters (`第16.2話`) under 番外篇 too. The chapter
+			// number is kept here and dropped below if a non-extra entry has the same one.
 			(chapter, None)
+		} else {
+			// A season in front of a chapter is kept. A `卷` title outside the 單行本 tab
+			// (`第05卷特典`) gets no volume, so it does not collide with the real volume 5.
+			(
+				chapter,
+				volume.filter(|_| !title.as_deref().unwrap_or("").contains('卷')),
+			)
 		};
 		chapters.push(Chapter {
 			url: Some(reader_url(&key)),
@@ -302,7 +397,47 @@ pub fn parse_chapters(html: &Document) -> Vec<Chapter> {
 			..Default::default()
 		});
 	}
+	drop_colliding_extras(&mut chapters, &extras);
+	number_by_position(&mut chapters);
 	chapters
+}
+
+/// An entry under 番外篇 keeps its chapter number only when no entry outside that tab has
+/// the same one, as the official zh.zaimanhua drops an extra's number when it repeats a
+/// chapter's (`chapter.rs` `is_extra`). `山,農田和cosplay姐姐` lists `第16.2話` and the
+/// other half chapters under 番外篇; a side story titled `第1話` next to the real 第1話
+/// would collide and loses its number.
+fn drop_colliding_extras(chapters: &mut [Chapter], extras: &[String]) {
+	let regular: Vec<f32> = chapters
+		.iter()
+		.filter(|c| !extras.contains(&c.key))
+		.filter_map(|c| c.chapter_number)
+		.collect();
+	for chapter in chapters.iter_mut() {
+		if extras.contains(&chapter.key)
+			&& chapter.chapter_number.is_some_and(|n| regular.contains(&n))
+		{
+			chapter.chapter_number = None;
+		}
+	}
+}
+
+/// When no entry of the whole `全部` list has a chapter or volume number, the tracker has
+/// nothing to sync on, so `chapter_number` becomes the position in that one list, oldest
+/// first. The list is newest first, so the position is `len - index`; volumes from the
+/// 單行本 tab sit in the same list and are counted by that same order. Once any entry has a
+/// number the others stay `None`: a position would collide with a real chapter number.
+fn number_by_position(chapters: &mut [Chapter]) {
+	if chapters
+		.iter()
+		.any(|c| c.chapter_number.is_some() || c.volume_number.is_some())
+	{
+		return;
+	}
+	let len = chapters.len();
+	for (index, chapter) in chapters.iter_mut().enumerate() {
+		chapter.chapter_number = Some((len - index) as f32);
+	}
 }
 
 /// Every page of the chapter is listed on any of its reader pages, in
@@ -366,6 +501,21 @@ mod test {
 	use aidoku::imports::html::Html;
 	use aidoku_test::aidoku_test;
 
+	#[aidoku_test]
+	fn volumes_and_their_appendices() {
+		assert_eq!(chapter_numbers("第3卷"), (None, Some(3.0)));
+		assert_eq!(chapter_numbers("3卷"), (None, Some(3.0)));
+		assert_eq!(chapter_numbers("三卷"), (None, Some(3.0)));
+		assert_eq!(chapter_numbers("第3卷 後記"), (None, None));
+		assert_eq!(chapter_numbers("第3卷 新的旅程"), (None, None));
+		assert_eq!(chapter_numbers("01卷後記"), (None, None));
+		assert_eq!(chapter_numbers("06卷番外"), (None, None));
+		assert_eq!(chapter_numbers("第3卷 第5話"), (Some(5.0), Some(3.0)));
+		assert_eq!(chapter_numbers("第2季 第5話"), (Some(5.0), Some(2.0)));
+		assert_eq!(chapter_numbers("第一季 後記"), (None, Some(1.0)));
+		assert_eq!(chapter_numbers("第十二話"), (Some(12.0), None));
+	}
+
 	fn doc(html: &str) -> Document {
 		Html::parse_with_url(html, BASE_URL).expect("parse")
 	}
@@ -404,6 +554,83 @@ mod test {
 		assert_eq!(chapter_numbers("第10.5話"), (Some(10.5), None));
 		assert_eq!(chapter_numbers("第06卷"), (None, Some(6.0)));
 		assert_eq!(chapter_numbers("吐槽短篇"), (None, None));
+	}
+
+	#[aidoku_test]
+	fn numbers_the_other_title_shapes() {
+		assert_eq!(chapter_numbers("311話"), (Some(311.0), None));
+		assert_eq!(chapter_numbers("第1012回"), (Some(1012.0), None));
+		assert_eq!(chapter_numbers("第十二话"), (Some(12.0), None));
+		assert_eq!(chapter_numbers("001"), (Some(1.0), None));
+		assert_eq!(chapter_numbers("28卷"), (None, Some(28.0)));
+		assert_eq!(chapter_numbers("单行本37卷"), (None, Some(37.0)));
+		assert_eq!(chapter_numbers("单行本第36卷"), (None, Some(36.0)));
+		// A leading season is the volume; one after the chapter is not.
+		assert_eq!(chapter_numbers("第二季 第3话"), (Some(3.0), Some(2.0)));
+		assert_eq!(chapter_numbers("第2季"), (None, Some(2.0)));
+		assert_eq!(chapter_numbers("第24话 第一季完"), (Some(24.0), None));
+		// Side stories and ranges.
+		assert_eq!(chapter_numbers("重制版284"), (None, None));
+		assert_eq!(chapter_numbers("老版本247：搭档"), (None, None));
+		assert_eq!(chapter_numbers("2020番外"), (None, None));
+		assert_eq!(chapter_numbers("第1-5卷"), (None, None));
+		assert_eq!(chapter_numbers("第245-246话"), (None, None));
+		assert_eq!(chapter_numbers("第163~164话"), (None, None));
+		assert_eq!(chapter_numbers("十年之後"), (None, None));
+	}
+
+	#[aidoku_test]
+	fn volume_numbers_may_omit_the_marker() {
+		assert_eq!(chapter_numbers("3卷 第5話"), (Some(5.0), Some(3.0)));
+		// An Arabic number may have a space before the unit; only a Chinese numeral needs the
+		// unit right behind it.
+		assert_eq!(chapter_numbers("1 卷 第5話"), (Some(5.0), Some(1.0)));
+		assert_eq!(chapter_numbers("3卷第5話"), (Some(5.0), Some(3.0)));
+		assert_eq!(chapter_numbers("三卷 第五話"), (Some(5.0), Some(3.0)));
+		assert_eq!(chapter_numbers("2季 第5話"), (Some(5.0), Some(2.0)));
+		assert_eq!(chapter_numbers("3卷 後記"), (None, None));
+		assert_eq!(chapter_numbers("3卷"), (None, Some(3.0)));
+		assert_eq!(chapter_numbers("三卷"), (None, Some(3.0)));
+		assert_eq!(chapter_numbers("01卷後記"), (None, None));
+		assert_eq!(chapter_numbers("3卷卷首"), (None, None));
+		assert_eq!(chapter_numbers("06卷番外"), (None, None));
+		assert_eq!(chapter_numbers("一部分"), (None, None));
+		assert_eq!(chapter_numbers("三部曲 第2話"), (None, None));
+		assert_eq!(chapter_numbers("卷三"), (None, None));
+		assert_eq!(chapter_numbers("卷 3"), (None, None));
+		assert_eq!(chapter_numbers("第3卷 第5話"), (Some(5.0), Some(3.0)));
+	}
+
+	#[aidoku_test]
+	fn a_list_without_any_number_is_numbered_by_position_oldest_first() {
+		let html = doc(concat!(
+			r#"<div id="site-manga__tab-pane-all">"#,
+			r#"<a class="site-manga-thumbnail__link" href="/p/aaa"><img alt="新作"></a>"#,
+			r#"<a class="site-manga-thumbnail__link" href="/p/bbb"><img alt="番外"></a>"#,
+			r#"<a class="site-manga-thumbnail__link" href="/p/ccc"><img alt="開篇"></a>"#,
+			r#"</div>"#,
+		));
+		let numbers: Vec<Option<f32>> = parse_chapters(&html)
+			.iter()
+			.map(|c: &Chapter| c.chapter_number)
+			.collect();
+		assert_eq!(numbers, [Some(3.0), Some(2.0), Some(1.0)]);
+	}
+
+	#[aidoku_test]
+	fn side_stories_stay_unnumbered_when_other_entries_have_numbers() {
+		let html = doc(concat!(
+			r#"<div id="site-manga__tab-pane-all">"#,
+			r#"<a class="site-manga-thumbnail__link" href="/p/aaa"><img alt="第2話"></a>"#,
+			r#"<a class="site-manga-thumbnail__link" href="/p/bbb"><img alt="番外"></a>"#,
+			r#"<a class="site-manga-thumbnail__link" href="/p/ccc"><img alt="第1-2話"></a>"#,
+			r#"</div>"#,
+		));
+		let numbers: Vec<Option<f32>> = parse_chapters(&html)
+			.iter()
+			.map(|c: &Chapter| c.chapter_number)
+			.collect();
+		assert_eq!(numbers, [Some(2.0), None, None]);
 	}
 
 	#[aidoku_test]

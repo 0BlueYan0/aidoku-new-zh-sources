@@ -174,7 +174,9 @@ fn parse_page(value: &Value, comic: bool) -> MangaPageResult {
 
 /// The book's chapters, newest first. `None` when the reply has no chapter list or an
 /// entry cannot be keyed: the library keeps its chapters rather than storing a shorter list.
-fn parse_chapters(book: &Value, id: i64, comic: bool) -> Option<Vec<Chapter>> {
+///
+/// `locked` marks every chapter. It is true when the stored login says nothing can be read.
+fn parse_chapters(book: &Value, id: i64, comic: bool, locked: bool) -> Option<Vec<Chapter>> {
 	field(book, "chapters")
 		.or_else(|| field(book, "chapter"))
 		.and_then(Value::as_array)?
@@ -208,6 +210,7 @@ fn parse_chapters(book: &Value, id: i64, comic: bool) -> Option<Vec<Chapter>> {
 					.or_else(|| str_field(c, "createdAt"))
 					.and_then(parse_iso),
 				url: Some(url),
+				locked,
 				..Default::default()
 			})
 		})
@@ -242,6 +245,27 @@ fn required_level(msg: &str) -> Option<u32> {
 	let after = &msg[msg.find("Lv.")? + 3..];
 	let digits: String = after.chars().take_while(char::is_ascii_digit).collect();
 	digits.parse().ok()
+}
+
+/// Handles a refusal that names a reading level. Nothing else is served for such a book,
+/// so the description says what it takes instead of failing with the app's generic error.
+/// The site refused this account, so the chapters the caller already holds cannot be
+/// read and are locked. A refusal carries no chapter list, and the library's background
+/// update passes none, so only a details page refresh locks what is on screen.
+/// Returns false, touching nothing, when the message names no level.
+fn refuse_for_level(manga: &mut Manga, msg: &str, needs_chapters: bool) -> bool {
+	let Some(level) = required_level(msg) else {
+		return false;
+	};
+	manga.description = Some(format!(
+		"閱讀等級不足，需要達到 Lv.{level} 才能閱讀這本書。"
+	));
+	if needs_chapters {
+		for chapter in manga.chapters.iter_mut().flatten() {
+			chapter.locked = true;
+		}
+	}
+	true
 }
 
 // ---------------------------------------------------------------------------
@@ -544,13 +568,9 @@ impl Source for LightnovelSource {
 		let reply = invoke_one("GetBookInfo", json!({ "Id": id }))?;
 		let info = match reply {
 			Reply::Ok(value) => value,
-			Reply::Refused(_, msg) if needs_details && required_level(&msg).is_some() => {
-				// Nothing else is served for such a book; say what it takes instead of
-				// failing with the app's generic error.
-				let level = required_level(&msg).unwrap_or(0);
-				manga.description = Some(format!(
-					"閱讀等級不足，需要達到 Lv.{level} 才能閱讀這本書。"
-				));
+			Reply::Refused(_, msg)
+				if needs_details && refuse_for_level(&mut manga, &msg, needs_chapters) =>
+			{
 				return Ok(manga);
 			}
 			other => return Err(other.into_result().unwrap_err()),
@@ -600,7 +620,11 @@ impl Source for LightnovelSource {
 		}
 
 		if needs_chapters {
-			if let Some(chapters) = parse_chapters(book, id, comic) {
+			// Without a usable login every read fails; the flag is recomputed on each
+			// refresh, so logging in and refreshing unlocks the chapters. Only defaults
+			// are read here, no request.
+			let locked = !auth::is_logged_in() || auth::needs_relogin();
+			if let Some(chapters) = parse_chapters(book, id, comic, locked) {
 				manga.chapters = Some(chapters);
 			}
 		}
@@ -1045,18 +1069,51 @@ mod tests {
 	#[aidoku_test]
 	fn chapters_need_every_entry() {
 		let novel = json!({ "chapters": [{ "sortNum": 1, "title": "一" }, { "title": "二" }] });
-		let chapters = parse_chapters(&novel, 5, false).expect("chapters");
+		let chapters = parse_chapters(&novel, 5, false, false).expect("chapters");
 		let keys: Vec<&str> = chapters.iter().map(|c: &Chapter| c.key.as_str()).collect();
 		assert_eq!(keys, ["n2", "n1"]);
-		assert!(parse_chapters(&json!({ "title": "書" }), 5, false).is_none());
+		assert!(parse_chapters(&json!({ "title": "書" }), 5, false, false).is_none());
 		let comic = json!({ "Chapters": [{ "Id": 9, "PageCount": 20 }, { "Title": "無 id" }] });
-		assert!(parse_chapters(&comic, 5, true).is_none());
+		assert!(parse_chapters(&comic, 5, true, false).is_none());
 		let comic = json!({ "chapters": [{ "id": 9, "pageCount": 20 }] });
 		assert_eq!(
-			parse_chapters(&comic, 5, true).expect("chapters")[0].key,
+			parse_chapters(&comic, 5, true, false).expect("chapters")[0].key,
 			"c9.20"
 		);
 		assert!(parse_entry(&json!({ "id": 3 }), false).is_none());
+	}
+
+	#[aidoku_test]
+	fn chapters_are_locked_when_told_to() {
+		let novel =
+			json!({ "chapters": [{ "sortNum": 1, "title": "a" }, { "sortNum": 2, "title": "b" }] });
+		let locked = parse_chapters(&novel, 5, false, true).expect("chapters");
+		assert!(locked.iter().all(|c: &Chapter| c.locked));
+		let open = parse_chapters(&novel, 5, false, false).expect("chapters");
+		assert!(open.iter().all(|c: &Chapter| !c.locked));
+	}
+
+	#[aidoku_test]
+	fn level_refusal_locks_the_chapters_held() {
+		let msg = "阅读等级不足，需要达到 Lv.4 才能阅读该书籍";
+		let held = || Manga {
+			chapters: Some(vec![Chapter::default(), Chapter::default()]),
+			..Default::default()
+		};
+		let mut manga = held();
+		assert!(refuse_for_level(&mut manga, msg, true));
+		assert!(manga.chapters.iter().flatten().all(|c: &Chapter| c.locked));
+		assert!(manga
+			.description
+			.as_deref()
+			.is_some_and(|d: &str| d.contains("Lv.4")));
+		let mut manga = held();
+		assert!(refuse_for_level(&mut manga, msg, false));
+		assert!(manga.chapters.iter().flatten().all(|c: &Chapter| !c.locked));
+		let mut manga = held();
+		assert!(!refuse_for_level(&mut manga, "无", true));
+		assert!(manga.description.is_none());
+		assert!(manga.chapters.iter().flatten().all(|c: &Chapter| !c.locked));
 	}
 
 	#[aidoku_test]
