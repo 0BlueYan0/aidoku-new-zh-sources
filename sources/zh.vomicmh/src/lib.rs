@@ -170,9 +170,10 @@ impl Source for VomicSource {
 		if needs_chapters {
 			// An empty list is the site's answer for works it keeps to its own app, so it
 			// is kept, but only when the payload is this work's details page.
+			let locked = auth::token().is_none();
 			if let Some(chapters) = fetch_checked(&url, fetch_flight)
 				.ok()
-				.and_then(|payload: String| parse_chapters(&payload, &manga.key))
+				.and_then(|payload: String| parse_chapters(&payload, &manga.key, locked))
 			{
 				manga.chapters = Some(chapters);
 			}

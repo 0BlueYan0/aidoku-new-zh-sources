@@ -135,6 +135,7 @@ impl Source for YumanhuaSource {
 			}
 			// A partial or empty list would make the app drop the library's chapters.
 			if complete && !chapters.is_empty() {
+				number_by_position(&mut chapters);
 				manga.chapters = Some(chapters);
 			}
 		}

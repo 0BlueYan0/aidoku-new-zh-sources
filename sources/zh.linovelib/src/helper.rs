@@ -28,7 +28,7 @@ pub fn base_url() -> &'static str {
 /// `url` moved onto `base` when it is on either site. The library keeps the cover address
 /// from the day a book was added (search results are always on the Simplified site), so after
 /// the reader switches sites it would still load from the other one. Both sites serve the same
-/// files under the same paths, and covers need no headers (checked 2026-10-15).
+/// files under the same paths.
 pub fn onto_site(url: &str, base: &str) -> String {
 	for site in [TW_URL, CN_URL] {
 		if let Some(path) = url.strip_prefix(site).filter(|path| path.starts_with('/')) {
@@ -398,9 +398,62 @@ fn volume_label<'a>(name: &'a str, book: &str) -> &'a str {
 	}
 }
 
+fn chinese_number(text: &str) -> Option<f32> {
+	let digit = |c: char| "零一二三四五六七八九".chars().position(|d: char| d == c);
+	let chars: Vec<char> = text.chars().collect();
+	match chars.as_slice() {
+		['十'] => Some(10.0),
+		[c] => digit(*c).map(|d| d as f32),
+		['十', ones] => digit(*ones).map(|d| 10.0 + d as f32),
+		[tens, '十'] => digit(*tens).map(|d| d as f32 * 10.0),
+		[tens, '十', ones] => Some((digit(*tens)? * 10 + digit(*ones)?) as f32),
+		_ => None,
+	}
+}
+
+/// A whole number written in digits or Chinese numerals.
+fn whole_number(text: &str) -> Option<f32> {
+	if !text.is_empty() && text.bytes().all(|b: u8| b.is_ascii_digit()) {
+		return text.parse().ok();
+	}
+	chinese_number(text)
+}
+
+/// Words that mark a volume label as the extra part of a volume rather than the volume.
+///
+/// Deliberately a keyword list, unlike the other sources' "a 卷 followed by text that is not
+/// a chapter is an extra" rule: here the label is the catalogue's volume heading, so
+/// `第十二卷 標題` is the volume itself, and dropping the number of every volume that has a
+/// title would leave the whole book without volume numbers. Do not unify it with them.
+const APPENDIX_WORDS: [&str; 6] = ["後記", "后记", "卷首", "附錄", "附录", "特典"];
+
+/// The number of a volume label: `3`, `第3卷`, `第十二卷 標題`, `卷三` give a number.
+/// Half volumes (`6.5`), side stories, appendices, specials and bonus volumes give none, so they
+/// never share a volume number with the main volume next to them.
+pub fn volume_number(label: &str) -> Option<f32> {
+	let label = label.trim();
+	// A volume's appendix (`第3卷 後記`, `3卷卷首`) would share the volume number of the
+	// volume itself, so it gets none, the way the official zh.zaimanhua treats extras.
+	if APPENDIX_WORDS.iter().any(|word| label.contains(word)) {
+		return None;
+	}
+	let token = label.split_whitespace().next()?;
+	if let Some(rest) = token.strip_prefix('第') {
+		return whole_number(&rest[..rest.find('卷')?]);
+	}
+	if let Some(rest) = token.strip_prefix('卷') {
+		return whole_number(rest);
+	}
+	if let Some(end) = token.find('卷') {
+		return whole_number(&token[..end]);
+	}
+	whole_number(token)
+}
+
 /// The catalogue, oldest first on the site; the app wants newest first. Titles carry
-/// their volume (`【14.5】序章`) and chapters are numbered in catalogue order, since
-/// volume names include specials and half volumes that a volume number would misstate.
+/// their volume (`【14.5】序章`). Chapters are numbered in catalogue order and take a
+/// volume number only when the volume's name has a whole one (`3`, `第3卷`): half volumes
+/// and specials have none, and the app compares both numbers to tell duplicates apart.
 /// The catalogue replaces some characters in titles with capital letters (`臉S` for
 /// `臉色`); those are kept as the site gives them.
 pub fn parse_catalog(html: &Document, key: &str, base: &str) -> Vec<Chapter> {
@@ -420,6 +473,7 @@ pub fn parse_catalog(html: &Document, key: &str, base: &str) -> Vec<Chapter> {
 			});
 		let name = bar.map(|bar: Element| text_of(&bar)).unwrap_or_default();
 		let label = volume_label(&name, &book);
+		let volume_no = volume_number(label);
 		for (index, link) in volume
 			.select("li.jsChapter a")
 			.into_iter()
@@ -447,15 +501,14 @@ pub fn parse_catalog(html: &Document, key: &str, base: &str) -> Vec<Chapter> {
 			// A link without text has no title rather than an empty one. The site marks the
 			// chapters it keeps from every reader with a heart (`不相容的異種族妻子們`, all four
 			// checked on 2026-10-20 said `沒有可閱讀的章節`), so the title says so before the
-			// reader opens one and takes the failure for the source's.
+			// reader opens one and takes the failure for the source's. The row is locked
+			// too: the lock is recomputed on every refresh, so it clears once the site
+			// drops the heart.
+			let locked = title.contains('❤');
 			let title = Some(title)
 				.filter(|title: &String| !title.is_empty())
 				.map(|title| {
-					let note = if title.contains('❤') {
-						LOCKED_NOTE
-					} else {
-						""
-					};
+					let note = if locked { LOCKED_NOTE } else { "" };
 					if label.is_empty() {
 						format!("{note}{title}")
 					} else {
@@ -467,6 +520,8 @@ pub fn parse_catalog(html: &Document, key: &str, base: &str) -> Vec<Chapter> {
 				title,
 				url: Some(url),
 				chapter_number: Some((chapters.len() + 1) as f32),
+				volume_number: volume_no,
+				locked,
 				..Default::default()
 			});
 		}
@@ -504,6 +559,17 @@ mod test {
 	use super::*;
 	use aidoku::imports::html::Html;
 	use aidoku_test::aidoku_test;
+
+	/// A volume's appendix has no volume number, the volume itself keeps its own.
+	#[aidoku_test]
+	fn volume_appendix_has_no_volume_number() {
+		assert_eq!(volume_number("第3卷"), Some(3.0));
+		assert_eq!(volume_number("3卷"), Some(3.0));
+		assert_eq!(volume_number("第十二卷 標題"), Some(12.0));
+		assert_eq!(volume_number("第3卷 後記"), None);
+		assert_eq!(volume_number("01卷後記"), None);
+		assert_eq!(volume_number("3卷卷首"), None);
+	}
 
 	#[aidoku_test]
 	fn a_hearted_chapter_says_the_site_keeps_it() {

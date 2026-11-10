@@ -79,6 +79,12 @@ pub fn clear_auth() {
 	}
 }
 
+/// Whether this install holds credentials the site still accepts. Reads defaults only, so
+/// it is safe on the chapter list path.
+pub fn is_logged_in() -> bool {
+	credentials().is_some() && !needs_relogin()
+}
+
 /// Whether the stored credentials were rejected and should not be retried on their own.
 pub fn needs_relogin() -> bool {
 	defaults_get::<bool>(NEEDS_RELOGIN_KEY).unwrap_or(false)
@@ -271,6 +277,15 @@ pub fn ensure_session() {
 /// Returns whether the caller should fetch the chapter again.
 pub fn retry_after_lock() -> bool {
 	renew_with_stored_credentials()
+}
+
+/// Called when a chapter still asks for a login right after a successful renewal.
+///
+/// The site accepted the login but does not honour the session, which the reader cannot fix
+/// from inside the app. Stops further automatic renewals, like a rejected password does,
+/// until a manual login succeeds and clears the flag. Writes defaults only, no request.
+pub fn mark_session_ineffective() {
+	defaults_set(NEEDS_RELOGIN_KEY, DefaultValue::Bool(true));
 }
 
 /// Ends the session on the site, which clears the token cookie from the shared jar.

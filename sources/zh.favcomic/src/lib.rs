@@ -148,7 +148,9 @@ impl Source for FavComicSource {
 
 		if needs_chapters {
 			// An empty or partial list keeps the chapters the library already has.
-			if let Some(chapters) = parse_chapters(&document, &base).filter(|c| !c.is_empty()) {
+			if let Some(chapters) =
+				parse_chapters(&document, &base, auth::is_logged_in()).filter(|c| !c.is_empty())
+			{
 				manga.chapters = Some(chapters);
 			}
 		}
@@ -162,7 +164,8 @@ impl Source for FavComicSource {
 
 		// Code "1" means the site wants a login. If we hold credentials, the token cookie has
 		// most likely lapsed, so renew it and ask once more before giving up.
-		if chapter_lock_code(&document) == "1" && auth::retry_after_lock() {
+		let renewed = chapter_lock_code(&document) == "1" && auth::retry_after_lock();
+		if renewed {
 			document = fetch_html(&url)?;
 		}
 
@@ -170,6 +173,11 @@ impl Source for FavComicSource {
 		// reached the site. The reader only sees Aidoku's generic failure here; the settings
 		// footer is where they find out the session is at fault, since `account_footer` says so.
 		if chapter_lock_code(&document) == "1" && auth::credentials().is_some() {
+			// Only after a renewal that really happened: a skipped one (backoff, device
+			// limit) says nothing about whether the stored login works.
+			if renewed {
+				auth::mark_session_ineffective();
+			}
 			bail!("登入未生效，請到設定登出後重新登入");
 		}
 

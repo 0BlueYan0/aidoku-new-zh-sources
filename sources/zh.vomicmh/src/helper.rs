@@ -518,23 +518,92 @@ pub fn parse_details(html: &str, key: &str) -> Option<Manga> {
 // ---------------------------------------------------------------------------
 // Chapters
 
-/// `12话` / `第12话` → (Some(12), None), `第3卷` → (None, Some(3)). Extras such as
-/// `3卷番外` or `1卷加笔` carry no number.
-pub fn chapter_numbers(title: &str) -> (Option<f32>, Option<f32>) {
+fn chinese_number(text: &str) -> Option<f32> {
+	let digit = |c: char| "零一二三四五六七八九".chars().position(|d: char| d == c);
+	let chars: Vec<char> = text.chars().collect();
+	match chars.as_slice() {
+		[c] if *c == '十' => Some(10.0),
+		[c] => digit(*c).map(|d| d as f32),
+		['十', ones] => digit(*ones).map(|d| 10.0 + d as f32),
+		[tens, '十'] => digit(*tens).map(|d| d as f32 * 10.0),
+		[tens, '十', ones] => Some((digit(*tens)? * 10 + digit(*ones)?) as f32),
+		_ => None,
+	}
+}
+
+/// `12话` / `第12话` / `第十二話` → 12. The site writes most titles without `第`. A range,
+/// `全一话` and `番外` give `None`.
+pub fn chapter_number(title: &str) -> Option<f32> {
 	let rest = title.trim();
 	let rest = rest.strip_prefix('第').unwrap_or(rest);
-	let end = rest
-		.find(|c: char| !(c.is_ascii_digit() || c == '.'))
-		.unwrap_or(rest.len());
-	let Ok(number) = rest[..end].parse::<f32>() else {
-		return (None, None);
-	};
-	let mut after = rest[end..].chars();
-	match (after.next(), after.next()) {
-		(Some('话' | '話' | '回'), _) => (Some(number), None),
-		(Some('卷'), None) => (None, Some(number)),
-		_ => (None, None),
+	let end = rest.find(['話', '话', '回'])?;
+	let number = &rest[..end];
+	number
+		.parse::<f32>()
+		.ok()
+		.or_else(|| chinese_number(number))
+}
+
+/// `第2季 第5話` → (Some(5), Some(2)), `第3卷` → (None, Some(3)), `3卷` → (None, Some(3)),
+/// `12话` → (Some(12), None). A leading volume, season, part or book is the volume, as the
+/// official zh.copymanga does. A volume followed by text that is not a chapter
+/// (`第3卷 後記`, `第3卷番外`) is an appendix of that volume and gets none, as the official
+/// zh.zaimanhua does (`is_extra`): it would share the volume's number with `第3卷` itself.
+/// Same reading as zh.ho5ho, except that `第` is optional in front of a chapter.
+/// A list where no title has a number is numbered by position in `parse_chapters`.
+pub fn numbers(title: &str) -> (Option<f32>, Option<f32>) {
+	let title = title.trim();
+	// `3卷 第5話` reads like `第3卷 第5話`, as in the official zh.boylove
+	// `chapter_list/mod.rs:111` and zh.zaimanhua where the leading `第` is optional.
+	if let Some(prefixed) = with_optional_di(title) {
+		return numbers(&prefixed);
 	}
+	if let Some(rest) = title.strip_prefix('第') {
+		if let Some(end) = rest.find(['卷', '季', '部', '冊', '册']) {
+			let number = rest[..end].trim();
+			if let Some(volume) = number
+				.parse::<f32>()
+				.ok()
+				.or_else(|| chinese_number(number))
+			{
+				let unit = rest[end..].chars().next().unwrap_or('卷');
+				let after = rest[end + unit.len_utf8()..].trim();
+				let chapter = chapter_number(after);
+				if unit == '卷' && !after.is_empty() && chapter.is_none() {
+					return (None, None);
+				}
+				return (chapter, Some(volume));
+			}
+		}
+	}
+	(chapter_number(title), bare_volume(title))
+}
+
+/// Put the optional leading `第` back on a volume title such as `3卷 第5話`, but only when
+/// the unit is followed by the end, a space or `第`. `01卷後記`, `一部分` and `三部曲` have
+/// text right behind the unit and stay as they are.
+fn with_optional_di(title: &str) -> Option<String> {
+	let end = title
+		.find(|c: char| !(c.is_ascii_digit() || c == '.' || "零一二三四五六七八九十".contains(c)))
+		.unwrap_or(title.len());
+	let (number, after) = title.split_at(end);
+	if number.is_empty() {
+		return None;
+	}
+	let rest = after.strip_prefix(['季', '部', '卷', '冊', '册'])?;
+	let boundary =
+		rest.is_empty() || rest.starts_with(char::is_whitespace) || rest.starts_with('第');
+	boundary.then(|| format!("第{title}"))
+}
+
+/// `3卷` → 3 and `三卷` → 3. Only a title that is just the number and `卷` counts, as with
+/// `第3卷`; `01卷後记`, `1卷加笔` and `06卷番外` are appendixes and give `None`.
+fn bare_volume(title: &str) -> Option<f32> {
+	let number = title.trim().strip_suffix('卷')?.trim();
+	number
+		.parse::<f32>()
+		.ok()
+		.or_else(|| chinese_number(number))
 }
 
 /// `2024-11-18 05:42:13` in China time → Unix seconds.
@@ -547,11 +616,15 @@ fn site_date(raw: &str) -> Option<i64> {
 /// list is a real answer; `None` when the payload is not this work's details page (it
 /// lacks the work's chapter list entry) or when one of this work's chapters has no usable id, so
 /// the library keeps its chapters instead of a shortened list.
-pub fn parse_chapters(payload: &str, manga_key: &str) -> Option<Vec<Chapter>> {
+///
+/// `locked` marks every chapter: the site renders no page images without a login, so
+/// without a token none of them can be read. The flag is recomputed on each refresh, so
+/// logging in and refreshing the details page unlocks them.
+pub fn parse_chapters(payload: &str, manga_key: &str, locked: bool) -> Option<Vec<Chapter>> {
 	if !payload.contains(&format!("\"id\":\"{manga_key}\",\"list\":")) {
 		return None;
 	}
-	let chapters = objects_with(payload, &["car_id", "img_num", "group_name"])
+	let mut chapters = objects_with(payload, &["car_id", "img_num", "group_name"])
 		.into_iter()
 		.rev()
 		.filter(|obj: &&str| json_field(obj, "car_id") == Some(manga_key))
@@ -562,25 +635,37 @@ pub fn parse_chapters(payload: &str, manga_key: &str) -> Option<Vec<Chapter>> {
 				.filter(|id: &&str| !id.is_empty() && id.bytes().all(|b: u8| b.is_ascii_digit()))
 				.map(String::from)?;
 			let title = json_string(obj, "name").map(|t: String| String::from(t.trim()));
-			let (chapter, volume) = title
-				.as_deref()
-				.map(chapter_numbers)
-				.unwrap_or((None, None));
-			// Only the `单行本` group holds volumes; elsewhere `第3卷` would number an extra.
-			let is_volume = json_string(obj, "group_name").as_deref() == Some("单行本");
+			let (chapter, volume) = title.as_deref().map(numbers).unwrap_or((None, None));
+			// The group is not consulted: a volume's appendix (`第3卷番外`) already has no
+			// number, so the same title gets the same numbers as in every other source.
 			Some(Chapter {
 				url: Some(chapter_url(manga_key, &key)),
-				chapter_number: if is_volume { None } else { chapter },
-				volume_number: if is_volume { volume } else { None },
+				chapter_number: chapter,
+				volume_number: volume,
 				date_uploaded: json_string(obj, "chapter_updated_at")
 					.or_else(|| json_string(obj, "created_at"))
 					.and_then(|d: String| site_date(&d)),
 				key,
 				title,
+				locked,
 				..Default::default()
 			})
 		})
 		.collect::<Option<Vec<Chapter>>>()?;
+	// When no title in the list has a number, the position in the list (oldest is 1) is the
+	// chapter number, so the tracker still has one to sync. A list that mixes numbered and
+	// unnumbered titles keeps `None` for the unnumbered ones, as the official zh.jmcomic does.
+	// The list is newest first here, so the position is `len - index`.
+	if !chapters.is_empty()
+		&& chapters
+			.iter()
+			.all(|c: &Chapter| c.chapter_number.is_none() && c.volume_number.is_none())
+	{
+		let len = chapters.len();
+		for (index, chapter) in chapters.iter_mut().enumerate() {
+			chapter.chapter_number = Some((len - index) as f32);
+		}
+	}
 	Some(chapters)
 }
 
@@ -665,14 +750,68 @@ mod test {
 
 	#[aidoku_test]
 	fn numbers_chapters() {
-		assert_eq!(chapter_numbers("1话"), (Some(1.0), None));
-		assert_eq!(chapter_numbers("3.2话"), (Some(3.2), None));
-		assert_eq!(chapter_numbers("第12话"), (Some(12.0), None));
-		assert_eq!(chapter_numbers("2卷"), (None, Some(2.0)));
-		assert_eq!(chapter_numbers("第3卷番外"), (None, None));
-		assert_eq!(chapter_numbers("1卷加笔"), (None, None));
-		assert_eq!(chapter_numbers("短篇"), (None, None));
-		assert_eq!(chapter_numbers("全一话"), (None, None));
+		assert_eq!(numbers("1话"), (Some(1.0), None));
+		assert_eq!(numbers("3.2话"), (Some(3.2), None));
+		assert_eq!(numbers("第12话"), (Some(12.0), None));
+		assert_eq!(numbers("第十二話"), (Some(12.0), None));
+		assert_eq!(numbers("2卷"), (None, Some(2.0)));
+		assert_eq!(numbers("3卷"), (None, Some(3.0)));
+		assert_eq!(numbers("三卷"), (None, Some(3.0)));
+		assert_eq!(numbers("第3卷"), (None, Some(3.0)));
+		assert_eq!(numbers("第3卷番外"), (None, None));
+		assert_eq!(numbers("第3卷 後記"), (None, None));
+		assert_eq!(numbers("第3卷 新的旅程"), (None, None));
+		assert_eq!(numbers("01卷后记"), (None, None));
+		assert_eq!(numbers("06卷番外"), (None, None));
+		assert_eq!(numbers("1卷加笔"), (None, None));
+		// The leading `第` of a volume may be left out.
+		assert_eq!(numbers("3卷 第5話"), (Some(5.0), Some(3.0)));
+		assert_eq!(numbers("3卷第5話"), (Some(5.0), Some(3.0)));
+		assert_eq!(numbers("三卷 第五話"), (Some(5.0), Some(3.0)));
+		assert_eq!(numbers("2季 第5話"), (Some(5.0), Some(2.0)));
+		assert_eq!(numbers("3卷 後記"), (None, None));
+		assert_eq!(numbers("3卷卷首"), (None, None));
+		assert_eq!(numbers("一部分"), (None, None));
+		assert_eq!(numbers("三部曲 第2話"), (None, None));
+		assert_eq!(numbers("卷三"), (None, None));
+		assert_eq!(numbers("卷 3"), (None, None));
+		assert_eq!(numbers("第2季 第5話"), (Some(5.0), Some(2.0)));
+		assert_eq!(numbers("第1-3話"), (None, None));
+		assert_eq!(numbers("短篇"), (None, None));
+		assert_eq!(numbers("全一话"), (None, None));
+	}
+
+	#[aidoku_test]
+	fn a_list_without_any_number_is_numbered_by_position() {
+		let item = |id: u32, name: &str| {
+			format!(
+				r#"{{"id":{id},"car_id":27035,"img_num":3,"group_name":"正篇","name":"{name}"}}"#
+			)
+		};
+		let head = r#"{"id":"27035","list":[]}"#;
+		// The site lists oldest first and `parse_chapters` returns newest first, so the
+		// oldest gets 1.
+		let unnumbered = format!(
+			"{head}{}{}{}",
+			item(1, "序章"),
+			item(2, "短篇"),
+			item(3, "終章")
+		);
+		let chapters = parse_chapters(&unnumbered, "27035", false).unwrap();
+		let got: Vec<(&str, Option<f32>)> = chapters
+			.iter()
+			.map(|c| (c.key.as_str(), c.chapter_number))
+			.collect();
+		assert_eq!(got, [("3", Some(3.0)), ("2", Some(2.0)), ("1", Some(1.0))]);
+		// One numbered title is enough to keep the unnumbered ones at `None`.
+		let mixed = format!("{head}{}{}", item(1, "1话"), item(2, "番外"));
+		let chapters = parse_chapters(&mixed, "27035", false).unwrap();
+		assert_eq!(chapters[0].chapter_number, None);
+		assert_eq!(chapters[1].chapter_number, Some(1.0));
+		// A list with only a volume is not "without any number".
+		let volume = format!("{head}{}", item(1, "第3卷"));
+		let chapters = parse_chapters(&volume, "27035", false).unwrap();
+		assert_eq!(chapters[0].chapter_number, None);
 	}
 
 	#[aidoku_test]
@@ -683,10 +822,22 @@ mod test {
 			)
 		};
 		let good = page(r#"{"id":2,"car_id":27035,"img_num":3,"group_name":"正篇","name":"2话"}"#);
-		assert_eq!(parse_chapters(&good, "27035").map(|c| c.len()), Some(2));
+		assert_eq!(
+			parse_chapters(&good, "27035", false).map(|c| c.len()),
+			Some(2)
+		);
 		let bad =
 			page(r#"{"id":null,"car_id":27035,"img_num":3,"group_name":"正篇","name":"2话"}"#);
-		assert!(parse_chapters(&bad, "27035").is_none());
+		assert!(parse_chapters(&bad, "27035", false).is_none());
+	}
+
+	#[aidoku_test]
+	fn chapters_are_locked_only_without_a_login() {
+		let payload = r#"{"id":"27035","list":[]}{"id":1,"car_id":27035,"img_num":3,"group_name":"正篇","name":"1话"}{"id":2,"car_id":27035,"img_num":3,"group_name":"正篇","name":"2话"}"#;
+		let logged_out = parse_chapters(payload, "27035", true).unwrap();
+		assert!(logged_out.iter().all(|c| c.locked));
+		let logged_in = parse_chapters(payload, "27035", false).unwrap();
+		assert!(logged_in.iter().all(|c| !c.locked));
 	}
 }
 

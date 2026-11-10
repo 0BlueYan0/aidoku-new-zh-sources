@@ -38,7 +38,9 @@ fn live_app_only_manga_list_trial_and_image() {
 		.find(|chapter| episode_no(&chapter.key) == Some(2))
 		.unwrap()
 		.clone();
-	assert!(!paid.locked);
+	// Assumes a signed-out run: a guest has no rights, so the paid episode stays locked.
+	// An account that owns episode 2 would see it unlocked instead.
+	assert!(paid.locked);
 	assert!(source.get_page_list(manga.clone(), paid).is_err());
 	let pages = source.get_page_list(manga, trial).unwrap();
 	assert!(pages.len() >= 19);

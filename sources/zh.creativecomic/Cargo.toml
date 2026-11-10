@@ -17,6 +17,11 @@ serde = { version = "1.0", default-features = false, features = ["derive", "allo
 [dev-dependencies]
 aidoku = { git = "https://github.com/Aidoku/aidoku-rs.git", branch = "main", features = ["test", "json"] }
 aidoku-test = { git = "https://github.com/Aidoku/aidoku-rs.git", branch = "main" }
+serde_json = "1.0"
+
+[features]
+# Tests that read saved site pages from src/fixtures/, which are not in git.
+fixtures = []
 
 [profile.dev]
 panic = "abort"
