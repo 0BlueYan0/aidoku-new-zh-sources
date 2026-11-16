@@ -19,7 +19,7 @@ use aidoku::{
 };
 use serde::Deserialize;
 
-use crate::{auth, net};
+use crate::{auth, lines, net, settings};
 
 pub const ENABLED_KEY: &str = "autoPunchIn";
 const NEXT_KEY: &str = "punch_next";
@@ -128,7 +128,8 @@ fn record(outcome: &Outcome, now: i64) {
 
 /// POST users/punch-in once. Sent at most once per site day, see the module comment.
 fn send() -> Outcome {
-	let base = net::api_base();
+	let line = settings::get_api_line();
+	let base = net::api_base_for(&line);
 	let Ok(request) = net::create_request(
 		format!("{base}/users/punch-in"),
 		&base,
@@ -139,6 +140,7 @@ fn send() -> Outcome {
 		return Outcome::Failed;
 	};
 	let Ok(response) = request.send() else {
+		lines::note_failure(&line);
 		return Outcome::Failed;
 	};
 	let status = response.status_code();
@@ -146,9 +148,13 @@ fn send() -> Outcome {
 		auth::on_unauthorized();
 		return Outcome::Failed;
 	}
-	match response.get_string() {
-		Ok(text) => parse(status, &text),
-		Err(_) => Outcome::Failed,
+	let text = response.get_string().ok();
+	if lines::is_line_failure(status, text.as_deref()) {
+		lines::note_failure(&line);
+	}
+	match text {
+		Some(text) => parse(status, &text),
+		None => Outcome::Failed,
 	}
 }
 

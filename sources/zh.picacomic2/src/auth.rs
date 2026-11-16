@@ -4,7 +4,11 @@
 //! point, behind a time gate), the login handler and the settings page send requests;
 //! building a request only reads defaults.
 
-use crate::net::{self, Url};
+use crate::{
+	lines,
+	net::{self, Url},
+	settings,
+};
 use aidoku::{
 	alloc::{string::ToString, String, Vec},
 	imports::{
@@ -228,7 +232,8 @@ pub fn parse_login(status: i32, text: &str) -> LoginOutcome {
 
 /// POST auth/sign-in with these credentials on the selected line.
 pub fn login(username: &str, password: &str) -> LoginOutcome {
-	let base = net::api_base();
+	let line = settings::get_api_line();
+	let base = net::api_base_for(&line);
 	let body = serde_json::json!({ "email": username, "password": password }).to_string();
 	let Ok(request) = net::create_request(
 		format!("{base}/auth/sign-in"),
@@ -240,11 +245,17 @@ pub fn login(username: &str, password: &str) -> LoginOutcome {
 		return LoginOutcome::Unreachable;
 	};
 	let Ok(response) = request.send() else {
+		lines::note_failure(&line);
 		return LoginOutcome::Unreachable;
 	};
-	match response.get_string() {
-		Ok(text) => parse_login(response.status_code(), &text),
-		Err(_) => LoginOutcome::Unreachable,
+	let status = response.status_code();
+	let text = response.get_string().ok();
+	if lines::is_line_failure(status, text.as_deref()) {
+		lines::note_failure(&line);
+	}
+	match text {
+		Some(text) => parse_login(status, &text),
+		None => LoginOutcome::Unreachable,
 	}
 }
 
@@ -373,16 +384,20 @@ pub fn classify_profile(status: i32, body: Option<&str>) -> ProfileState {
 
 /// GET users/profile with the stored token. Only the settings page calls this.
 fn fetch_profile() -> ProfileState {
-	let Ok(request) = net::build_request(&Url::Profile) else {
+	let line = settings::get_api_line();
+	let Ok(request) = net::build_request_on(&Url::Profile, &line) else {
 		return ProfileState::Failed;
 	};
 	let Ok(response) = request.send() else {
+		lines::note_failure(&line);
 		return ProfileState::Failed;
 	};
-	let state = classify_profile(
-		response.status_code(),
-		response.get_string().ok().as_deref(),
-	);
+	let status = response.status_code();
+	let text = response.get_string().ok();
+	if lines::is_line_failure(status, text.as_deref()) {
+		lines::note_failure(&line);
+	}
+	let state = classify_profile(status, text.as_deref());
 	if matches!(state, ProfileState::Expired) {
 		on_unauthorized();
 	}
