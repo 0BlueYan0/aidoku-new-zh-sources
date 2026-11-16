@@ -16,6 +16,15 @@
 //! (CLAUDE.md, 請求排程): the gate moves to `now + RETRY` before anything is sent, a refresh
 //! that got the list or a line to answer moves it a day ahead, and any other outcome leaves
 //! the one-hour retry.
+//!
+//! A request that cannot reach its line (no answer, HTTP 5xx, Cloudflare `error code: 1034`)
+//! marks the line failed, the way zh.jmcomic marks its domain: that request still fails, the
+//! next one goes to the next line, and the gate is pulled to `FAILOVER_RETEST` from now so a
+//! later entry point tests the lines again. The official PicACG app does the same with
+//! Cloudflare IPs it blocks; a source cannot choose IPs, so it switches domains instead.
+//!
+//! A refresh keeps the domains that still answer: the new PicaWeb list first, then old
+//! lines that answered, then `BUILT_IN`.
 
 use aidoku::{
 	alloc::{string::ToString, String, Vec},
@@ -37,7 +46,11 @@ pub const BUILT_IN: [&str; 2] = ["go2778.com", "acbbb.com"];
 const LINES_KEY: &str = "proxy_lines";
 const ANSWERED_KEY: &str = "proxy_lines_answered";
 const NEXT_KEY: &str = "proxy_lines_next";
+const FAILED_KEY: &str = "proxy_lines_failed";
 const RETRY: i64 = 3600;
+/// How soon after a failed request the lines are tested again. The gate never moves to
+/// "now", so a line that keeps failing costs one test every ten minutes at most.
+const FAILOVER_RETEST: i64 = 600;
 const DAY: i64 = 86_400;
 /// PicaWeb gives each status test 3 seconds.
 const STATUS_TIMEOUT: f64 = 3.0;
@@ -204,9 +217,18 @@ fn answered_lines() -> Option<Vec<String>> {
 	read_list(ANSWERED_KEY)
 }
 
-/// Whether a line the reader picked can still be used: it answered the last test, or no
-/// test has reached a line yet and it is on the known list.
+/// Lines a request failed on since the last test.
+fn failed_lines() -> Vec<String> {
+	read_list(FAILED_KEY).unwrap_or_default()
+}
+
+/// Whether a line the reader picked can still be used: no request has failed on it since
+/// the last test, and it answered that test (or no test has reached a line yet and it is
+/// on the known list).
 pub fn usable(line: &str) -> bool {
+	if failed_lines().iter().any(|l| l == line) {
+		return false;
+	}
 	match answered_lines() {
 		Some(answered) => answered.iter().any(|l| l == line),
 		None => known_lines().iter().any(|l| l == line),
@@ -214,12 +236,91 @@ pub fn usable(line: &str) -> bool {
 }
 
 /// The line used when the reader has not picked one, or picked one that cannot be used:
-/// the first line that answered, else the first known line.
+/// the first line that answered and has not failed since, else the first known line that
+/// has not failed. When every line has failed, the first that answered (or the first
+/// known one) is used until the next test.
 pub fn best_line() -> String {
-	answered_lines()
-		.and_then(|answered| answered.into_iter().next())
-		.or_else(|| known_lines().into_iter().next())
+	let failed = failed_lines();
+	let answered = answered_lines().unwrap_or_default();
+	let known = known_lines();
+	let working = |line: &&String| !failed.contains(*line);
+	answered
+		.iter()
+		.find(working)
+		.or_else(|| known.iter().find(working))
+		.or_else(|| answered.first())
+		.or_else(|| known.first())
+		.cloned()
 		.unwrap_or_else(|| String::from(settings::DEFAULT_LINE))
+}
+
+/// Whether an answer means the line itself is down rather than the request being wrong:
+/// a server error (Cloudflare's 52x included), or the Cloudflare block the official app
+/// drops an IP for (HTTP 403 with `error code: 1034`). 400, 401 and 404 are about the
+/// account or the request and do not count.
+pub fn is_line_failure(status: i32, body: Option<&str>) -> bool {
+	status >= 500 || (status == 403 && body.is_some_and(|text| text.contains("error code: 1034")))
+}
+
+/// Mark a line failed after a request on it got no answer or a line failure. Writes
+/// defaults only; the request that failed is not sent again. Only lines from the PicaWeb
+/// list are switched: the official line and the reader's own domain are kept as chosen.
+pub fn note_failure(line: &str) {
+	note_failure_at(line, current_date());
+}
+
+fn note_failure_at(line: &str, now: i64) {
+	if !settings::uses_proxy_list() {
+		return;
+	}
+	let mut failed = failed_lines();
+	if !failed.iter().any(|l| l == line) {
+		failed.push(String::from(line));
+		write_list(FAILED_KEY, &failed);
+	}
+	let retest = now + FAILOVER_RETEST;
+	if next_due() > retest {
+		set_next_due(retest);
+	}
+}
+
+/// Lines a refresh tests: the PicaWeb list with the old lines that answered last time and
+/// `BUILT_IN` after it, or, when PicaWeb could not be read, the stored list with `BUILT_IN`.
+pub fn lines_to_test(
+	fetched: Option<&[String]>,
+	stored: &[String],
+	answered_before: &[String],
+) -> Vec<String> {
+	let mut lines = Vec::new();
+	let first: Vec<&String> = match fetched {
+		Some(fetched) => fetched.iter().chain(answered_before).collect(),
+		None => stored.iter().collect(),
+	};
+	let built_in: Vec<String> = BUILT_IN.iter().map(|line| String::from(*line)).collect();
+	for line in first.into_iter().chain(&built_in) {
+		if !lines.contains(line) {
+			lines.push(line.clone());
+		}
+	}
+	lines
+}
+
+/// The list stored after a refresh that read PicaWeb: the PicaWeb list, then the other
+/// tested lines that answered, then `BUILT_IN`. Old lines that did not answer are dropped.
+pub fn lines_to_keep(fetched: &[String], tested: &[String], results: &[bool]) -> Vec<String> {
+	let mut lines: Vec<String> = Vec::new();
+	let answered_old = tested
+		.iter()
+		.zip(results)
+		.filter(|(_, ok)| **ok)
+		.map(|(line, _)| line);
+	let built_in: Vec<String> = BUILT_IN.iter().map(|line| String::from(*line)).collect();
+	for line in fetched.iter().chain(answered_old).chain(&built_in) {
+		if !lines.contains(line) {
+			lines.push(line.clone());
+		}
+	}
+	lines
 }
 
 pub struct LineState {
@@ -234,14 +335,15 @@ pub struct Refresh {
 }
 
 /// Fetch the list and test it, keeping what was learnt. A fetch that fails keeps the
-/// stored list; a test where no line answered (offline) keeps the last answers.
+/// stored list; a test where no line answered (offline) keeps the last answers and the
+/// stored list. The failed marks are cleared: the test replaces them.
 pub fn refresh() -> Refresh {
 	let fetched = fetch_lines();
-	let is_fetched = fetched.is_some();
-	let lines = fetched.unwrap_or_else(known_lines);
-	if is_fetched {
-		write_list(LINES_KEY, &lines);
-	}
+	let lines = lines_to_test(
+		fetched.as_deref(),
+		&known_lines(),
+		&answered_lines().unwrap_or_default(),
+	);
 	let results = test_lines(&lines);
 	let answered: Vec<String> = lines
 		.iter()
@@ -251,9 +353,13 @@ pub fn refresh() -> Refresh {
 		.collect();
 	if !answered.is_empty() {
 		write_list(ANSWERED_KEY, &answered);
+		if let Some(fetched) = &fetched {
+			write_list(LINES_KEY, &lines_to_keep(fetched, &lines, &results));
+		}
 	}
+	defaults_set(FAILED_KEY, DefaultValue::String(String::new()));
 	Refresh {
-		fetched: is_fetched,
+		fetched: fetched.is_some(),
 		lines: lines
 			.into_iter()
 			.zip(results)
@@ -311,7 +417,7 @@ pub fn record_now(refresh: &Refresh) {
 /// Empty strings rather than `DefaultValue::Null`, see `punch::clear`.
 #[cfg(test)]
 pub fn clear() {
-	for key in [LINES_KEY, ANSWERED_KEY, NEXT_KEY] {
+	for key in [LINES_KEY, ANSWERED_KEY, NEXT_KEY, FAILED_KEY] {
 		defaults_set(key, DefaultValue::String(String::new()));
 	}
 }
@@ -428,6 +534,114 @@ mod test {
 		assert!(!claim_if_due(now));
 		settings::clear_line_choice();
 		clear();
+	}
+
+	fn strings(values: &[&str]) -> Vec<String> {
+		values.iter().map(|value| String::from(*value)).collect()
+	}
+
+	#[aidoku_test]
+	fn line_failures() {
+		assert!(is_line_failure(500, None));
+		assert!(is_line_failure(522, Some("<html>")));
+		assert!(is_line_failure(403, Some("error code: 1034")));
+		assert!(!is_line_failure(403, Some("forbidden")));
+		assert!(!is_line_failure(403, None));
+		assert!(!is_line_failure(400, Some(r#"{"code":400}"#)));
+		assert!(!is_line_failure(401, None));
+		assert!(!is_line_failure(404, None));
+		assert!(!is_line_failure(200, Some("error code: 1034")));
+	}
+
+	#[aidoku_test]
+	fn failed_line_gives_way() {
+		clear();
+		settings::clear_line_choice();
+		let now = 1_790_739_639;
+		write_list(ANSWERED_KEY, &strings(&["go2778.com", "acbbb.com"]));
+		assert_eq!(best_line(), "go2778.com");
+		note_failure_at("go2778.com", now);
+		assert_eq!(best_line(), "acbbb.com");
+		assert!(!usable("go2778.com"));
+		assert!(usable("acbbb.com"));
+		// A picked line that failed gives way too.
+		defaults_set("api_line", DefaultValue::String(String::from("go2778.com")));
+		assert_eq!(settings::get_api_line(), "acbbb.com");
+		// Marking twice keeps one entry.
+		note_failure_at("go2778.com", now);
+		assert_eq!(failed_lines(), strings(&["go2778.com"]));
+		// Every answered line failed: a known line that did not answer is tried next.
+		write_list(
+			LINES_KEY,
+			&strings(&["go2778.com", "acbbb.com", "third.com"]),
+		);
+		note_failure_at("acbbb.com", now);
+		assert_eq!(best_line(), "third.com");
+		// Every line failed: the first answered one until the next test.
+		note_failure_at("third.com", now);
+		assert_eq!(best_line(), "go2778.com");
+		settings::clear_line_choice();
+		clear();
+	}
+
+	#[aidoku_test]
+	fn failure_pulls_gate_but_not_to_now() {
+		clear();
+		settings::clear_line_choice();
+		let now = 1_790_739_639;
+		set_next_due(now + DAY);
+		note_failure_at("go2778.com", now);
+		assert_eq!(next_due(), now + FAILOVER_RETEST);
+		assert!(!claim_if_due(now + FAILOVER_RETEST - 1));
+		assert!(claim_if_due(now + FAILOVER_RETEST));
+		// A gate that is already sooner stays.
+		set_next_due(now + 60);
+		note_failure_at("go2778.com", now);
+		assert_eq!(next_due(), now + 60);
+		clear();
+	}
+
+	#[aidoku_test]
+	fn official_and_own_domain_are_not_marked() {
+		clear();
+		let now = 1_790_739_639;
+		set_next_due(now + DAY);
+		defaults_set("api_line", DefaultValue::String(String::from("official")));
+		note_failure_at("official", now);
+		assert!(failed_lines().is_empty());
+		assert_eq!(next_due(), now + DAY);
+		settings::clear_line_choice();
+		defaults_set(
+			"customBaseUrl",
+			DefaultValue::String(String::from("mine.com")),
+		);
+		note_failure_at("mine.com", now);
+		assert!(failed_lines().is_empty());
+		assert_eq!(next_due(), now + DAY);
+		settings::clear_line_choice();
+		clear();
+	}
+
+	#[aidoku_test]
+	fn merged_lists() {
+		let fetched = strings(&["new.com", "go2778.com"]);
+		let old = strings(&["old.com", "gone.com"]);
+		// PicaWeb read: its list, then old answered lines, then the built-in ones.
+		assert_eq!(
+			lines_to_test(Some(&fetched), &old, &strings(&["old.com"])),
+			strings(&["new.com", "go2778.com", "old.com", "acbbb.com"])
+		);
+		// PicaWeb not read: the stored list, then the built-in ones.
+		assert_eq!(
+			lines_to_test(None, &old, &strings(&["old.com"])),
+			strings(&["old.com", "gone.com", "go2778.com", "acbbb.com"])
+		);
+		// Kept: PicaWeb's list whether or not it answered, old lines only if they answered.
+		let tested = strings(&["new.com", "go2778.com", "old.com", "older.com", "acbbb.com"]);
+		assert_eq!(
+			lines_to_keep(&fetched, &tested, &[false, true, true, false, false]),
+			strings(&["new.com", "go2778.com", "old.com", "acbbb.com"])
+		);
 	}
 }
 

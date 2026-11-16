@@ -166,10 +166,11 @@ impl Home for Picacomic2 {
 
 		// Rows go out together so the covers, which queue behind this call, start sooner.
 		// A row whose request cannot be built is skipped.
+		let line = settings::get_api_line();
 		let mut rows = Vec::new();
 		let mut requests: Vec<Request> = Vec::new();
 		for row in ROWS {
-			if let Ok(request) = net::build_request(&row.url()) {
+			if let Ok(request) = net::build_request_on(&row.url(), &line) {
 				rows.push(row);
 				requests.push(request);
 			}
@@ -181,7 +182,6 @@ impl Home for Picacomic2 {
 			responses.extend(Request::send_all(batch));
 		}
 
-		let line = settings::get_api_line();
 		let blocklist = settings::get_blocklist();
 		let mut responses = responses.into_iter();
 		let mut shown = false;
@@ -191,11 +191,12 @@ impl Home for Picacomic2 {
 				break;
 			};
 			let page = response
+				.inspect_err(|_| lines::note_failure(&line))
 				.map_err(AidokuError::from)
 				.and_then(|response| match row.feed {
-					Feed::Rank(_) => net::read_json::<RankResponse>(&response)
+					Feed::Rank(_) => net::read_json::<RankResponse>(&response, &line)
 						.map(|body| body.data.into_page(&line, &blocklist)),
-					_ => net::read_json::<ExploreResponse>(&response)
+					_ => net::read_json::<ExploreResponse>(&response, &line)
 						.map(|body| body.data.into_page(&line, &blocklist)),
 				});
 			match page {

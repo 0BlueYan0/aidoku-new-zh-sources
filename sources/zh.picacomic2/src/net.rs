@@ -4,7 +4,7 @@
 //! cannot hold request slots while waiting for each other. Sessions are handled by
 //! `auth::ensure_session` at the top of each entry point.
 
-use crate::{auth, crypto, settings};
+use crate::{auth, crypto, lines, settings};
 use aidoku::{
 	alloc::{string::ToString, String},
 	helpers::uri::encode_uri_component,
@@ -30,10 +30,6 @@ pub fn api_base_for(line: &str) -> String {
 	} else {
 		format!("https://picaapi.{}", settings::DEFAULT_LINE)
 	}
-}
-
-pub fn api_base() -> String {
-	api_base_for(&settings::get_api_line())
 }
 
 pub fn gen_time() -> String {
@@ -279,9 +275,10 @@ impl Url {
 	}
 }
 
-/// The signed request for a URL, with the stored token when there is one.
-pub fn build_request(url: &Url) -> Result<Request> {
-	let base = api_base();
+/// The signed request for a URL on `line`, with the stored token when there is one. The
+/// caller passes the line so it can mark that line failed.
+pub fn build_request_on(url: &Url, line: &str) -> Result<Request> {
+	let base = api_base_for(line);
 	let (method, body) = match url {
 		Url::Search { query, sort, .. } => (
 			HttpMethod::Post,
@@ -334,24 +331,32 @@ pub fn create_request(
 }
 
 /// Read a response body as JSON. A 401 drops the stored token (the next entry point signs in
-/// again) and every non-2xx status is an error.
-pub fn read_json<T: DeserializeOwned>(response: &Response) -> Result<T> {
+/// again), an answer that means `line` is down marks it failed, and every non-2xx status is
+/// an error.
+pub fn read_json<T: DeserializeOwned>(response: &Response, line: &str) -> Result<T> {
 	let status = response.status_code();
 	if status == 401 {
 		auth::on_unauthorized();
 		bail!("[picacomic2] unauthorized (HTTP 401)");
 	}
 	if !(200..300).contains(&status) {
-		bail!("[picacomic2] HTTP {status}");
+		if lines::is_line_failure(status, response.get_string().ok().as_deref()) {
+			lines::note_failure(line);
+		}
+		bail!("[picacomic2] HTTP {status} on {line}");
 	}
 	let text = response.get_string()?;
 	serde_json::from_str(&text).map_err(|_| error!("[picacomic2] unexpected response body"))
 }
 
-/// One request in, one result out. Nothing else is sent while this runs.
+/// One request in, one result out. Nothing else is sent while this runs; a request that
+/// gets no answer marks its line failed and is not sent again.
 pub fn request_json<T: DeserializeOwned>(url: Url) -> Result<T> {
-	let response = build_request(&url)?.send()?;
-	read_json(&response)
+	let line = settings::get_api_line();
+	let response = build_request_on(&url, &line)?
+		.send()
+		.inspect_err(|_| lines::note_failure(&line))?;
+	read_json(&response, &line)
 }
 
 #[cfg(test)]
