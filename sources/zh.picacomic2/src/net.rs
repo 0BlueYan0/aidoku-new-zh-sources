@@ -20,13 +20,16 @@ use serde::de::DeserializeOwned;
 const API_KEY: &str = "C69BAF41DA5ABD1FFEDC6D2FEA56B";
 const KEY: &[u8; 63] = br"~d}$Q7$eIni=V)9\RK/P.RM4;9[7|@/CA}b~OW!3?EV`:<>M7pddUBL5n|0/*Cn";
 
-/// API base for a line from the settings. Anything unknown falls back to the default proxy.
+/// API base for a line: `picaapi.<line>` for a proxy domain, the way PicaWeb builds it.
+/// Something that is not a host name falls back to the default proxy.
 pub fn api_base_for(line: &str) -> String {
-	String::from(match line {
-		"acbbb.com" => "https://picaapi.acbbb.com",
-		"official" => "https://picaapi.picacomic.com",
-		_ => "https://picaapi.go2778.com",
-	})
+	if line == settings::OFFICIAL {
+		String::from("https://picaapi.picacomic.com")
+	} else if crate::lines::is_domain(line) {
+		format!("https://picaapi.{line}")
+	} else {
+		format!("https://picaapi.{}", settings::DEFAULT_LINE)
+	}
 }
 
 pub fn api_base() -> String {
@@ -57,7 +60,7 @@ pub fn gen_signature(path: &str, time: &str, nonce: &str, method: &str) -> Resul
 /// and `manhuabika.com` become the line, `diwodiwo.xyz` becomes `storage1.<line>`. Only the
 /// host changes. The official line keeps the host as the API gave it.
 pub fn rewrite_image_host(file_server: &str, line: &str) -> String {
-	if line == "official" {
+	if line == settings::OFFICIAL {
 		return String::from(file_server);
 	}
 	let (scheme, rest) = match file_server.find("://") {
@@ -363,7 +366,9 @@ mod test {
 		assert_eq!(api_base_for("go2778.com"), "https://picaapi.go2778.com");
 		assert_eq!(api_base_for("acbbb.com"), "https://picaapi.acbbb.com");
 		assert_eq!(api_base_for("official"), "https://picaapi.picacomic.com");
+		assert_eq!(api_base_for("new-line.top"), "https://picaapi.new-line.top");
 		assert_eq!(api_base_for("other"), "https://picaapi.go2778.com");
+		assert_eq!(api_base_for("a.com/x"), "https://picaapi.go2778.com");
 	}
 
 	#[aidoku_test]
