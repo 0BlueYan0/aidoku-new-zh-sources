@@ -23,49 +23,6 @@
 	},
 	{
 		"type": "group",
-		"title": "線路",
-		"footer": "代理線路由第三方架設，帳號密碼與登入狀態會經過它的伺服器。在意的話請改用官方線路（大陸無法直連）。",
-		"items": [
-			{
-				"type": "select",
-				"key": "api_line",
-				"title": "線路",
-				"values": [
-					"go2778.com",
-					"acbbb.com",
-					"official"
-				],
-				"titles": [
-					"代理線路 - go2778.com",
-					"代理線路 - acbbb.com",
-					"官方線路"
-				],
-				"default": "go2778.com",
-				"refreshes": [
-					"content",
-					"listings"
-				]
-			},
-			{
-				"type": "select",
-				"key": "appChannel",
-				"title": "分流",
-				"values": [
-					"1",
-					"2",
-					"3"
-				],
-				"titles": [
-					"分流1",
-					"分流2",
-					"分流3"
-				],
-				"default": "3"
-			}
-		]
-	},
-	{
-		"type": "group",
 		"title": "屏蔽關鍵字",
 		"footer": "標籤或分類與這些關鍵字完全相同的作品不會顯示。\n「大家都在看」「官方都在看」「大濕推薦」「那年今天」只看得到分類，要擋這幾個列表裡的作品，請加分類名稱，例如「偽娘哲學」。",
 		"items": [

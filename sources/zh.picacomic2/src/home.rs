@@ -1,6 +1,7 @@
 use crate::{
 	auth,
 	json::{ExploreResponse, RankResponse},
+	lines,
 	net::{self, Url},
 	punch, settings, Picacomic2,
 };
@@ -12,7 +13,7 @@ use aidoku::{
 };
 
 /// Requests per `send_all`: the app runs at most 5 at once, and more in one call can hang.
-const HOME_BATCH: usize = 5;
+pub(crate) const HOME_BATCH: usize = 5;
 
 #[derive(Clone, Copy)]
 enum Shape {
@@ -157,8 +158,9 @@ impl Home for Picacomic2 {
 			components: ROWS.iter().map(Row::skeleton).collect(),
 		}));
 
-		// The only requests this call can make before the rows are the sign-in and the daily
-		// check-in, and both are gated.
+		// The only requests this call can make before the rows are the daily line refresh, the
+		// sign-in and the daily check-in, and all three are gated.
+		lines::refresh_if_due();
 		auth::ensure_session();
 		punch::punch_if_due();
 

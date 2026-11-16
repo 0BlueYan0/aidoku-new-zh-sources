@@ -2,14 +2,14 @@
 	"info": {
 		"id": "zh.picacomic2",
 		"name": "嗶咔漫畫 (new-zh)",
-		"version": 1,
+		"version": 2,
 		"urls": [
 			"https://picawang.com",
 			"https://manhuabika.com"
 		],
 		"contentRating": 2,
 		"languages": ["zh"],
-		"minAppVersion": "0.7.1"
+		"minAppVersion": "0.8.3"
 	},
 	"listings": [
 		{

@@ -1,17 +1,18 @@
 #![no_std]
 
 use aidoku::{
-	alloc::{String, Vec},
+	alloc::{borrow::Cow, String, Vec},
 	prelude::*,
 	BasicLoginHandler, Chapter, DeepLinkHandler, DeepLinkResult, DynamicSettings, FilterValue,
 	GroupSetting, Listing, ListingProvider, Manga, MangaPageResult, NotificationHandler, Page,
-	Result, Setting, Source,
+	Result, SelectSetting, Setting, Source, TextSetting,
 };
 
 mod auth;
 mod crypto;
 mod home;
 mod json;
+mod lines;
 mod net;
 mod punch;
 mod settings;
@@ -45,6 +46,7 @@ impl Source for Picacomic2 {
 		page: i32,
 		filters: Vec<FilterValue>,
 	) -> Result<MangaPageResult> {
+		lines::refresh_if_due();
 		auth::ensure_session();
 		punch::punch_if_due();
 		// Keyword search answers with the same shape as the plain lists.
@@ -57,6 +59,7 @@ impl Source for Picacomic2 {
 		needs_details: bool,
 		needs_chapters: bool,
 	) -> Result<Manga> {
+		lines::refresh_if_due();
 		auth::ensure_session();
 		punch::punch_if_due();
 
@@ -102,6 +105,7 @@ impl Source for Picacomic2 {
 	}
 
 	fn get_page_list(&self, manga: Manga, chapter: Chapter) -> Result<Vec<Page>> {
+		lines::refresh_if_due();
 		auth::ensure_session();
 		punch::punch_if_due();
 
@@ -137,6 +141,7 @@ impl Source for Picacomic2 {
 
 impl ListingProvider for Picacomic2 {
 	fn get_manga_list(&self, listing: Listing, page: i32) -> Result<MangaPageResult> {
+		lines::refresh_if_due();
 		auth::ensure_session();
 		punch::punch_if_due();
 
@@ -224,16 +229,87 @@ impl DynamicSettings for Picacomic2 {
 	/// Never answers with an empty list: a source that hands the app an empty list of dynamic
 	/// settings gets a settings screen whose buttons stop responding. Every path of
 	/// `account_footer` is a non-empty text, and only a stored token makes it send a request.
+	/// The line group comes after the account info: dynamic settings follow
+	/// `res/settings.json`, and the account info has to stay right under the account group.
+	/// The line list is refreshed first so the account request goes to the refreshed line.
 	fn get_dynamic_settings(&self) -> Result<Vec<Setting>> {
-		Ok(Vec::from([GroupSetting {
-			key: "accountInfo".into(),
-			title: "帳號資訊".into(),
-			items: Vec::new(),
-			footer: Some(auth::account_footer().into()),
-			..Default::default()
-		}
-		.into()]))
+		let lines = line_group();
+		Ok(Vec::from([
+			GroupSetting {
+				key: "accountInfo".into(),
+				title: "帳號資訊".into(),
+				items: Vec::new(),
+				footer: Some(auth::account_footer().into()),
+				..Default::default()
+			}
+			.into(),
+			lines,
+		]))
 	}
+}
+
+/// The line menu, built from PicaWeb's list each time the settings page opens. Names follow
+/// PicaWeb: "代理线路 - <domain>", "官方线路", "连接失败" for a line that did not answer.
+fn line_group() -> Setting {
+	let refresh = lines::refresh();
+	lines::record_now(&refresh);
+
+	let mut values: Vec<Cow<'static, str>> = Vec::new();
+	let mut titles: Vec<Cow<'static, str>> = Vec::new();
+	for state in refresh.lines {
+		titles.push(if state.answered {
+			format!("代理線路 - {}", state.line).into()
+		} else {
+			format!("代理線路 - {}（連接失敗）", state.line).into()
+		});
+		values.push(state.line.into());
+	}
+	values.push(settings::OFFICIAL.into());
+	titles.push("官方線路".into());
+
+	GroupSetting {
+		key: "lineGroup".into(),
+		title: "線路".into(),
+		footer: Some(
+			"代理線路由第三方架設，帳號密碼與登入狀態會經過它的伺服器。在意的話請改用官方線路（大陸無法直連）。\n代理線路換網域時可自行填入網域，留空則使用上方選擇的線路。"
+				.into(),
+		),
+		items: Vec::from([
+			SelectSetting {
+				key: settings::LINE_KEY.into(),
+				title: "線路".into(),
+				values,
+				titles: Some(titles),
+				default: Some(lines::best_line()),
+				refreshes: Some(Vec::from(["content".into(), "listings".into()])),
+				..Default::default()
+			}
+			.into(),
+			SelectSetting {
+				key: "appChannel".into(),
+				title: "分流".into(),
+				values: Vec::from(["1".into(), "2".into(), "3".into()]),
+				titles: Some(Vec::from([
+					"分流1".into(),
+					"分流2".into(),
+					"分流3".into(),
+				])),
+				default: Some(String::from("3")),
+				..Default::default()
+			}
+			.into(),
+			TextSetting {
+				key: settings::CUSTOM_KEY.into(),
+				title: "自訂網址".into(),
+				placeholder: Some("go2778.com".into()),
+				refreshes: Some(Vec::from(["content".into(), "listings".into()])),
+				..Default::default()
+			}
+			.into(),
+		]),
+		..Default::default()
+	}
+	.into()
 }
 
 register_source!(
