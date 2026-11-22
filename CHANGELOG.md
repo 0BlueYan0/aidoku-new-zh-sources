@@ -352,7 +352,7 @@
 
 | 日期 | 版本 | 更新內容 | 相關紀錄 |
 |---|---|---|---|
-| 2026-11-22 | v1 | 新增來源。可以設定封鎖關鍵字，標題、作者或標籤含有關鍵字的作品不會顯示，也能填 NID 封鎖單一作品。設定頁顯示帳號資訊（積分、今日簽到），切換分流伺服器後自動重新登入。與官方 NoyAcg 來源 `zh.noyacg` 不同 ID，可以同時安裝。 | [issue #62][issue62] |
+| 2026-11-22 | v1 | 新增來源。可以設定封鎖關鍵字，標題、作者或標籤含有關鍵字的作品不會顯示，也能填 NID 封鎖單一作品。設定頁顯示帳號資訊（積分、今日簽到），切換分流伺服器後自動重新登入。與官方 NoyAcg 來源 `zh.noyacg` 不同 ID，可以同時安裝。 | [issue #62][issue62]、[PR #63][pr63] |
 
 ## 共通更新
 
@@ -435,3 +435,4 @@
 [issue56]: https://github.com/0BlueYan0/aidoku-new-zh-sources/issues/56
 [issue58]: https://github.com/0BlueYan0/aidoku-new-zh-sources/issues/58
 [issue62]: https://github.com/0BlueYan0/aidoku-new-zh-sources/issues/62
+[pr63]: https://github.com/0BlueYan0/aidoku-new-zh-sources/pull/63
