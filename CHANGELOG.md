@@ -6,7 +6,7 @@
 
 ## 來源索引
 
-目前收錄 22 個來源。點選來源名稱可查看歷次更新，各來源表格的第一列就是目前版本。
+目前收錄 23 個來源。點選來源名稱可查看歷次更新，各來源表格的第一列就是目前版本。
 
 | 來源 | 來源 ID |
 |---|---|
@@ -32,6 +32,7 @@
 | [W漫畫](#zhwmanhua) | `zh.wmanhua` |
 | [漫蛙漫畫](#zhmanwa) | `zh.manwa` |
 | [嗶咔漫畫 (new-zh)](#zhpicacomic2) | `zh.picacomic2` |
+| [NoyAcg (new-zh)](#zhnoyacg2) | `zh.noyacg2` |
 
 ## 各來源更新
 
@@ -343,6 +344,16 @@
 | 2026-11-16 | v2 | 代理線路改成從 PicaWeb 取得，站方換網域不用等來源更新。打開設定頁時列出目前的線路並標出連不上的，每天也會自動更新一次。選的線路連不上時改用其他能連的線路。新增「自訂網址」可以自己填代理網域。「線路」與「分流」移到設定頁最下方。需要 Aidoku 0.8.3 以上。 | [issue #56][issue56]、[PR #60][pr60] |
 | 2026-11-08 | v1 | 新增來源。可切換代理線路，帳密登入並在設定頁顯示帳號資訊，可開啟每日自動打卡，可依標籤與分類屏蔽作品。與官方嗶咔來源 `zh.picacomic` 不同 ID，可以同時安裝。 | [PR #57][pr57] |
 
+<a id="zhnoyacg2"></a>
+
+### NoyAcg (new-zh)
+
+`zh.noyacg2`
+
+| 日期 | 版本 | 更新內容 | 相關紀錄 |
+|---|---|---|---|
+| 2026-11-22 | v1 | 新增來源。可以設定封鎖關鍵字，標題、作者或標籤含有關鍵字的作品不會顯示，也能填 NID 封鎖單一作品。設定頁顯示帳號資訊（積分、今日簽到），切換分流伺服器後自動重新登入。與官方 NoyAcg 來源 `zh.noyacg` 不同 ID，可以同時安裝。 | [issue #62][issue62] |
+
 ## 共通更新
 
 ### 2026-11-10：讀不了的章節會鎖住，章節填入卷號
@@ -423,3 +434,4 @@
 [pr9]: https://github.com/0BlueYan0/aidoku-new-zh-sources/pull/9
 [issue56]: https://github.com/0BlueYan0/aidoku-new-zh-sources/issues/56
 [issue58]: https://github.com/0BlueYan0/aidoku-new-zh-sources/issues/58
+[issue62]: https://github.com/0BlueYan0/aidoku-new-zh-sources/issues/62
