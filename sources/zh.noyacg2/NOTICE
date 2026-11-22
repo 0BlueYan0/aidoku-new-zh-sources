@@ -1,0 +1,14 @@
+zh.noyacg2 is adapted from the zh.noyacg source in Aidoku-Community/sources
+(sources/zh.noyacg, commit 4878f1a).
+
+Copyright 2025 Aidoku community source contributors
+
+The upstream repository is dual licensed under the Apache License, Version 2.0 and the
+MIT License. This source uses it under the Apache License, Version 2.0.
+
+Original repository: https://github.com/Aidoku-Community/sources
+License text: https://www.apache.org/licenses/LICENSE-2.0
+
+Changes: blocked keywords and book ids, session renewal that never sends a request while a
+request is being built, account information in the settings page, server domains as menu
+titles, chapter ranges without a chapter number, and Rust 2021 edition.

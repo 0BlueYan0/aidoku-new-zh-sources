@@ -1,0 +1,75 @@
+[
+	{
+		"type": "group",
+		"title": "內容設定",
+		"footer": "變更分級後，或需重新載入此源才會完全變更所有內容。",
+		"items": [
+			{
+				"type": "multi-select",
+				"key": "adult_mode",
+				"title": "內容分級",
+				"values": ["false", "true"],
+				"titles": ["全年齡內容", "限制級內容"],
+				"default": ["false"],
+				"requires": "login",
+				"refreshes": ["filters", "content"]
+			}
+		]
+	},
+	{
+		"type": "group",
+		"title": "伺服器",
+		"footer": "選擇分流伺服器。若遇到連線問題，可嘗試切換至其他伺服器。切換後會自動重新登入。",
+		"items": [
+			{
+				"type": "select",
+				"key": "server",
+				"title": "分流伺服器",
+				"values": ["noymanga.com", "noyteam.online", "noy.asia"],
+				"titles": ["noymanga.com", "noyteam.online", "noy.asia"],
+				"default": "noymanga.com",
+				"refreshes": ["content", "listings"]
+			}
+		]
+	},
+	{
+		"type": "group",
+		"title": "封鎖",
+		"footer": "標題、作者或標籤含有這些關鍵字的作品不會顯示，不分大小寫。填 NID 加數字（例如 NID12345）可以封鎖單一作品。",
+		"items": [
+			{
+				"type": "editable-list",
+				"key": "blockedKeywords",
+				"title": "封鎖關鍵字",
+				"lineLimit": 1,
+				"inline": true,
+				"placeholder": "輸入關鍵字或 NID",
+				"default": [],
+				"refreshes": ["content", "listings"]
+			}
+		]
+	},
+	{
+		"type": "group",
+		"title": "帳號",
+		"footer": "這個網站的所有內容都要登入才看得到，登入後會在下方看到帳號資訊。帳號密碼會保存在此裝置，登入過期時自動續期；登出即清除。\n開啟自動簽到後，每天第一次打開首頁時會替你在網站簽到。\n登入失敗時，錯誤視窗只會顯示通用訊息；實際原因請看下方「帳號資訊」，關掉這一頁再重新打開才會更新。",
+		"items": [
+			{
+				"type": "login",
+				"key": "login",
+				"title": "登入",
+				"logoutTitle": "登出",
+				"method": "basic",
+				"notification": "login",
+				"refreshes": ["settings", "listings", "content", "filters"]
+			},
+			{
+				"type": "switch",
+				"key": "auto_signin",
+				"title": "自動簽到",
+				"default": false,
+				"requires": "login"
+			}
+		]
+	}
+]
