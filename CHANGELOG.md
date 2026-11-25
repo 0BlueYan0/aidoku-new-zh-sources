@@ -26,7 +26,7 @@
 | [vomic漫](#zhvomicmh) | `zh.vomicmh` |
 | [嗶哩輕小說](#zhlinovelib) | `zh.linovelib` |
 | [漫網](#zhmanwang) | `zh.manwang` |
-| [巴卡漫畫 (new-zh)](#zhbakamh2) | `zh.bakamh2` |
+| ~~[巴卡漫畫 (new-zh)](#zhbakamh2)~~（已關站） | ~~`zh.bakamh2`~~ |
 | [漫畫1234](#zhwmh1234) | `zh.wmh1234` |
 | [漫畫客](#zhyumanhua) | `zh.yumanhua` |
 | [W漫畫](#zhwmanhua) | `zh.wmanhua` |
@@ -263,7 +263,7 @@
 
 <a id="zhbakamh2"></a>
 
-### 巴卡漫畫 (new-zh)
+### ~~巴卡漫畫 (new-zh)~~（已關站）
 
 `zh.bakamh2`
 
@@ -271,6 +271,7 @@
 
 | 日期 | 版本 | 更新內容 | 相關紀錄 |
 |---|---|---|---|
+| 2026-11-25 | 未升版 | 站方已關站，從來源清單移除。已安裝的來源不會自動移除，請自行移除。 | [PR #64][pr64] |
 | 2026-11-10 | v7 | 未登入時「需登入」的章節會鎖住，搶先看的章節一律鎖住。章節填入卷號，第N季填成卷號。詳見[共通更新](#共通更新)。 | [issue #58][issue58]、[PR #59][pr59] |
 | 2026-11-06 | v6 | 修正閱讀頁解不出圖片。 | [PR #55][pr55] |
 | 2026-10-30 | v5 | 修正下載或連續閱讀後章節變成表情圖。 | [PR #41][pr41] |
@@ -436,3 +437,4 @@
 [issue58]: https://github.com/0BlueYan0/aidoku-new-zh-sources/issues/58
 [issue62]: https://github.com/0BlueYan0/aidoku-new-zh-sources/issues/62
 [pr63]: https://github.com/0BlueYan0/aidoku-new-zh-sources/pull/63
+[pr64]: https://github.com/0BlueYan0/aidoku-new-zh-sources/pull/64
