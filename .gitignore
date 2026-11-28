@@ -42,6 +42,6 @@ evals/rules/
 
 __pycache__/
 
-# zh.bakamh2 source lives in a private repo; only prebuilt/zh.bakamh2.aix is published
-sources/zh.bakamh2/
+# zh.miwumh source lives in a private repo; only prebuilt/zh.miwumh.aix is published
+sources/zh.miwumh/
 !prebuilt/*.aix

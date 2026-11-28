@@ -26,7 +26,7 @@
 | [vomic漫](#zhvomicmh) | `zh.vomicmh` |
 | [嗶哩輕小說](#zhlinovelib) | `zh.linovelib` |
 | [漫網](#zhmanwang) | `zh.manwang` |
-| ~~[巴卡漫畫 (new-zh)](#zhbakamh2)~~（已關站） | ~~`zh.bakamh2`~~ |
+| [MIWU迷霧漫畫](#zhmiwumh) | `zh.miwumh` |
 | [漫畫1234](#zhwmh1234) | `zh.wmh1234` |
 | [漫畫客](#zhyumanhua) | `zh.yumanhua` |
 | [W漫畫](#zhwmanhua) | `zh.wmanhua` |
@@ -261,6 +261,18 @@
 | 2026-10-16 | v2 | 首頁各列同時載入。 | [PR #30][pr30] |
 | 2026-10-09 | v1 | 新增來源。 | [PR #19][pr19] |
 
+<a id="zhmiwumh"></a>
+
+### MIWU迷霧漫畫
+
+`zh.miwumh`
+
+巴卡漫畫（`zh.bakamh2`）換網域與名稱後重新上架，舊來源須移除後重新安裝，書庫與閱讀進度不會搬過來。
+
+| 日期 | 版本 | 更新內容 | 相關紀錄 |
+|---|---|---|---|
+| 2026-11-28 | v1 | 新增來源，網址為 miwumh.com。整站要登入才看得到作品，未登入時會顯示錯誤。狀態篩選多了休刊與即將推出，列表名稱照新站。閱讀時圖片主機也有 Cloudflare 驗證，第一次開一話會跳出驗證視窗，通過後一段時間內不再跳，設了轉發伺服器則不會跳。 | [PR #65][pr65] |
+
 <a id="zhbakamh2"></a>
 
 ### ~~巴卡漫畫 (new-zh)~~（已關站）
@@ -438,3 +450,4 @@
 [issue62]: https://github.com/0BlueYan0/aidoku-new-zh-sources/issues/62
 [pr63]: https://github.com/0BlueYan0/aidoku-new-zh-sources/pull/63
 [pr64]: https://github.com/0BlueYan0/aidoku-new-zh-sources/pull/64
+[pr65]: https://github.com/0BlueYan0/aidoku-new-zh-sources/pull/65
