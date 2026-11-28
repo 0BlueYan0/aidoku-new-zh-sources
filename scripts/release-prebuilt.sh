@@ -2,7 +2,7 @@
 # Packages a source whose code is kept out of this repository and copies the result to
 # prebuilt/<id>.aix, which CI lists with the other sources.
 #
-#   scripts/release-prebuilt.sh zh.bakamh2
+#   scripts/release-prebuilt.sh zh.miwumh
 #
 # The source must be checked out at sources/<id> (ignored by this repository). Runs the same
 # checks as scripts/check-pr.sh plus the unit tests. When sources/<id>/.release-hidden lists
